@@ -20,3 +20,6 @@ Media/Events/*
 
 *.lock
 *.epd
+
+.idea/*
+*.iml
