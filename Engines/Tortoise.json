@@ -1,0 +1,34 @@
+{
+  "private": false,
+  "nps": 1518200,
+  "source": "https://github.com/ElectricTortoise/Tortoise",
+
+  "build": {
+    "path": "",
+    "compilers": [ "dotnet" ],
+    "cpuflags": [],
+    "systems": [ "Windows", "Linux" ]
+  },
+
+  "test_presets": {
+
+    "default": {
+      "base_branch": "master",
+      "book_name": "Pohl.epd",
+      "test_bounds": "[0.00, 5.00]",
+      "test_confidence": "[0.05, 0.05]"
+    },
+
+    "STC": {
+      "both_options": "Threads=1 Hash=64",
+      "both_time_control": "8.0+0.08",
+      "workload_size": 32
+    },
+
+    "LTC": {
+      "both_options": "Threads=1 Hash=64",
+      "both_time_control": "40.0+0.4",
+      "workload_size": 8
+    }
+  }
+}

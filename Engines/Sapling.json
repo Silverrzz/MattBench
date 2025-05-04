@@ -1,0 +1,12 @@
+{
+    "private" : false,
+    "nps"     : 1800000,
+    "source"  : "https://github.com/Timmoth/Sapling",
+
+    "build" : {
+        "path"      : "./Sapling.exe",
+        "compilers" : [],
+        "cpuflags"  : ["AVX2",  "POPCNT"],
+        "systems"   : ["Windows"]
+    }
+}

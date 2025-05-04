@@ -23,3 +23,7 @@ Media/Events/*
 
 .idea/*
 *.iml
+bin/
+lib/
+lib64
+pyvenv.cfg
