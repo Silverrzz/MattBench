@@ -1,24 +1,24 @@
 {
     "private" : false,
-    "nps"     : 1436521,
-    "source"  : "https://github.com/Ciekce/Stormphrax",
+    "nps"     : 3211208,
+    "source"  : "https://github.com/Bobingstern/Tarnished",
 
     "build" : {
         "path"      : "",
         "compilers" : ["clang++", "g++"],
         "cpuflags"  : [],
-        "systems"   : ["Linux", "Windows", "Darwin"]
+        "systems"   : ["Linux", "Windows"]
     },
 
     "test_presets" : {
 
         "default" : {
-            "base_branch"     : "main",
-            "book_name"       : "Pohl.epd",
+            "base_branch"     : "master",
+            "book_name"       : "UHO_Lichess_4852_v1.epd",
             "test_bounds"     : "[0.00, 3.00]",
             "test_confidence" : "[0.05, 0.05]",
             "win_adj"         : "movecount=3 score=400",
-            "draw_adj"        : "movenumber=40 movecount=8 score=10"
+            "draw_adj"        : "movenumber=32 movecount=8 score=10"
         },
 
         "STC" : {
@@ -47,6 +47,18 @@
             "test_bounds"       : "[-5.00, 0.00]"
         },
 
+        "SMP STC" : {
+            "both_options"      : "Threads=8 Hash=128",
+            "both_time_control" : "5.0+0.05",
+            "workload_size"     : 64
+        },
+
+        "SMP LTC" : {
+            "both_options"      : "Threads=8 Hash=512",
+            "both_time_control" : "20.0+0.2",
+            "workload_size"     : 16
+        },
+
         "STC progtest" : {
             "both_options"      : "Threads=1 Hash=32",
             "both_time_control" : "8.0+0.08",
@@ -67,7 +79,7 @@
     "tune_presets" : {
 
         "default" : {
-            "book_name" : "Pohl.epd",
+            "book_name" : "UHO_4060_v2.epd",
             "win_adj"   : "movecount=3 score=400",
             "draw_adj"  : "movenumber=40 movecount=8 score=10"
         }

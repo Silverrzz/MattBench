@@ -30,7 +30,7 @@ import sys
 
 import OpenBench.utils
 
-from OpenBench.config import OPENBENCH_CONFIG
+from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CUSTOM_FOCUS
 from OpenBench.models import Result, Test
 from OpenBench.spsa_utils import spsa_workload_assignment_dict
 
@@ -181,7 +181,7 @@ def compute_resource_distribution(workloads, machine, has_focus):
         .filter(workload__in=list(worker_dist.keys())).exclude(id=machine.id)
 
     for x in others:
-        if has_focus or worker_dist[x.workload]['engine'] not in x.info.get('focus', []):
+        if OPENBENCH_CUSTOM_FOCUS or has_focus or worker_dist[x.workload]['engine'] not in x.info.get('focus', []):
             worker_dist[x.workload]['threads'] += x.info['concurrency']
 
     # Count of tests that exist for a particular dev_engine

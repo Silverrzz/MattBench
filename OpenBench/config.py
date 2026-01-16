@@ -31,6 +31,8 @@ OPENBENCH_STATIC_VERSION = 'v18'
 OPENBENCH_CONFIG          = None # Initialized by OpenBench/apps.py
 OPENBENCH_CONFIG_CHECKSUM = None # Initialized by OpenBench/apps.py
 
+OPENBENCH_CUSTOM_FOCUS = True
+
 def create_openbench_config():
 
     with open(os.path.join(PROJECT_PATH, 'Config', 'config.json')) as fin:

@@ -804,6 +804,7 @@ def client_submit_nps_stats(request, _):
 
     return JsonResponse({})
 
+"""
 @csrf_exempt
 @verify_worker
 def client_submit_pgn(request, machine):
@@ -819,6 +820,34 @@ def client_submit_pgn(request, machine):
 
         # Save the .pgn.bz2 to /Media/
         FileSystemStorage().save(pgn.filename(), ContentFile(request.FILES['file'].read()))
+
+    return JsonResponse({})
+"""
+
+##### ---- DANGER ZONE ----
+##### This version of client_submit_pgn doesn't hold a database lock
+##### during disk I/O and can incur data loss, but it's much more forgiving
+##### in terms of not locking the DB for ages during times of heavy disk load. Beware!
+
+@csrf_exempt
+@verify_worker
+def client_submit_pgn(request, machine):
+
+    # Format: test.result.book-index.pgn.bz2
+    pgn            = PGN()
+    pgn.test_id    = int(request.POST['test_id']   )
+    pgn.result_id  = int(request.POST['result_id'] )
+    pgn.book_index = int(request.POST['book_index'])
+
+    # Save the .pgn.bz2 to /Media/
+    FileSystemStorage().save(pgn.filename(), ContentFile(request.FILES['file'].read()))
+
+    # First time actually touching the database
+    try:
+        pgn.save()
+    except Exception as error:
+        print ('FAILED to create Database entry for %s' % (pgn.filename()))
+        print ('ERROR: ', error)
 
     return JsonResponse({})
 

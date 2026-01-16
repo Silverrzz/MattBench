@@ -1,21 +1,16 @@
 {
     "private": false,
-    "nps": 2043684,
-    "source": "https://github.com/Quinniboi10/Prelude",
+    "nps": 2500000,
+    "source": "https://github.com/Quinniboi10/Chaos",
     "build": {
         "path": "",
         "compilers": [
             "clang++"
         ],
-        "cpuflags": [
-            "AVX2",
-            "FMA",
-            "POPCNT"
-        ],
+        "cpuflags": [],
         "systems": [
             "Windows",
-            "Linux",
-            "Darwin"
+            "Linux"
         ]
     },
     "test_presets": {
@@ -28,47 +23,47 @@
             "draw_adj": "movenumber=32 movecount=6 score=15"
         },
         "STC": {
-            "both_options": "Threads=1 Hash=16",
+            "both_options": "Threads=1 Hash=64 Minimal=true",
             "both_time_control": "8.0+0.08",
             "workload_size": 32
         },
         "LTC": {
-            "both_options": "Threads=1 Hash=64",
+            "both_options": "Threads=1 Hash=128 Minimal=true",
             "both_time_control": "40.0+0.4",
             "workload_size": 8,
             "test_bounds": "[0.50, 2.50]"
         },
         "SMP STC": {
-            "both_options": "Threads=2 Hash=64",
+            "both_options": "Threads=2 Hash=128 Minimal=true",
             "both_time_control": "8.0+0.08",
             "workload_size": 64
         },
         "SMP LTC": {
-            "both_options": "Threads=2 Hash=256",
+            "both_options": "Threads=2 Hash=128 Minimal=true",
             "both_time_control": "40.0+0.4",
             "workload_size": 16,
             "test_bounds": "[0.50, 2.50]"
         },
         "STC Simplification": {
-            "both_options": "Threads=1 Hash=16",
-            "both_time_control": "80.0+0.08",
+            "both_options": "Threads=1 Hash=64 Minimal=true",
+            "both_time_control": "8.0+0.08",
             "workload_size": 32,
             "test_bounds": "[-1.75, 0.25]"
         },
         "LTC Simplification": {
-            "both_options": "Threads=1 Hash=64",
+            "both_options": "Threads=1 Hash=128 Minimal=true",
             "both_time_control": "40.0+0.4",
             "workload_size": 8,
             "test_bounds": "[-1.75, 0.25]"
         },
         "STC Fixed Games": {
-            "both_options": "Threads=1 Hash=16",
+            "both_options": "Threads=1 Hash=64 Minimal=true",
             "both_time_control": "8.0+0.08",
             "workload_size": 32,
             "test_max_games": 3000
         },
         "LTC Fixed Games": {
-            "both_options": "Threads=1 Hash=64",
+            "both_options": "Threads=1 Hash=128 Minimal=true",
             "both_time_control": "40.0+0.4",
             "workload_size": 8,
             "test_max_games": 1000
@@ -79,6 +74,17 @@
             "book_name": "UHO_Lichess_4852_v1.epd",
             "win_adj": "movecount=5 score=600",
             "draw_adj": "movenumber=32 movecount=6 score=15"
+        }
+    },
+    "datagen_presets": {
+        "default": {
+            "base_branch": "main",
+            "dev_branch": "main",
+            "win_adj": "None",
+            "draw_adj": "None",
+            "workload_size": 256,
+            "both_options": "Threads=1 Hash=64 Minimal=true",
+            "both_time_control": "N=1000"
         }
     }
 }

@@ -1,6 +1,6 @@
 {
     "private": false,
-    "nps": 2211458,
+    "nps": 2218229,
     "source": "https://github.com/ProgramciDusunur/Potential",
     "build": {
         "path": "src/",
@@ -12,7 +12,7 @@
             "AVX2"
         ],
         "systems": [
-            "Linux"
+            "Linux", "Windows"
         ]
     },
     "test_presets": {
