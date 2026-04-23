@@ -114,7 +114,6 @@ def longStatBlock(test):
 
     if test.use_penta:
         lines.append('Penta | [%d, %d, %d, %d, %d]' % test.as_penta())
-
     return '\n'.join(lines)
 
 def testResultColour(test):
