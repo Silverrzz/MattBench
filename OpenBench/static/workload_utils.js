@@ -28,6 +28,18 @@ function copy_text_from_element(element_id, keep_url) {
 }
 
 
+
+function copy_text_codeblock(element_id, keep_url) {
+    var text = document.getElementById(element_id).innerHTML;
+    text = text.replace(/<br>/g, "\n");
+    text = ["```", text, "```"].join("\n");
+
+    if (keep_url)
+        text += "\n" + window.location.href;
+
+    copy_text(text);
+}
+
 function populate_results(results) {
 
     const container = document.getElementById('results-container');

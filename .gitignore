@@ -18,6 +18,9 @@ Media/PGNs/*
 Media/Networks/*
 Media/Events/*
 
+venv/*
+.idea/*
+
 *.lock
 *.epd
 
