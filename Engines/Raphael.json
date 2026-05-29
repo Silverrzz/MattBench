@@ -1,0 +1,146 @@
+{
+  "private" : false,
+  "nps"     : 1600000,
+  "source"  : "https://github.com/Orbital-Web/Raphael",
+
+  "build" : {
+    "path"      : "",
+    "compilers" : ["g++"],
+    "cpuflags"  : ["POPCNT", "AVX2"],
+    "systems"   : ["Linux", "Windows"]
+  },
+
+  "test_presets" : {
+
+    "default" : {
+      "base_branch"     : "main",
+      "book_name"       : "UHO_Lichess_4852_v1.epd",
+      "test_bounds"     : "[0.00, 5.00]",
+      "test_confidence" : "[0.1, 0.05]",
+      "win_adj"         : "None",
+      "draw_adj"        : "None"
+    },
+
+    "STC" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "8.0+0.08",
+      "test_bounds"       : "[0.00, 5.00]",
+      "workload_size"     : 32
+    },
+    "LTC" : {
+      "both_options"      : "Threads=1 Hash=128",
+      "both_time_control" : "40.0+0.4",
+      "test_bounds"       : "[0.00, 5.00]",
+      "workload_size"     : 8
+    },
+
+    "STC nonreg" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "8.0+0.08",
+      "test_bounds"       : "[-5.00, 0.00]",
+      "workload_size"     : 32
+    },
+    "LTC nonreg" : {
+      "both_options"      : "Threads=1 Hash=128",
+      "both_time_control" : "40.0+0.4",
+      "test_bounds"       : "[-5.00, 0.00]",
+      "workload_size"     : 8
+    },
+
+    "25k nodes" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "N=25000",
+      "test_bounds"       : "[0.00, 5.00]",
+      "workload_size"     : 32
+    },
+    "25k nodes nonreg" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "N=25000",
+      "test_bounds"       : "[-5.00, 0.00]",
+      "workload_size"     : 32
+    },
+
+    "STC fixed games" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "8.0+0.08",
+      "workload_size"     : 32,
+      "test_max_games"    : 3000
+    },
+    "LTC fixed games" : {
+      "both_options"      : "Threads=1 Hash=128",
+      "both_time_control" : "40.0+0.4",
+      "workload_size"     : 8,
+      "test_max_games"    : 3000
+    },
+
+    "DFRC STC" : {
+      "book_name"         : "DFRC_4852_v2.epd",
+      "both_options"      : "Threads=1 Hash=16 UCI_Chess960=true",
+      "both_time_control" : "8.0+0.08",
+      "test_bounds"       : "[0.00, 5.00]",
+      "workload_size"     : 32
+    },
+    "DFRC LTC" : {
+      "book_name"         : "DFRC_4852_v2.epd",
+      "both_options"      : "Threads=1 Hash=128 UCI_Chess960=true",
+      "both_time_control" : "40.0+0.4",
+      "test_bounds"       : "[0.00, 5.00]",
+      "workload_size"     : 8
+    },
+
+    "DFRC STC fixed games" : {
+      "book_name"         : "DFRC_4852_v2.epd",
+      "both_options"      : "Threads=1 Hash=16 UCI_Chess960=true",
+      "both_time_control" : "8.0+0.08",
+      "workload_size"     : 32,
+      "test_max_games"    : 3000
+    },
+    "DFRC LTC fixed games" : {
+      "book_name"         : "DFRC_4852_v2.epd",
+      "both_options"      : "Threads=1 Hash=128 UCI_Chess960=true",
+      "both_time_control" : "40.0+0.4",
+      "workload_size"     : 8,
+      "test_max_games"    : 3000
+    }
+  },
+
+  "tune_presets" : {
+
+    "default" : {
+      "both_branch"     : "main",
+      "book_name"       : "UHO_Lichess_4852_v1.epd",
+      "win_adj"         : "movecount=5 score=2000",
+      "draw_adj"        : "movenumber=32 movecount=6 score=15",
+      "spsa_iterations" : 5000,
+      "spsa_pairs_per"  : 8
+    },
+
+    "STC" : {
+      "both_options"      : "Threads=1 Hash=16",
+      "both_time_control" : "8.0+0.08"
+    },
+    "LTC" : {
+      "both_options"      : "Threads=1 Hash=128",
+      "both_time_control" : "40.0+0.4"
+    }
+  },
+
+  "datagen_presets" : {
+
+    "default" : {
+      "both_branch"       : "main",
+      "book_name"         : "UHO_Lichess_4852_v1.epd",
+      "win_adj"           : "movecount=5 score=2000",
+      "draw_adj"          : "movenumber=32 movecount=6 score=15",
+      "workload_size"     : 64,
+      "datagen_max_games" : 2000000,
+      "both_options"      : "Threads=1 Hash=16 Datagen=true Softnodes=true SoftNodeHardLimitMultiplier=1678",
+      "both_time_control" : "N=5000"
+    },
+
+    "dfrc": {
+      "book_name"         : "DFRC_4852_v2.epd",
+      "both_options"      : "Threads=1 Hash=16 Datagen=true Softnodes=true SoftNodeHardLimitMultiplier=1678 UCI_Chess960=true"
+    }
+  }
+}
