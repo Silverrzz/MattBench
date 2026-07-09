@@ -59,7 +59,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 43 # Client version to send to the Server
+CLIENT_VERSION   = 44 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 10 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 30 # Timeout in seconds between workload requests
@@ -113,6 +113,7 @@ class Configuration:
         self.fleet       = args.fleet    if args.fleet    else False
         self.noisy       = args.noisy    if args.noisy    else False
         self.focus       = args.focus    if args.focus    else []
+        self.force       = args.force    if args.force    else []
 
     def check_requirements(self):
 
@@ -1023,6 +1024,7 @@ def server_configure_worker(config):
         'syzygy_max'     : config.syzygy_max,     # Whether or not the machine has Syzygy support
         'noisy'          : config.noisy,          # Whether our results are unstable for time-based workloads
         'focus'          : config.focus,          # List of engines we have a preference to help
+        'force'          : config.force,          # List of engines we prefer over workload priority
         'cxx_comp'       : config.cxx_comp,       # C++ Compiler used to build Fastchess binaries
         'fastchess_ver'  : config.fastchess_ver,  # Fastchess Version, set during server_configure_fastchess()
         'client_ver'     : CLIENT_VERSION,        # Version of the Client, which the server may reject
@@ -1350,6 +1352,7 @@ def parse_arguments(client_args):
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')
     p.add_argument(      '--noisy'   , help='Reject time-based workloads' , action='store_true')
     p.add_argument(      '--focus'   , help='Prefer certain engine(s)'    , nargs='+'          )
+    p.add_argument(      '--force'   , help='Prefer engine(s) over priority', nargs='+'         )
 
     # Ignore unknown arguments ( from client )
     worker_args, unknown = p.parse_known_args()
