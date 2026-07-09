@@ -56,12 +56,12 @@ def get_workload(request, machine):
 def select_workload(request, machine):
 
     # Step 1: Refine active workloads to the candidate assignments
-    candidates, has_focus = filter_valid_workloads(request, machine)
+    candidates, has_engine_preference = filter_valid_workloads(request, machine)
     if not candidates:
         return None
 
     # Step 2: Count relevant threads on each candidate test
-    worker_dist, engine_freq = compute_resource_distribution(candidates, machine, has_focus)
+    worker_dist, engine_freq = compute_resource_distribution(candidates, machine, has_engine_preference)
 
     # Step 3: Determine the effective-throughput for each workload
     if OPENBENCH_CONFIG['balance_engine_throughputs']:
@@ -123,18 +123,32 @@ def filter_valid_workloads(request, machine):
     if not options:
         return [], False
 
+    # Refine to workloads that match the force arg, if applicable
+    forces    = machine_info_list(machine.info, 'force')
+    has_force = any(x.dev_engine in forces for x in options)
+
+    if has_force:
+        options = list(filter(lambda x: x.dev_engine in forces, options))
+
     # Refine to workloads of the highest priority
     priorities = [x.priority for x in options]
     candidates = [x for x in options if x.priority == max(priorities)]
 
     # Refine to workloads that match our focus, if applicable
-    focuses    = machine.info.get('focus', [])
+    focuses    = machine_info_list(machine.info, 'focus')
     has_focus  = any(x.dev_engine in focuses for x in candidates)
 
     if has_focus:
         candidates = list(filter(lambda x: x.dev_engine in focuses, candidates))
 
-    return candidates, has_focus
+    return candidates, has_force or has_focus
+
+def machine_info_list(info, key):
+
+    value = info.get(key, [])
+    if not value:
+        return []
+    return [value] if isinstance(value, str) else value
 
 def valid_hardware_assignment(workload, machine):
 
@@ -160,7 +174,7 @@ def valid_hardware_assignment(workload, machine):
     # All Criteria have been met
     return True
 
-def compute_resource_distribution(workloads, machine, has_focus):
+def compute_resource_distribution(workloads, machine, has_engine_preference):
 
     # Return a thread count, and engine name for each workload, as well as the throughput.
     # The throughput may be scaled down later, due to balance_engine_throughputs
@@ -174,14 +188,12 @@ def compute_resource_distribution(workloads, machine, has_focus):
     # Ignore machines working on non-candidates;
     # Ignore focus-assigned machines when has_focus is false
 
-    # The first two are done in the database, so that we never pay to deserialize
-    # the info blob of a machine that cannot contribute to any of the candidates
-
     others = OpenBench.utils.getRecentMachines() \
         .filter(workload__in=list(worker_dist.keys())).exclude(id=machine.id)
 
     for x in others:
-        if OPENBENCH_CUSTOM_FOCUS or has_focus or worker_dist[x.workload]['engine'] not in x.info.get('focus', []):
+        preferences = machine_info_list(x.info, 'focus') + machine_info_list(x.info, 'force')
+        if OPENBENCH_CUSTOM_FOCUS or has_engine_preference or worker_dist[x.workload]['engine'] not in preferences:
             worker_dist[x.workload]['threads'] += x.info['concurrency']
 
     # Count of tests that exist for a particular dev_engine
