@@ -18,7 +18,7 @@
         <link rel="preconnect" href="https://fonts.gstatic.com">
         <link href="https://fonts.googleapis.com/css2?family=Courier+Prime&display=swap" rel="stylesheet">
 
-        <title>MattBench</title>
+        <title>{% block title %}MattBench{% endblock %}</title>
 
         {% block scripts %}
         {% endblock %}
@@ -82,6 +82,18 @@
                 }
 
             }, false);
+
+            document.addEventListener('submit', event => {
+
+                // Prevent duplicate <form> submissions
+                const form = event.target;
+                if (form.dataset.submitting) {
+                    event.preventDefault();
+                    return;
+                }
+
+                form.dataset.submitting = true;
+            }, true);
 
             function toggle_sidebar() {
                 document.body.classList.toggle('sidebar-open')
