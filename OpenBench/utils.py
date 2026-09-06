@@ -159,9 +159,12 @@ def media_download_response(fpath, filename, expires):
     return response
 
 def read_git_credentials(engine):
-    from OpenBench.configuration import read_credential
-    if token := read_credential(engine):
-        return {'Authorization': 'token %s' % token}
+    fname = 'credentials.%s' % (engine.replace(' ', '').lower())
+    fpath = os.path.join(PROJECT_PATH, 'Config', fname)
+    if os.path.exists(fpath):
+        with open(fpath) as fin:
+            return {'Authorization': 'token %s' % fin.readlines()[0].rstrip()}
+
 
 def extract_option(options, option):
 

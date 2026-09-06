@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('OpenBench', '0013_merge_legacy_scale_migration'),
+        ('OpenBench', '0015_merge_configuration_and_nps_tracking'),
     ]
 
     operations = [
@@ -122,15 +122,6 @@ class Migration(migrations.Migration):
             model_name='engineconfig',
             name='variants',
             field=models.ManyToManyField(related_name='engines', to='OpenBench.variant'),
-        ),
-        migrations.CreateModel(
-            name='Credential',
-            fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('ciphertext', models.TextField()),
-                ('updated', models.DateTimeField(auto_now=True)),
-                ('engine', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='credential', to='OpenBench.engineconfig')),
-            ],
         ),
         migrations.CreateModel(
             name='ConfigurationRevision',

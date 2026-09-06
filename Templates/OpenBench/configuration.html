@@ -1,0 +1,52 @@
+{% extends "OpenBench/base.html" %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'configuration.css' %}?{{ static_version }}">{% endblock %}
+{% block content %}
+<section class="configuration">
+    <div class="config-heading"><div><p class="config-eyebrow">Administration</p><h2>{{ title }}</h2></div></div>
+    <nav class="config-tabs" aria-label="Configuration sections">
+        {% for key, label in navigation %}<a href="/manage/{{ key }}/" {% if key == active_section %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+    </nav>
+    {% if form %}
+        <div class="config-editor">
+            <form method="post" class="form config-form">
+                {% csrf_token %}
+                {% for hidden in form.hidden_fields %}{{ hidden }}{{ hidden.errors }}{% endfor %}
+                {% if form.errors %}<div class="config-error" role="alert"><strong>Changes were not saved.</strong>{{ form.non_field_errors }}<p>Check the highlighted fields. If another edit was saved, reload this page before trying again.</p></div>{% endif %}
+                <h3>{% if section == 'site' %}Site settings{% else %}{{ instance|default:"New entry" }}{% endif %}</h3>
+                {% if immutable_release %}<p class="config-note">Version fields are fixed for this release. <a href="/manage/releases/new/?runner={{ instance.runner_id }}">Add a new release</a> to use another version.</p>{% endif %}
+                    <div class="flex">{% for column in form.columns %}
+                    <div class="col">
+                    {% for heading, description, fields in column %}
+                    <section id="{{ heading|slugify }}"><h3>{{ heading }}</h3>
+                        {% for field in fields %}{% include "OpenBench/Blocks/configuration_field.html" %}{% endfor %}
+                    </section>
+                    {% endfor %}
+                    </div>
+                    {% endfor %}</div>
+                {% if section == 'runners' and not is_new %}<section><h3>Releases</h3><div class="config-related">{% for release in instance.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a>{% empty %}<span>No releases yet.</span>{% endfor %}<a href="/manage/releases/new/?runner={{ instance.pk }}">+ Add release</a></div></section>{% endif %}
+                {% if section == 'variants' and not is_new %}<div class="config-related"><a href="/manage/books/new/?variant={{ instance.pk }}">+ Add an opening book for this variant</a></div>{% endif %}
+                <div class="config-actions"><button type="submit" class="anchorbutton btn-blue px-3">Save changes</button><a href="/manage/{{ active_section }}/">Cancel</a></div>
+            </form>
+
+        </div>
+    {% elif section == 'history' %}
+        <div class="config-table"><table class="stripes hoverable w-100"><thead><tr class="table-header"><th>Revision</th><th>When</th><th>Who</th><th>Change</th></tr></thead><tbody>{% for revision in history %}<tr><td>{{ revision.generation }}</td><td>{{ revision.created }}</td><td>{{ revision.actor|default:"Import / setup" }}</td><td>{{ revision.summary }}</td></tr>{% empty %}<tr><td colspan="4">No changes have been published yet.</td></tr>{% endfor %}</tbody></table></div>
+        <div class="config-toolbar">{% if history.has_previous %}<a href="?page={{ history.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ history.number }} of {{ history.paginator.num_pages }}</span>{% if history.has_next %}<a href="?page={{ history.next_page_number }}">Next</a>{% endif %}</div>
+    {% else %}
+        <div class="config-toolbar"><form method="get" role="search" class="row"><label class="config-search-label" for="config-search">Find {{ title|lower }}</label><input id="config-search" name="q" type="search" value="{{ query }}" placeholder="Search by name"><button class="anchorbutton btn-blue px-3">Search</button>{% if query %}<a href="/manage/{{ section }}/">Clear</a>{% endif %}</form>{% if can_add %}<a class="anchorbutton btn-blue px-3" href="/manage/{{ section }}/new/">+ Add {{ singular }}</a>{% endif %}</div>
+        <div class="config-table"><table class="stripes hoverable w-100"><thead><tr class="table-header"><th>{{ title }} <span class="config-count">{{ count }}</span></th><th>Status</th><th>{% if section == 'engines' %}Maintainers{% else %}Connected to{% endif %}</th><th></th></tr></thead><tbody>
+            {% for entry in objects %}<tr>
+                <td><a class="config-name" href="/manage/{{ section }}/{{ entry.pk }}/">{{ entry }}</a><small>{% if section == 'engines' or section == 'runners' or section == 'books' %}{{ entry.settings.source }}{% elif section == 'variants' %}Fastchess: {{ entry.settings.fastchess_variant }}{% elif section == 'releases' %}{{ entry.settings.ref }}{% endif %}</small></td>
+                <td><span class="config-status">{{ entry.enabled|yesno:"Enabled,Draft / disabled" }}</span></td>
+                <td>{% if section == 'engines' %}{% for grant in entry.maintainers.all %}{{ grant.user }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="config-muted">Administrators only</span>{% endfor %}
+                {% elif section == 'books' %}<a href="/manage/variants/{{ entry.variant_id }}/">{{ entry.variant.name }}</a>
+                {% elif section == 'variants' %}<a href="/manage/releases/{{ entry.runner_release_id }}/">{{ entry.runner_release }}</a>
+                {% elif section == 'runners' %}{% for release in entry.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a><br>{% empty %}<a href="/manage/releases/new/?runner={{ entry.pk }}">Add first release</a>{% endfor %}
+                {% elif section == 'releases' %}<a href="/manage/runners/{{ entry.runner_id }}/">{{ entry.runner }}</a>{% endif %}</td>
+                <td><a href="/manage/{{ section }}/{{ entry.pk }}/" aria-label="Edit {{ entry }}"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i></a></td>
+            </tr>{% empty %}<tr><td colspan="4" class="config-empty"><h3>{% if query %}No matching {{ title|lower }}{% else %}No {{ title|lower }} yet{% endif %}</h3>{% if query %}<p>Try another name or clear your search.</p>{% endif %}{% if can_add and not query %}<a href="/manage/{{ section }}/new/">Add your first {{ singular }} &rarr;</a>{% endif %}</td></tr>{% endfor %}
+        </tbody></table></div>
+    {% endif %}
+</section>
+{% endblock %}

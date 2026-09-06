@@ -1,11 +1,9 @@
 import copy
 import hashlib
 import json
-import os
 from collections.abc import Mapping
 from contextvars import ContextVar
 
-from cryptography.fernet import Fernet
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
@@ -136,10 +134,15 @@ def lock_settings(expected_generation=_unspecified_generation):
 
 
 @transaction.atomic
-def save_configuration(instance, actor, expected_generation, variants=None):
-    from OpenBench.models import SiteSettings, EngineConfig
+def save_configuration(instance, actor, expected_generation, variants=None, maintainers=None):
+    from OpenBench.models import SiteSettings, EngineConfig, EngineMaintainer
     site = lock_settings(expected_generation)
     authorize(instance, actor)
+    if maintainers is not None and (not actor.is_superuser or not isinstance(instance, EngineConfig)):
+        raise PermissionDenied('Only administrators appoint engine maintainers')
+    if isinstance(instance, SiteSettings):
+        instance._state.adding = False
+        instance.generation = site.generation
     if not instance._state.adding:
         original = type(instance).objects.get(pk=instance.pk)
         authorize(original, actor)
@@ -151,9 +154,13 @@ def save_configuration(instance, actor, expected_generation, variants=None):
         if not isinstance(instance, EngineConfig):
             raise ValidationError('Only engines declare supported variants')
         instance.variants.set(variants)
+    if maintainers is not None:
+        instance.maintainers.exclude(user__in=maintainers).delete()
+        for user in maintainers:
+            EngineMaintainer.objects.get_or_create(engine=instance, user=user)
     if isinstance(instance, SiteSettings):
         site.settings = instance.settings
-    return publish(site, actor, 'Updated %s %s' % (instance._meta.model_name, instance.pk))
+    return publish(site, actor, 'Updated %s: %s' % (instance._meta.verbose_name, getattr(instance, 'name', instance.pk)))
 
 
 @transaction.atomic
@@ -167,21 +174,3 @@ def delete_configuration(instance, actor, expected_generation):
     summary = 'Deleted %s %s' % (original._meta.model_name, original.pk)
     original.delete()
     return publish(site, actor, summary)
-
-
-@transaction.atomic
-def set_credential(engine, token, actor, expected_generation):
-    from OpenBench.models import Credential
-    if not actor or not actor.is_active or not actor.is_superuser:
-        raise PermissionDenied('Only administrators manage repository credentials')
-    site = lock_settings(expected_generation)
-    encrypted = Fernet(os.environ['OPENBENCH_CREDENTIAL_KEY'].encode()).encrypt(token.encode()).decode()
-    Credential.objects.update_or_create(engine=engine, defaults={'ciphertext': encrypted})
-    return publish(site, actor, 'Updated credential for %s' % engine.pk)
-
-
-def read_credential(engine_name):
-    from OpenBench.models import Credential
-    credential = Credential.objects.filter(engine__name=engine_name, engine__enabled=True).first()
-    if credential:
-        return Fernet(os.environ['OPENBENCH_CREDENTIAL_KEY'].encode()).decrypt(credential.ciphertext.encode()).decode()

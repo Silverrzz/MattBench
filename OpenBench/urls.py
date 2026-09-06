@@ -19,8 +19,14 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import django.urls, OpenBench.views
+import OpenBench.configuration_views
 
 urlpatterns = [
+
+    django.urls.path('manage/', OpenBench.configuration_views.manage),
+    django.urls.path('manage/<str:section>/', OpenBench.configuration_views.manage),
+    django.urls.path('manage/<str:section>/new/', OpenBench.configuration_views.manage, {'identifier': 'new'}),
+    django.urls.path('manage/<str:section>/<uuid:identifier>/', OpenBench.configuration_views.manage),
 
     # Links for account management
     django.urls.path(r'register/', OpenBench.views.register),

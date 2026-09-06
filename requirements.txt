@@ -4,4 +4,3 @@ requests
 scipy
 
 jsonschema>=4.18,<5
-cryptography>=42

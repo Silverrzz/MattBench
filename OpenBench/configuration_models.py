@@ -38,11 +38,15 @@ class SiteSettings(models.Model):
 
 
 class Runner(ConfigEntity):
-    pass
+    def __str__(self):
+        return self.settings.get('source', '').removeprefix('https://github.com/').rstrip('/') if self.name.startswith('import-') else self.name
 
 
 class RunnerRelease(ConfigEntity):
     runner = models.ForeignKey(Runner, on_delete=models.PROTECT, related_name='releases')
+
+    def __str__(self):
+        return '%s / %s' % (self.runner, self.settings.get('ref', '')[:12]) if self.name.startswith('import-') else self.name
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
@@ -92,12 +96,6 @@ class WorkloadPreset(models.Model):
     def clean(self):
         from OpenBench.configuration_schema import validate_preset
         validate_preset(self.workload_type, self.settings, self.schema_version)
-
-
-class Credential(models.Model):
-    engine = models.OneToOneField(EngineConfig, on_delete=models.CASCADE, related_name='credential')
-    ciphertext = models.TextField()
-    updated = models.DateTimeField(auto_now=True)
 
 
 class ConfigurationRevision(models.Model):
