@@ -22,10 +22,9 @@ venv/*
 .idea/*
 
 *.lock
-*.epd
-
 .idea/*
 *.iml
+*.epd
 bin/
 lib/
 lib64
