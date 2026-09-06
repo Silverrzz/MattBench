@@ -35,7 +35,7 @@ from OpenBench.workloads.modify_workload import modify_workload
 from OpenBench.workloads.verify_workload import verify_workload
 from OpenBench.workloads.view_workload import view_workload, fetch_results, fetch_result_summaries
 
-from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CONFIG_CHECKSUM, OPENBENCH_STATIC_VERSION
+from OpenBench.config import OPENBENCH_CONFIG, eligibility_fingerprint, OPENBENCH_STATIC_VERSION
 from OpenSite.settings import PROJECT_PATH
 
 from OpenBench.models import *
@@ -67,7 +67,7 @@ class UnableToAuthenticate(Exception):
 def render(request, template, content={}, always_allow=False, error=None, warning=None, status=None):
 
     data = content.copy()
-    data.update({ 'config' : OPENBENCH_CONFIG })
+    data.update({ 'config' : dict(OPENBENCH_CONFIG) })
     data.update({ 'static_version' : OPENBENCH_STATIC_VERSION })
 
     if OPENBENCH_CONFIG['require_login_to_view']:
@@ -600,7 +600,7 @@ def verify_worker(function):
             return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
         # Prompt the worker to soft-restart if its config is out of date
-        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != OPENBENCH_CONFIG_CHECKSUM:
+        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != eligibility_fingerprint():
             return JsonResponse({ 'error' : 'Bad Client Version: Server Configuration Changed' })
 
         # Use the secret token as our soft verification
@@ -666,7 +666,7 @@ def client_worker_info(request):
     machine.secret = secrets.token_hex(32)
 
     # Note the Config checksum at the time of init, in case it changes
-    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = OPENBENCH_CONFIG_CHECKSUM
+    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = eligibility_fingerprint()
 
     # Tag engines that the Machine can build and/or run with binaries
     machine.info['supported'] = []

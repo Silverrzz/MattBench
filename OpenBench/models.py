@@ -279,3 +279,5 @@ class SPSAParameter(Model):
 
     c_value   = FloatField() # Constants pre-computed for speed
     a_value   = FloatField()
+
+from OpenBench.configuration_models import SiteSettings, Runner, RunnerRelease, Variant, EngineConfig, EngineMaintainer, OpeningBook, WorkloadPreset, Credential, ConfigurationRevision

@@ -28,7 +28,6 @@ import django.apps
 # No imports of OpenBench.* are allowed here
 
 LOCKFILE_PATH = 'openbench_watchers.lock'
-CONFIG_LOCK   = threading.Lock()
 IS_WINDOWS    = platform.system() == 'Windows'
 
 def acquire_watcher_lockfile():
@@ -61,14 +60,9 @@ class OpenBenchConfig(django.apps.AppConfig):
 
     def ready(self):
 
-        # Load all of the .json config files, only once per PROCESS.
-        # This must be done before ANY other OpenBench includes are used.
-
-        from OpenBench import config
-
-        with CONFIG_LOCK:
-            if config.OPENBENCH_CONFIG is None:
-                config.OPENBENCH_CONFIG, config.OPENBENCH_CONFIG_CHECKSUM = config.create_openbench_config()
+        import sys
+        if any(command in sys.argv for command in ('migrate', 'makemigrations', 'check', 'import_config', 'shell', 'createsuperuser')):
+            return
 
         # Attempt to spawn the PGN Watcher, globally once
 
