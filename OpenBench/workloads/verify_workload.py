@@ -49,6 +49,7 @@ def verify_workload(request, workload_type):
     assert workload_type in [ 'TEST', 'TUNE', 'DATAGEN' ]
 
     errors = []
+    verify_variant(errors, request, workload_type)
 
     if workload_type == 'TEST':
         verify_test_creation(errors, request)
@@ -66,6 +67,28 @@ def verify_workload(request, workload_type):
         dev  = collect_github_info(errors, request, 'dev')
         base = collect_github_info(errors, request, 'base')
         return errors, (dev, base)
+
+def verify_variant(errors, request, workload_type):
+
+    config = OpenBench.config.OPENBENCH_CONFIG
+    book = config['books'].get(request.POST.get('book_name'), {})
+    variant = book.get('variant', 'standard')
+    definition = config['variants'][variant]
+    branches = ['dev'] if workload_type == 'TUNE' else ['dev', 'base']
+
+    for branch in branches:
+        engine_name = request.POST.get(branch + '_engine')
+        engine = config['engines'].get(engine_name)
+        if engine and variant not in engine['variants']:
+            errors.append('%s does not support the %s book variant' % (engine_name, variant))
+        options = request.POST.get(branch + '_options', '')
+        if not definition['syzygy'] and re.search(r'\bSyzygy\w*\s*=', options, re.IGNORECASE):
+            errors.append('%s does not support Syzygy options' % definition['name'])
+
+    if not definition['syzygy']:
+        for field in ('syzygy_wdl', 'syzygy_adj'):
+            if request.POST.get(field) not in ('DISABLED', 'OPTIONAL'):
+                errors.append('%s does not support Syzygy' % definition['name'])
 
 def verify_test_creation(errors, request):
 

@@ -20,6 +20,7 @@
 
 import argparse
 import cpuinfo
+import hashlib
 import importlib
 import json
 import multiprocessing
@@ -61,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 50 # Client version to send to the Server
+CLIENT_VERSION   = 51
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -418,12 +419,9 @@ class MatchRunner:
     @staticmethod
     def basic_settings(config):
 
-        # Assume Fischer if FRC, 960, or FISCHER appears in the Opening Book
-        book_name = config.workload['test']['book']['name'].upper()
-        is_frc    = 'FRC' in book_name or '960' in book_name or 'FISCHER' in book_name
-        variant   = ['standard', 'fischerandom'][is_frc]
-
-        # Always include -recover, -variant, and -testEnv
+        variant = config.workload['test']['variant_config']['fastchess_variant']
+        if not re.fullmatch(r'[a-zA-Z0-9_-]+', variant):
+            raise ValueError('Invalid fastchess variant: %s' % variant)
         return '-recover -variant %s -testEnv' % variant
 
     @staticmethod
@@ -446,6 +444,8 @@ class MatchRunner:
         win_adj    = config.workload['test']['win_adj'   ]
         draw_adj   = config.workload['test']['draw_adj'  ]
         syzygy_adj = config.workload['test']['syzygy_adj']
+        if not config.workload['test']['variant_config']['syzygy']:
+            syzygy_adj = 'DISABLED'
 
         # Empty, unless specified in the settings
         win_flags    = ['', '-resign ' + win_adj ][win_adj  != 'None']
@@ -492,6 +492,8 @@ class MatchRunner:
         options = config.workload['test'][branch]['options']
         engine  = config.workload['test'][branch]['engine']
         syzygy  = config.workload['test']['syzygy_wdl']
+        if not config.workload['test']['variant_config']['syzygy']:
+            syzygy = 'DISABLED'
 
         # Human-readable name, and scale the time control
         name    = command.replace('.exe', '')
@@ -928,32 +930,55 @@ def determine_scale_factor(config, dev_name, base_name):
 ## connection and then make simple requests to retrieve Workloads as json objects
 
 def server_configure_fastchess(config):
-    server_configure_match_runner(config, 'fastchess', build_fastchess_in_dir)
+    data = None
+    if getattr(config, 'workload', None):
+        runner = config.workload['test']['variant_config']['runner']
+        data = {'fastchess_' + key: value for key, value in runner.items()}
+    binary = server_configure_match_runner(config, 'fastchess', build_fastchess_in_dir, data)
+    target = os.path.join(os.getcwd(), os.path.basename(binary))
+    shutil.copy2(binary, target)
+    if IS_LINUX:
+        os.chmod(target, os.stat(target).st_mode | 0o111)
 
-def server_configure_match_runner(config, name, build_func):
+def server_configure_match_runner(config, name, build_func, data=None):
 
     # OpenBench Server holds the runner repo and git-ref
     print ('\nConfiguring %s...' % name)
     print ('> Requesting %s configuration from openbench' % name)
-    target  = url_join(config.server, 'clientMatchRunnerVersionRef')
-    payload = { 'username' : config.username, 'password' : config.password }
-    data    = requests.post(target, data=payload, timeout=TIMEOUT_HTTP).json()
+    if data is None:
+        target  = url_join(config.server, 'clientMatchRunnerVersionRef')
+        payload = { 'username' : config.username, 'password' : config.password }
+        data    = requests.post(target, data=payload, timeout=TIMEOUT_HTTP).json()
+    repo_url, repo_ref = data['%s_repo_url' % name], data['%s_repo_ref' % name]
+    source = {'repo': repo_url, 'ref': repo_ref}
+    cache_key = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+    cache_dir = os.path.join(os.getcwd(), 'Runners', cache_key)
+    os.makedirs(cache_dir, exist_ok=True)
+    source_path = os.path.join(cache_dir, '%s-ob.source.json' % name)
 
     # Might already have a sufficiently new Fastchess binary
     print ('> Checking for existing %s-ob binary' % name)
-    runner_path = os.path.join(os.getcwd(), '%s-ob' % name)
+    runner_path = os.path.join(cache_dir, '%s-ob' % name)
     runner_path = utils.check_for_engine_binary(runner_path)
-    acceptable_ver = compare_versions(runner_path, data['%s_min_version' % name])
+    try:
+        with open(source_path) as fin:
+            installed = json.load(fin)
+        with open(runner_path, 'rb') as fin:
+            expected = dict(source, sha256=hashlib.sha256(fin.read()).hexdigest())
+        same_source = installed == expected
+    except (OSError, ValueError, TypeError):
+        same_source = False
+    acceptable_ver = compare_versions(runner_path, data['%s_min_version' % name]) if same_source else None
 
     if acceptable_ver:
         print ('> Found %s-ob v%s' % (name, acceptable_ver))
         setattr(config, '%s_ver' % name, acceptable_ver)
-        return
+        return runner_path
 
     # Download a .zip archive of the git-ref from the specified repo
-    repo_url, repo_ref = data['%s_repo_url' % name], data['%s_repo_ref' % name]
     print ('> Downloading %s from %s' % (repo_ref, repo_url))
-    response = requests.get(url_join(repo_url, 'archive', '%s.zip' % repo_ref))
+    response = requests.get(url_join(repo_url, 'archive', '%s.zip' % repo_ref), timeout=TIMEOUT_HTTP)
+    response.raise_for_status()
 
     with tempfile.TemporaryDirectory() as temp_dir:
 
@@ -965,6 +990,7 @@ def server_configure_match_runner(config, name, build_func):
         # Extract the .zip file into our local directory
         with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
+        os.remove(temp_zip_path)
 
         # Prepare to build, using the root folder of the extracted files as the cwd
         print ('> Extracting and building %s %s' % (name, repo_ref))
@@ -975,17 +1001,24 @@ def server_configure_match_runner(config, name, build_func):
 
         # Somehow we built runner but failed to find the binary
         if not utils.check_for_engine_binary(bin_path):
-            raise OpenBenchMatchRunnerBuildFailedException()
+            raise utils.OpenBenchMatchRunnerBuildFailedException()
 
         # Append .exe if needed, and then report the match runner version that was built
         binary  = utils.check_for_engine_binary(bin_path)
-        version = get_version(binary)
+        version = compare_versions(binary, data['%s_min_version' % name])
+        if not version:
+            raise utils.OpenBenchMatchRunnerBuildFailedException()
         setattr(config, '%s_ver' % name, version)
         print ('> Finished building v%s' % version)
 
         # Move the finished match runner binary to the Client's Root directory
-        out_path = os.path.join(os.getcwd(), os.path.basename(binary).replace(name, '%s-ob' % name))
+        out_path = os.path.join(cache_dir, os.path.basename(binary).replace(name, '%s-ob' % name))
         shutil.move(binary, out_path)
+        with open(out_path, 'rb') as fin:
+            source['sha256'] = hashlib.sha256(fin.read()).hexdigest()
+        with open(source_path, 'w') as fout:
+            json.dump(source, fout)
+        return out_path
 
 def build_fastchess_in_dir(config, runner_dir):
     print ('> Using C++ compiler %s...' % config.cxx_comp)
@@ -1000,7 +1033,7 @@ def build_fastchess_in_dir(config, runner_dir):
         print ('\nFailed to build fastchess\n\nCompiler Output:')
         for line in comp_output.split('\n'):
             print ('> %s' % (line))
-        raise OpenBenchMatchRunnerBuildFailedException()
+        raise utils.OpenBenchMatchRunnerBuildFailedException()
 
 def server_configure_worker(config):
 
@@ -1096,6 +1129,8 @@ def server_request_workload(config):
 
 
 def complete_workload(config):
+
+    server_configure_fastchess(config)
 
     # Download the opening book, throws an exception on corruption
     utils.download_opening_book(

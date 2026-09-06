@@ -1,21 +1,17 @@
 {
-    "client_version"     : 50,
-    "client_repo_url"    : "https://github.com/AndyGrant/OpenBench",
-    "client_repo_ref"    : "master",
-
-    "fastchess_min_version" : "1.8.1",
-    "fastchess_repo_url"    : "https://github.com/AndyGrant/fastchess",
-    "fastchess_repo_ref"    : "master",
-
-    "use_cross_approval"          : false,
-    "require_login_to_view"       : false,
-    "require_manual_registration" : false,
-    "balance_engine_throughputs"  : true,
-
-    "use_x_accel_redirect"  : false,
-    "x_accel_redirect_root" : "/x-accel-media/",
-
-    "books" : [
+    "client_version": 51,
+    "client_repo_url": "https://github.com/Silverrzz/OpenBench",
+    "client_repo_ref": "duckchess",
+    "fastchess_min_version": "1.8.2",
+    "fastchess_repo_url": "https://github.com/Silverrzz/fastchess",
+    "fastchess_repo_ref": "1b3cf3a8c8bbf4c43b2e3a3888d23e6ba972d67b",
+    "use_cross_approval": false,
+    "require_login_to_view": false,
+    "require_manual_registration": false,
+    "balance_engine_throughputs": true,
+    "use_x_accel_redirect": false,
+    "x_accel_redirect_root": "/x-accel-media/",
+    "books": [
         "2moves_v1.epd",
         "3moves_FRC.epd",
         "4moves_noob.epd",
@@ -36,8 +32,7 @@
         "fortresses_150_250.epd",
         "fortresses_torch.epd"
     ],
-
-    "engines" : [
+    "engines": [
         "Heimdall",
         "Prelude",
         "Potential",
@@ -58,5 +53,27 @@
         "Byte-Knight",
         "Wilted",
         "icarus"
-    ]
+    ],
+    "variants": {
+        "standard": {
+            "name": "Standard",
+            "fastchess_variant": "standard",
+            "syzygy": true
+        },
+        "fischerandom": {
+            "name": "Fischer Random",
+            "fastchess_variant": "fischerandom",
+            "syzygy": true
+        },
+        "duck": {
+            "name": "Duck Chess",
+            "fastchess_variant": "duck",
+            "syzygy": false,
+            "runner": {
+                "repo_url": "https://github.com/Silverrzz/fastchess",
+                "repo_ref": "1b3cf3a8c8bbf4c43b2e3a3888d23e6ba972d67b",
+                "min_version": "1.8.2"
+            }
+        }
+    }
 }

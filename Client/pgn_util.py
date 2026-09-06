@@ -113,7 +113,9 @@ def format_movelist(move_text, compact):
     formatter = format_move_comment_compact if compact else format_move_comment_verbose
     moves     = []
 
-    for move, comment in re.compile(r'\s*(?:\d+\.{1,3} )?([a-zA-Z0-9+=#*-]+) (?:\s*\{\s*([^}]*)\s*\})?').findall(move_text):
+    for move, comment in re.compile(r'(?<!\S)(?:\d+\.{1,3}\s*)?([a-zA-Z0-9+=#*@,!?-]+)(?=\s|$)(?:\s*\{\s*([^}]*)\s*\})?').findall(move_text):
+        if move in ('1-0', '0-1', '*'):
+            continue
         if not comment or comment.strip() == 'book':
             formatted_comment = comment.strip() if comment else 'unknown'
         else:
@@ -121,7 +123,7 @@ def format_movelist(move_text, compact):
 
         moves.append('%s {%s}' % (move, formatted_comment))
 
-    result_match = re.search(r'\s*(1-0|0-1|1/2-1/2|\*)', move_text)
+    result_match = re.search(r'(?<!\S)(1-0|0-1|1/2-1/2|\*)\s*$', move_text)
     result       = result_match.group(1) if result_match else '*'
 
     return ' '.join(moves) + ' ' + result

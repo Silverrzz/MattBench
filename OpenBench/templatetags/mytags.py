@@ -279,8 +279,10 @@ def test_is_smp_odds(test):
 def test_is_time_odds(test):
     return test.dev_time_control != test.base_time_control
 
-def test_is_fischer(test):
-    return 'FRC' in test.book_name.upper() or '960' in test.book_name.upper()
+def test_variant_name(test):
+    config = OpenBench.config.OPENBENCH_CONFIG
+    variant = config['books'].get(test.book_name, {}).get('variant', 'standard')
+    return config['variants'][variant]['name'] if variant != 'standard' else ''
 
 register.filter('book_download_link', book_download_link)
 register.filter('network_download_link', network_download_link)
@@ -292,7 +294,7 @@ register.filter('git_diff_text', git_diff_text)
 
 register.filter('test_is_smp_odds'  , test_is_smp_odds  )
 register.filter('test_is_time_odds' , test_is_time_odds )
-register.filter('test_is_fischer'   , test_is_fischer   )
+register.filter('test_variant_name', test_variant_name)
 
 
 @register.filter

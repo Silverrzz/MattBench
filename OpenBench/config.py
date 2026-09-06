@@ -21,6 +21,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 import traceback
 
@@ -47,6 +48,12 @@ def create_openbench_config():
         engine : load_engine_config(engine) for engine in config_dict['engines']
     }
 
+    variants = config_dict['variants']
+    for book in config_dict['books'].values():
+        assert book['variant'] in variants, 'Unknown book variant: %s' % book['variant']
+    for engine in config_dict['engines'].values():
+        assert all(variant in variants for variant in engine['variants']), 'Unknown engine variant'
+
     # Rolling sha256sum of the engine's build configs
     checksum = hashlib.sha256(b'').digest()
     for engine, engine_config in config_dict['engines'].items():
@@ -63,6 +70,10 @@ def load_book_config(book_name):
 
     assert type(conf.get('sha')) == str
     assert type(conf.get('source')) == str
+
+    conf.setdefault('variant', 'fischerandom' if any(
+        marker in book_name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard')
+    assert isinstance(conf['variant'], str)
 
     return conf
 
@@ -102,6 +113,25 @@ def load_engine_config(engine_name):
 
 def verify_general_config(conf):
 
+    default_runner = {key: conf['fastchess_' + key] for key in ('repo_url', 'repo_ref', 'min_version')}
+    conf.setdefault('variants', {'standard': {}, 'fischerandom': {'syzygy': True}})
+    assert isinstance(conf['variants'], dict) and 'standard' in conf['variants']
+    for variant, definition in conf['variants'].items():
+        assert re.fullmatch(r'[a-z][a-z0-9_-]*', variant), 'Invalid variant identifier'
+        assert isinstance(definition, dict)
+        definition.setdefault('name', variant)
+        definition.setdefault('fastchess_variant', variant)
+        definition.setdefault('syzygy', variant == 'standard')
+        definition.setdefault('runner', dict(default_runner))
+        assert isinstance(definition['name'], str) and definition['name']
+        assert re.fullmatch(r'[a-zA-Z0-9_-]+', definition['fastchess_variant'])
+        assert type(definition['syzygy']) is bool
+        runner = definition['runner']
+        assert isinstance(runner, dict)
+        assert all(isinstance(runner.get(key), str) and runner[key] for key in default_runner)
+        assert runner['repo_url'].startswith('https://')
+        assert re.fullmatch(r'\d+\.\d+(?:\.\d+)?', runner['min_version'])
+
     assert type(conf.get('client_version'  ) == int)
     assert type(conf.get('client_repo_url' ) == str)
     assert type(conf.get('client_repo_ref' ) == str)
@@ -129,6 +159,10 @@ def verify_engine_basics(conf):
     assert type(conf.get('nps')) == int and conf['nps'] > 0
     assert type(conf.get('source')) == str
     assert type(conf.get('build')) == dict
+
+    conf.setdefault('variants', ['standard', 'fischerandom'])
+    assert isinstance(conf['variants'], list) and conf['variants']
+    assert all(isinstance(variant, str) for variant in conf['variants'])
 
 def verify_engine_build(engine_name, conf):
 

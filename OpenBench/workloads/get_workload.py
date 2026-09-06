@@ -207,6 +207,7 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
 def workload_to_dictionary(test, result, machine):
 
     workload = {}
+    variant = OPENBENCH_CONFIG['books'].get(test.book_name, {}).get('variant', 'standard')
 
     workload['result'] = {
         'id'  : result.id,
@@ -215,6 +216,8 @@ def workload_to_dictionary(test, result, machine):
     workload['test'] = {
         'id'            : test.id,
         'type'          : test.test_mode,
+        'variant'       : variant,
+        'variant_config': OPENBENCH_CONFIG['variants'][variant],
         'syzygy_wdl'    : test.syzygy_wdl,
         'syzygy_adj'    : test.syzygy_adj,
         'win_adj'       : test.win_adj,
