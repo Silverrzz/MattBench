@@ -785,6 +785,7 @@ def client_heartbeat(request, machine):
 
     return JsonResponse([{}, { 'stop' : True }][bool(finished)])
 
+"""
 @csrf_exempt
 @verify_worker
 def client_submit_nps_stats(request, _):
