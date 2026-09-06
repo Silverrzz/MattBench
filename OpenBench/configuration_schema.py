@@ -3,7 +3,7 @@ from jsonschema import Draft202012Validator
 
 
 DEFAULT_SITE = {
-    'client_version': 49,
+    'client_version': 50,
     'client_repo_url': 'https://github.com/AndyGrant/OpenBench',
     'client_repo_ref': 'master',
     'fastchess_min_version': '1.8.1',
