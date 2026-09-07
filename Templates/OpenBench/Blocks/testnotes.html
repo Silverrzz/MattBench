@@ -1,0 +1,10 @@
+{% if test.info.strip %}
+    <tr class="test-notes-row{% if forloop.counter|divisibleby:2 %} test-row-shaded{% endif %}" hidden>
+        <td colspan="{{ columns }}">
+            <details class="test-notes" data-test-notes="{{ test.id }}">
+                <summary>Notes <span class="sr-only">for test #{{ test.id }}</span></summary>
+                <div>{{ test.info }}</div>
+            </details>
+        </td>
+    </tr>
+{% endif %}

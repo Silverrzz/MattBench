@@ -1,0 +1,14 @@
+<section class="llr-history" aria-labelledby="llr-heading" data-url="{% url 'api_workload' workload.id 'llr' %}">
+    <div class="llr-heading">
+        <h2 id="llr-heading">LLR history</h2>
+        <span class="llr-feedback" data-llr-feedback role="status" hidden></span>
+    </div>
+    <div class="llr-plot" tabindex="0" role="group" aria-label="LLR history chart" aria-describedby="llr-help llr-readout">
+        <svg class="llr-graph" role="img" aria-label="LLR history"></svg>
+        <div class="llr-tooltip" hidden></div>
+    </div>
+    <p id="llr-help" class="llr-sr-only">Hover or touch to inspect samples. Use the left and right arrow keys to move between samples, Home and End to jump, and Escape to dismiss.</p>
+    <p id="llr-readout" class="llr-sr-only" aria-live="polite" aria-atomic="true"></p>
+    <noscript><p class="llr-feedback">JavaScript required.</p></noscript>
+    {{ llr_history|json_script:'llr-history-data' }}
+</section>

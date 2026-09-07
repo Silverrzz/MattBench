@@ -20,7 +20,7 @@
 
 from django.db.models import CharField, IntegerField, BigIntegerField, BooleanField, FloatField
 from django.db.models import JSONField, ForeignKey, DateTimeField, OneToOneField
-from django.db.models import CASCADE, PROTECT, Model, TextChoices
+from django.db.models import CASCADE, PROTECT, Model, TextChoices, UniqueConstraint
 from django.contrib.auth.models import User
 
 class Engine(Model):
@@ -153,6 +153,7 @@ class Test(Model):
     lowerllr      = FloatField(default=0.0) # SPRT
     currentllr    = FloatField(default=0.0) # SPRT
     upperllr      = FloatField(default=0.0) # SPRT
+    llr_history_state = JSONField(default=dict, blank=True)
     max_games     = IntegerField(default=0) # GAMES or DATAGEN
     genfens_args  = CharField(max_length=256, default='', blank=True) # DATAGEN
     play_reverses = BooleanField(default=False) # DATAGEN
@@ -201,6 +202,16 @@ class Test(Model):
 
     def workload_type_str(self):
         return {'SPSA' : 'tune', 'DATAGEN' : 'datagen'}.get(self.test_mode, 'test')
+
+class LLRHistory(Model):
+
+    test = ForeignKey(Test, CASCADE, related_name='llr_history')
+    games = IntegerField()
+    llr = FloatField()
+
+    class Meta:
+        ordering = ['games']
+        constraints = [UniqueConstraint(fields=['test', 'games'], name='unique_test_llr_games')]
 
 class LogEvent(Model):
 

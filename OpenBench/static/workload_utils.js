@@ -9,13 +9,13 @@ function copy_text(text) {
         const copied = document.execCommand("copy");
         document.body.removeChild(area);
         const feedback = document.getElementById('workload-feedback');
-        if (feedback) feedback.textContent = copied ? 'Copied to clipboard.' : 'Unable to copy. Select the text and copy it manually.';
+        if (feedback) feedback.textContent = copied ? 'Copied.' : 'Copy failed.';
     }
 
     catch (err) {
         document.body.removeChild(area);
         const feedback = document.getElementById('workload-feedback');
-        if (feedback) feedback.textContent = 'Unable to copy. Select the text and copy it manually.';
+        if (feedback) feedback.textContent = 'Copy failed.';
     }
 }
 
@@ -33,8 +33,7 @@ function copy_text_from_element(element_id, keep_url) {
 
 
 function copy_text_codeblock(element_id, keep_url) {
-    var text = document.getElementById(element_id).innerHTML;
-    text = text.replace(/<br>/g, "\n");
+    var text = document.getElementById(element_id).innerText;
     text = ["```", text, "```"].join("\n");
 
     if (keep_url)
@@ -55,8 +54,6 @@ function populate_results(results) {
         // Highlight active rows
         if (result.active) tr.classList.add('active-highlight');
 
-        // Collapse the trinomial won/lost/drawn into the pentanomial tuple and
-        // its pair count, mirroring the aggregate summary tables above
         const penta = [result.LL, result.LD, result.DD, result.DW, result.WW];
         const pairs = penta.reduce((a, b) => a + b, 0);
 
@@ -64,7 +61,10 @@ function populate_results(results) {
             <td><a href="/machines/${result.machine__id}">${result.machine__id}</a></td>
             <td>${result.machine__user__username.charAt(0).toUpperCase() + result.machine__user__username.slice(1)}</td>
             <td class="numeric">${result.games}</td>
-            <td>(${penta.join(', ')})</td>
+            <td class="numeric">${result.wins}</td>
+            <td class="numeric">${result.draws}</td>
+            <td class="numeric">${result.losses}</td>
+            ${penta.map(count => `<td class="numeric">${count}</td>`).join('')}
             <td class="numeric">${pairs}</td>
             <td class="numeric">${result.timeloss}</td>
             <td class="numeric">${result.crashes}</td>
@@ -86,9 +86,9 @@ async function fetch_results(workload_id) {
         if (!response.ok) throw new Error('Request failed');
         const data = await response.json();
         populate_results(data.results);
-        feedback.textContent = data.results.length ? `${data.results.length} worker results loaded.` : 'No individual worker results yet.';
+        feedback.textContent = data.results.length ? `${data.results.length} worker results loaded.` : 'No worker results.';
     } catch {
-        feedback.textContent = 'Could not load worker results. Please try again.';
+        feedback.textContent = 'Unable to load results.';
     } finally {
         button.disabled = false;
         button.textContent = 'Fetch individual results';
@@ -147,8 +147,11 @@ function append_summary_section(table, label, rows, key_formatter) {
     header.className = 'table-header';
     header.appendChild(summary_cell('th', label));
 
-    ['Penta', 'Elo', 'Pairs', '%'].forEach(name => {
-        header.appendChild(summary_cell('th', name));
+    [['LL', 'Two losses'], ['LD', 'Loss and draw'], ['DD / WL', 'Two draws or a win and a loss'], ['DW', 'Draw and win'], ['WW', 'Two wins'], ['Elo', ''], ['Pairs', ''], ['%', '']].forEach(([name, title]) => {
+        const cell = summary_cell('th', name, 'numeric');
+        cell.scope = 'col';
+        if (title) cell.title = title;
+        header.appendChild(cell);
     });
 
     if (is_nps_available) {
@@ -163,10 +166,8 @@ function append_summary_section(table, label, rows, key_formatter) {
     rows.forEach(row => {
         const tr = document.createElement('tr');
 
-        // The API hands us display-ready fields: the penta tuple as a string,
-        // a point-estimate Elo, the pair count, and the % of the group total
         tr.appendChild(summary_cell('td', key_formatter ? key_formatter(row.key) : row.key));
-        tr.appendChild(summary_cell('td', row.penta));
+        row.penta_counts.forEach(count => tr.appendChild(summary_cell('td', count, 'numeric')));
         tr.appendChild(summary_cell('td', row.elo,   'numeric'));
         tr.appendChild(summary_cell('td', row.pairs, 'numeric'));
         tr.appendChild(summary_cell('td', row.percent, 'numeric'));
@@ -197,7 +198,7 @@ async function fetch_summary(workload_id) {
         if (!response.ok) throw new Error('Request failed');
         const data = await response.json();
         if (!data.summary.user.length) {
-            message.textContent = 'No worker results yet. The summary will appear as games are reported.';
+            message.textContent = 'No worker results.';
             return;
         }
         const heading = document.createElement('h2');

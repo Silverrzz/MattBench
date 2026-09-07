@@ -29,19 +29,19 @@
 
 {% block content %}
 
-    <form method="post" enctype="multipart/form-data" id="network-form">
+    <form class="form form-medium" method="post" enctype="multipart/form-data" id="network-form">
         {% csrf_token %}
         <div class="form">
-             <div class="col">
-                <div class="row">
+             <div class="form-stack">
+                <div class="field">
                     <label for="network-name">Name</label>
                     <input id="network-name" name="name">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="netfile">Weights</label>
                     <input id="netfile" name="netfile" type="file">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="network-engine">Engine</label>
                     <select id="network-engine" name="engine">
                     {% for engine in config.engines %}

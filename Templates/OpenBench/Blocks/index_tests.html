@@ -1,0 +1,24 @@
+<div class="table-scroll" role="region" aria-label="{{ label }}; scroll horizontally for more columns" tabindex="0">
+    <table class="index-tests hoverable" aria-label="{{ label }}">
+        <colgroup><col class="index-author"><col class="index-engine"><col class="index-revision"><col class="index-code"><col class="index-tc"><col class="index-results"></colgroup>
+        <thead><tr class="table-header"><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Identifier</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col"><div class="results-heading"><span>Results</span>{% include "OpenBench/Blocks/notes_toggle.html" %}</div></th></tr></thead>
+        {% if groups %}
+            {% for group in groups %}
+                <tbody>
+                    {% if groups|length > 1 or group.priority != 0 %}<tr class="table-small-header"><th colspan="6" scope="rowgroup">Priority {{ group.priority }}</th></tr>{% endif %}
+                    {% for test in group.tests %}
+                        <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                        {% include "OpenBench/Blocks/testnotes.html" with columns=6 %}
+                    {% endfor %}
+                </tbody>
+            {% endfor %}
+        {% else %}
+            <tbody>
+                {% for test in tests %}
+                    <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                    {% include "OpenBench/Blocks/testnotes.html" with columns=6 %}
+                {% endfor %}
+            </tbody>
+        {% endif %}
+    </table>
+</div>

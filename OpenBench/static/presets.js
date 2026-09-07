@@ -4,6 +4,7 @@ let selectedPreset = null;
 let presetBusy = false;
 let presetDraft = [];
 const editedFields = new Set();
+const presetColumns = 4;
 const presetGroups = [
     ['test_mode', 'test_bounds', 'test_confidence', 'test_max_games'],
     ['scale_method', 'scale_nps'],
@@ -92,7 +93,7 @@ function select_preset(preset) {
     message.replaceChildren();
     if (retained) {
         const text = document.createElement('span');
-        text.textContent = 'Your edited fields were kept.';
+        text.textContent = 'Edited fields retained.';
         const overwrite = preset_button('Overwrite?', () => {
             editedFields.clear();
             apply_settings(preset.settings);
@@ -120,7 +121,8 @@ function render_presets() {
     const rows = engine_presets();
     for (const scope of ['engine', 'personal']) {
         const presets = rows.filter(preset => preset.scope === scope);
-        if (!presets.length) continue;
+        const editable = Boolean(config.engines[get_dev_engine()]) && (scope === 'personal' || presetState.editable[get_dev_engine()]);
+        if (!presets.length && !editable) continue;
         const group = document.createElement('div');
         group.className = 'preset-group';
         group.setAttribute('role', 'group');
@@ -131,12 +133,24 @@ function render_presets() {
         label.textContent = scope === 'engine' ? get_dev_engine() + ' presets' : 'My presets';
         const buttons = document.createElement('div');
         buttons.className = 'preset-group-buttons';
+        buttons.style.setProperty('--preset-columns', presetColumns);
         for (const preset of presets) {
             const button = preset_button(preset.name, () => select_preset(preset));
             button.className = 'anchorbutton btn-start';
             button.setAttribute('aria-pressed', String(selectedPreset?.id === preset.id));
             button.title = (preset.scope === 'engine' ? get_dev_engine() : 'Personal') + (preset.id === rows[0].id ? ' - Default preset' : '');
             buttons.append(button);
+        }
+        const slots = Math.max(presetColumns, Math.ceil(presets.length / presetColumns) * presetColumns);
+        for (let index = presets.length; index < slots; index++) {
+            const placeholder = preset_button('', () => open_preset_save(scope), 'Save a new ' + (scope === 'engine' ? 'shared' : 'personal') + ' preset');
+            placeholder.className = 'anchorbutton preset-placeholder';
+            if (!editable) {
+                placeholder.disabled = true;
+                placeholder.title = 'Empty preset slot';
+                placeholder.setAttribute('aria-label', 'Empty preset slot');
+            }
+            buttons.append(placeholder);
         }
         group.append(label, buttons);
         root.append(group);
@@ -199,6 +213,18 @@ function save_slot_name() {
     document.getElementById('preset-save-submit').textContent = row ? 'Replace preset' : 'Save preset';
 }
 
+function open_preset_save(scope) {
+    const dialog = document.getElementById('preset-save-dialog');
+    const select = document.getElementById('preset-save-scope');
+    document.getElementById('preset-message').replaceChildren();
+    preset_scopes(select);
+    if (scope) select.value = scope;
+    save_slots();
+    dialog.querySelector('.preset-error').textContent = '';
+    dialog.showModal();
+    document.getElementById('preset-save-name').focus();
+}
+
 function render_preset_editor() {
     const root = document.getElementById('preset-editor');
     root.replaceChildren();
@@ -226,6 +252,7 @@ function render_preset_editor() {
                 document.getElementById('preset-manage-scope').disabled = true;
                 render_preset_editor();
             }, label + ': ' + preset.name);
+            button.className = 'button';
             button.disabled = index + delta < 0 || index + delta >= presetDraft.length;
             row.append(button);
         }
@@ -234,6 +261,7 @@ function render_preset_editor() {
             document.getElementById('preset-manage-scope').disabled = true;
             render_preset_editor();
         }, 'Delete: ' + preset.name);
+        remove.className = 'button';
         row.append(remove);
         root.append(row);
     }
@@ -258,7 +286,7 @@ async function save_presets(dialog, payload) {
         document.getElementById('preset-message').textContent = '';
         dialog.close();
     } catch (error) {
-        dialog.querySelector('.preset-error').textContent = error instanceof SyntaxError ? 'Unable to save. Reload the page and try again.' : error.message;
+        dialog.querySelector('.preset-error').textContent = error instanceof SyntaxError ? 'Unable to save preset.' : error.message;
     } finally { presetBusy = false; submit.disabled = false; }
 }
 
@@ -273,14 +301,7 @@ function initialize_presets(kind) {
     }, true);
     const save = document.getElementById('preset-save-dialog');
     const manage = document.getElementById('preset-manage-dialog');
-    document.getElementById('preset-save-open').onclick = () => {
-        document.getElementById('preset-message').replaceChildren();
-        preset_scopes(document.getElementById('preset-save-scope'));
-        save_slots();
-        save.querySelector('.preset-error').textContent = '';
-        save.showModal();
-        document.getElementById('preset-save-name').focus();
-    };
+    document.getElementById('preset-save-open').onclick = () => open_preset_save();
     document.getElementById('preset-save-scope').onchange = save_slots;
     document.getElementById('preset-save-slot').onchange = save_slot_name;
     document.getElementById('preset-save-form').onsubmit = e => {

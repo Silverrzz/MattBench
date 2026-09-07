@@ -20,7 +20,7 @@
 
 from OpenBench.configuration import ConfigMapping, eligibility_fingerprint
 
-OPENBENCH_STATIC_VERSION = 'v20'
+OPENBENCH_STATIC_VERSION = 'mattbench-red-4'
 OPENBENCH_CONFIG = ConfigMapping()
 OPENBENCH_CUSTOM_FOCUS = True
 

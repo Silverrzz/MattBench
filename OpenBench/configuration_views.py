@@ -33,15 +33,6 @@ def manage(request, section='engines', identifier=None):
     context = {'title': title, 'section': section, 'navigation': navigation, 'generation': generation}
     context['active_section'] = {'releases': 'runners'}.get(section, section)
     context['singular'] = {'engines': 'engine', 'books': 'opening book', 'variants': 'variant', 'runners': 'runner', 'releases': 'release'}.get(section, title.lower())
-    context['description'] = {
-        'engines': 'Configure engine sources, performance and build requirements.',
-        'books': 'Choose the positions used to start games and the variant they belong to.',
-        'variants': 'Connect each set of chess rules to a compatible match runner.',
-        'runners': 'Manage the fastchess forks that run your matches. Each runner can have several releases.',
-        'releases': 'Choose a source version, then assign it to a variant.',
-        'site': 'Control access, worker updates and installation-wide defaults.',
-        'history': 'Published configuration changes for this installation.',
-    }[section]
     context['query'] = request.GET.get('q', '').strip()
     if section == 'history':
         if request.method != 'GET':

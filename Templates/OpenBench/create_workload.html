@@ -28,7 +28,7 @@
 
 {% block content %}
 
-    <form id="workload-form" method="POST" action="{{submit_endpoint}}">
+    <form class="form" id="workload-form" method="POST" action="{{submit_endpoint}}">
         {% csrf_token %}
 
         <div class="preset-bar">
@@ -37,12 +37,12 @@
         </div>
         <div id="preset-message" role="status" aria-live="polite"></div>
 
-        <div class="form w-100">
-            <div class="col">
+        <div class="form-columns">
+            <div class="form-stack">
 
                 <h3> Engines </h3>
 
-                <div class="row">
+                <div class="field">
                     <label for="dev_engine"> {{dev_text}} Engine </label>
                     <select id="dev_engine" name="dev_engine" onchange="change_engine(value, 'dev', '{{workload}}');">
                         {% for engine in config.engines %}
@@ -51,12 +51,12 @@
                     </select>
                 </div>
 
-                <div class="row">
+                <div class="field">
                     <label for="dev_repo"> {{dev_text}} Source </label> <input id="dev_repo" name="dev_repo">
                 </div>
 
                 {% if workload == "TEST" or workload == "DATAGEN" %}
-                    <div class="row">
+                    <div class="field">
                         <label for="base_engine"> Base Engine </label>
                         <select id="base_engine" name="base_engine" onchange="change_engine(value, 'base', '{{workload}}');">
                             {% for engine in config.engines %}
@@ -65,26 +65,26 @@
                         </select>
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="base_repo"> Base Source </label> <input id="base_repo" name="base_repo">
                     </div>
                 {% endif %}
 
                 <h3> {{dev_title_text}} Settings </h3>
 
-                <div class="row">
+                <div class="field">
                     <label for="dev_branch" > {{dev_text}} Branch </label> <input id="dev_branch" name="dev_branch" autofocus>
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="dev_bench" > {{dev_text}} Bench </label> <input value="Autofill" id="dev_bench" name="dev_bench">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="dev_network" > {{dev_text}} Network </label> <select id="dev_network" name="dev_network"></select>
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="dev_options"> {{dev_text}} Options </label> <input id="dev_options" name="dev_options">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="dev_time_control"> {{dev_text}} Time </label> <input id="dev_time_control" name="dev_time_control">
                 </div>
 
@@ -92,25 +92,25 @@
 
                     <h3> Base Settings </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="base_branch"> Base Branch </label> <input id="base_branch" name="base_branch">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="base_bench"> Base Bench </label> <input value="Autofill" id="base_bench" name="base_bench">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="base_network"> Base Network </label> <select id="base_network" name="base_network"></select>
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="base_options"> Base Options </label> <input id="base_options" name="base_options">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="base_time_control" > Base Time </label> <input id="base_time_control" name="base_time_control">
                     </div>
 
                     <h3> Information </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="info"> Info </label> <textarea id="info" name="info" rows="4"></textarea>
                     </div>
 
@@ -118,7 +118,7 @@
 
                     <h3> SPSA Methodologies </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_reporting_type"> Reporting </label>
                         <select id="spsa_reporting_type" name="spsa_reporting_type">
                             <option selected value="BATCHED"> Batched </option>
@@ -126,7 +126,7 @@
                         </select>
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_distribution_type"> Distribution </label>
                         <select id="spsa_distribution_type" name="spsa_distribution_type">
                             <option selected value="SINGLE"> Single </option>
@@ -136,13 +136,13 @@
 
                     <h3> Information </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="info"> Info </label> <textarea id="info" name="info" rows="4"></textarea>
                     </div>
 
                     <h3> SPSA Input </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <textarea aria-label="SPSA parameters" id="spsa_inputs" name="spsa_inputs" rows=9></textarea>
                     </div>
 
@@ -150,13 +150,13 @@
 
             </div>
 
-            <div class="col">
+            <div class="form-stack">
 
                 {% if workload == "TEST" %}
 
                     <h3> Test Settings </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="test_mode"> Test Mode </label>
                         <select onchange='set_test_type()' id="test_mode" name="test_mode">
                             <option selected value="SPRT"> SPRT</option>
@@ -164,15 +164,15 @@
                         </select>
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="test_bounds"> Bounds </label> <input id="test_bounds" name="test_bounds">
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="test_confidence"> Confidence </label> <input id="test_confidence" name="test_confidence">
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="test_max_games"> Max Games </label> <input id="test_max_games" name="test_max_games">
                     </div>
 
@@ -180,19 +180,19 @@
 
                     <h3> SPSA Settings </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_alpha"> Alpha </label> <input value="0.602" id="spsa_alpha" name="spsa_alpha">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_gamma"> Gamma </label> <input value="0.101" id="spsa_gamma" name="spsa_gamma">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_A_ratio"> A-Ratio </label> <input value="0.1" id="spsa_A_ratio" name="spsa_A_ratio">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_iterations"> Iterations </label> <input value="25000" id="spsa_iterations" name="spsa_iterations">
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="spsa_pairs_per"> Pairs-Per </label> <input value="8" id="spsa_pairs_per" name="spsa_pairs_per">
                     </div>
 
@@ -200,15 +200,15 @@
 
                     <h3> Datagen Settings </h3>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="datagen_max_games"> Max Games </label> <input id="datagen_max_games" name="datagen_max_games">
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="datagen_custom_genfens"> Genfens Args </label> <input id="datagen_custom_genfens" name="datagen_custom_genfens">
                     </div>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="datagen_play_reverses"> Play Reverses </label>
                         <select id="datagen_play_reverses" name="datagen_play_reverses">
                             <option value="YES"> Yes </option>
@@ -220,7 +220,7 @@
 
                 <h3> General Settings </h3>
 
-                <div class="row">
+                <div class="field">
                     <label for="book_name"> Opening Book </label> <select id="book_name" name="book_name">
                     <option selected value="NONE"> None </option>
                     {% for name, data in config.books.items %}
@@ -229,7 +229,7 @@
                     </select>
                 </div>
 
-                <div class="row">
+                <div class="field">
                     <label for="upload_pgns"> Upload PGNs </label>
                     <select id="upload_pgns" name="upload_pgns">
                         {% if workload == "DATAGEN" %}
@@ -243,21 +243,21 @@
                     </select>
                 </div>
 
-                <div class="row">
+                <div class="field">
                     <label for="priority"> Priority </label> <input value="0" id="priority" name="priority">
                 </div>
 
-                <div class="row">
+                <div class="field">
                     <label for="throughput"> Throughput </label> <input value="1000" id="throughput" name="throughput">
                 </div>
 
                 {% if workload == "TEST" or workload == "DATAGEN" %}
-                    <div class="row">
+                    <div class="field">
                         <label for="workload_size"> Workload Size </label> <input id="workload_size" name="workload_size">
                     </div>
                 {% endif %}
 
-                <div class="row">
+                <div class="field">
                     <label for="syzygy_wdl"> Syzygy WDL </label> <select id="syzygy_wdl" name="syzygy_wdl">
                         <option selected value="DISABLED"> Disabled </option>
                         <option value="OPTIONAL"> Optional </option>
@@ -270,7 +270,7 @@
                 </div>
 
                 <h3> Adjudication Settings </h3>
-                <div class="row">
+                <div class="field">
                     <label for="syzygy_adj"> Syzygy ADJ. </label>
                     <select id="syzygy_adj" name="syzygy_adj">
                         <option value="DISABLED"> Disabled </option>
@@ -282,15 +282,15 @@
                         <option value="3-MAN"> 3-Man </option>
                     </select>
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="win_adj"> Win ADJ. </label> <input id="win_adj" name="win_adj">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="draw_adj"> Draw ADJ. </label> <input id="draw_adj" name="draw_adj">
                 </div>
 
                 <h3> Scaling Settings </h3>
-                <div class="row">
+                <div class="field">
                     <label for="scale_method"> Scale Method </label>
                     <select id="scale_method" name="scale_method">
                         {% if workload == "TEST" or workload == "DATAGEN" %}
@@ -302,35 +302,35 @@
                         {% endif %}
                     </select>
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="scale_nps"> Expected NPS </label> <input id="scale_nps" name="scale_nps">
                 </div>
             </div>
         </div>
 
-        <div class="workload-actions mt-3">
-            <input type="submit" class="anchorbutton btn-start mw-84" name="submit" value="{{submit_text}}">
+        <div class="form-actions">
             <button type="button" id="preset-save-open" class="anchorbutton">Save as preset</button>
+            <input type="submit" class="anchorbutton btn-start" name="submit" value="{{submit_text}}">
         </div>
     </form>
 
     <dialog id="preset-save-dialog" class="preset-dialog" aria-labelledby="preset-save-title">
-        <form id="preset-save-form">
+        <form id="preset-save-form" class="form-stack">
             <h3 id="preset-save-title">Save preset</h3>
-            <label for="preset-save-scope">Save to</label><select id="preset-save-scope"></select>
-            <label for="preset-save-slot">Slot</label><select id="preset-save-slot"></select>
-            <label for="preset-save-name">Name</label><input id="preset-save-name" maxlength="128" required autocomplete="off">
+            <div class="field"><label for="preset-save-scope">Save to</label><select id="preset-save-scope"></select></div>
+            <div class="field"><label for="preset-save-slot">Slot</label><select id="preset-save-slot"></select></div>
+            <div class="field"><label for="preset-save-name">Name</label><input id="preset-save-name" maxlength="128" required autocomplete="off"></div>
             <div class="preset-error" role="alert"></div>
-            <footer><button type="button" data-close-dialog>Cancel</button><button type="submit" class="preset-primary" id="preset-save-submit">Save preset</button></footer>
+            <footer class="form-actions"><button type="button" class="button" data-close-dialog>Cancel</button><button type="submit" class="button button-primary" id="preset-save-submit">Save preset</button></footer>
         </form>
     </dialog>
     <dialog id="preset-manage-dialog" class="preset-dialog preset-manager" aria-labelledby="preset-manage-title">
-        <form id="preset-manage-form">
+        <form id="preset-manage-form" class="form-stack">
             <h3 id="preset-manage-title">Edit presets</h3>
-            <label for="preset-manage-scope">Presets for</label><select id="preset-manage-scope"></select>
+            <div class="field"><label for="preset-manage-scope">Presets for</label><select id="preset-manage-scope"></select></div>
             <div id="preset-editor"></div>
             <div class="preset-error" role="alert"></div>
-            <footer><button type="button" data-close-dialog>Cancel</button><button type="submit" class="preset-primary">Save changes</button></footer>
+            <footer class="form-actions"><button type="button" class="button" data-close-dialog>Cancel</button><button type="submit" class="button button-primary">Save changes</button></footer>
         </form>
     </dialog>
 

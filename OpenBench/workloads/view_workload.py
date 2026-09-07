@@ -35,6 +35,7 @@ from django.utils import timezone
 import OpenBench.views
 import OpenBench.stats
 from OpenBench.models import *
+from OpenBench.llr_history import workload_llr_history
 
 def view_workload(request, workload, workload_type):
 
@@ -47,6 +48,9 @@ def view_workload(request, workload, workload_type):
     data = {
         'workload' : workload,
     }
+
+    if workload.test_mode == 'SPRT':
+        data['llr_history'] = workload_llr_history(workload)
 
     if workload_type == 'TEST':
         data['type']= workload_type
@@ -87,6 +91,7 @@ def fetch_results(workload):
         'machine__id',
         'machine__user__username',
         'games',
+        'wins', 'draws', 'losses',
         'LL', 'LD', 'DD', 'DW', 'WW',
         'timeloss',
         'crashes',
@@ -165,6 +170,7 @@ def fetch_result_summaries(workload):
         rows = [{
             'key'             : key,
             'penta'           : '(%d, %d, %d, %d, %d)' % tuple(penta),
+            'penta_counts'    : list(penta),
             'elo'             : elo_display(penta),
             'pairs'           : sum(penta),
             'percent'         : '%.2f' % (100.0 * sum(penta) / total_pairs if total_pairs else 0.0),

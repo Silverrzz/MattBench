@@ -4,25 +4,6 @@
 
     <script>
 
-        function changed_timecontrol() {
-            var tc_type  = document.getElementById("tc-type").value;
-
-            var dict = {
-                ""            : "Anything",
-                "FIXED-DEPTH" : "All, or e.g D=10",
-                "FIXED-NODES" : "All, or e.g N=40000",
-                "FIXED-TIME"  : "All, or e.g MT=1000",
-                "FISCHER"     : "All, or e.g 15.0+0.15",
-                "CYCLIC"      : "All, or e.g 40/10.0+0.0",
-            }
-
-            document.getElementById("tc-value-input").placeholder = dict[tc_type];
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            changed_timecontrol();
-        });
-
         // Keep the shareable URL short by only submitting non-default fields
         function prune_search(form) {
 
@@ -57,50 +38,50 @@
 {% endblock %}
 
 {% block content %}
-        <form class="search-form" method="GET" action="/search/" onsubmit="prune_search(this)">
+        <form class="form form-medium" method="GET" action="/search/" onsubmit="prune_search(this)">
             <input type="hidden" name="go" value="1">
             <div class="form">
-                <div class="col">
+                <div class="form-stack">
 
-                    <div class="row">
+                    <div class="field">
                         <label for="keywords">Keywords</label>
-                        <input id="keywords" name="keywords" value="{{form.keywords}}" placeholder="Separated By Spaces (Case-Insensitive)"><br>
+                        <input id="keywords" name="keywords" value="{{form.keywords}}" >
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="info-contains">Info</label>
-                        <input id="info-contains" name="info-contains" value="{{form.info}}" placeholder="Substring Match (Case-Insensitive)"><br>
+                        <input id="info-contains" name="info-contains" value="{{form.info}}" >
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="authors">Authors</label>
-                        <input id="authors" name="authors" value="{{form.authors}}" placeholder="Separated By Spaces (Case-Insensitive)"><br>
+                        <input id="authors" name="authors" value="{{form.authors}}" >
                     </div>
 
                     <hr>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="dev-engine">Dev</label>
-                        <select id="dev-engine" name="dev-engine" class="search-engine">
+                        <div class="control-group"><select id="dev-engine" name="dev-engine" >
                             <option value="" {% if not form.dev_engine %}selected{% endif %}>All Engines</option>
                             {% for name, data in config.engines.items %}
                                 <option value="{{name}}" {% if form.dev_engine == name %}selected{% endif %}>{{name}}</option>
                             {% endfor %}
                         </select>
-                        <input id="dev-network" name="dev-network" value="{{form.dev_network}}" aria-label="Dev network name" placeholder="Network Name (Case-Insensitive)"><br>
+                        <input id="dev-network" name="dev-network" value="{{form.dev_network}}" aria-label="Dev network name" placeholder="Network"></div>
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="base-engine">Base</label>
-                        <select id="base-engine" name="base-engine" class="search-engine">
+                        <div class="control-group"><select id="base-engine" name="base-engine" >
                             <option value="" {% if not form.base_engine %}selected{% endif %}>All Engines</option>
                             {% for name, data in config.engines.items %}
                                 <option value="{{name}}" {% if form.base_engine == name %}selected{% endif %}>{{name}}</option>
                             {% endfor %}
                         </select>
-                        <input id="base-network" name="base-network" value="{{form.base_network}}" aria-label="Base network name" placeholder="Network Name (Case-Insensitive)"><br>
+                        <input id="base-network" name="base-network" value="{{form.base_network}}" aria-label="Base network name" placeholder="Network"></div>
                     </div>
 
                     <hr>
 
-                    <div class="row">
+                    <div class="field">
                         <label for="workload-type">Type</label>
                         <select id="workload-type" name="workload-type">
                             <option value="" {% if not form.workload_type %}selected{% endif %}>All Workload Types</option>
@@ -108,20 +89,20 @@
                             <option value="GAMES" {% if form.workload_type == "GAMES" %}selected{% endif %}>Fixed # of Games</option>
                             <option value="SPSA" {% if form.workload_type == "SPSA" %}selected{% endif %}>SPSA Tuning Session</option>
                             <option value="DATAGEN" {% if form.workload_type == "DATAGEN" %}selected{% endif %}>Data Generation</option>
-                        </select><br>
+                        </select>
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="opening-book">Book</label>
                         <select id="opening-book" name="opening-book">
                             <option value="" {% if not form.book %}selected{% endif %}>All Books</option>
                             {% for name, data in config.books.items %}
                                 <option value="{{name}}" {% if form.book == name %}selected{% endif %}>{{name}}</option>
                             {% endfor %}
-                        </select><br>
+                        </select>
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="tc-type">Time</label>
-                        <select id="tc-type" name="tc-type" onchange="changed_timecontrol()" class="search-engine">
+                        <div class="control-group"><select id="tc-type" name="tc-type">
                             <option value="" {% if not form.tc_type %}selected{% endif %}>All Controls</option>
                             <option value="FIXED-DEPTH" {% if form.tc_type == "FIXED-DEPTH" %}selected{% endif %}>Fixed Depth</option>
                             <option value="FIXED-NODES" {% if form.tc_type == "FIXED-NODES" %}selected{% endif %}>Fixed Nodes</option>
@@ -129,26 +110,26 @@
                             <option value="FISCHER" {% if form.tc_type == "FISCHER" %}selected{% endif %}>Fischer</option>
                             <option value="CYCLIC" {% if form.tc_type == "CYCLIC" %}selected{% endif %}>Cyclic</option>
                         </select>
-                        <input id="tc-value-input" name="tc-value-input" value="{{form.tc_value}}" aria-label="Time control value"><br>
+                        <input id="tc-value-input" name="tc-value-input" value="{{form.tc_value}}" aria-label="Time control value"></div>
                     </div>
-                    <div class="row">
+                    <div class="field">
                         <label for="threads">Threads</label>
                         <select id="threads" name="threads">
                             <option value="" {% if not form.threads %}selected{% endif %}>All Thread Counts</option>
                             <option value="single" {% if form.threads == "single" %}selected{% endif %}>Single-Threaded</option>
                             <option value="multi" {% if form.threads == "multi" %}selected{% endif %}>Multi-Threaded</option>
-                        </select><br>
+                        </select>
                     </div>
 
                     <hr>
 
-                    <div class="status-filters">
-                        <label for="show-greens"><input type="checkbox" id="show-greens" {% if not form.hide_greens %}checked{% endif %}> Greens</label>
-                        <label for="show-yellows"><input type="checkbox" id="show-yellows" {% if not form.hide_yellows %}checked{% endif %}> Yellows</label>
-                        <label for="show-reds"><input type="checkbox" id="show-reds" {% if not form.hide_reds %}checked{% endif %}> Reds</label>
-                        <label for="show-blues"><input type="checkbox" id="show-blues" {% if not form.hide_blues %}checked{% endif %}> Blues</label>
-                        <label for="show-stopped"><input type="checkbox" id="show-stopped" {% if not form.hide_stopped %}checked{% endif %}> Stopped</label>
-                        <label for="show-deleted"><input type="checkbox" id="show-deleted" {% if form.show_deleted %}checked{% endif %}> Deleted</label>
+                    <div class="choice-list choice-list-inline">
+                        <label class="choice" for="show-greens"><input type="checkbox" id="show-greens" {% if not form.hide_greens %}checked{% endif %}> Greens</label>
+                        <label class="choice" for="show-yellows"><input type="checkbox" id="show-yellows" {% if not form.hide_yellows %}checked{% endif %}> Yellows</label>
+                        <label class="choice" for="show-reds"><input type="checkbox" id="show-reds" {% if not form.hide_reds %}checked{% endif %}> Reds</label>
+                        <label class="choice" for="show-blues"><input type="checkbox" id="show-blues" {% if not form.hide_blues %}checked{% endif %}> Blues</label>
+                        <label class="choice" for="show-stopped"><input type="checkbox" id="show-stopped" {% if not form.hide_stopped %}checked{% endif %}> Stopped</label>
+                        <label class="choice" for="show-deleted"><input type="checkbox" id="show-deleted" {% if form.show_deleted %}checked{% endif %}> Deleted</label>
                     </div>
                     <input type="submit" class="anchorbutton btn-blue w-100" value="Search Tests">
                 </div>
@@ -159,18 +140,19 @@
     {% if tests %}<div class="search-results-spacer"></div>{% endif %}
 
     {% if tests %}
-    <table class="test-list stripes hoverable" aria-label="Search results">
-        <thead><tr class="column-headings"><th scope="col">Date</th><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Revision / status</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col">Results</th><th scope="col">Notes</th></tr></thead>
+    <table class="test-list hoverable" aria-label="Search results">
+        <thead><tr class="column-headings"><th scope="col">Date</th><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Identifier</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col"><div class="results-heading"><span>Results</span>{% include "OpenBench/Blocks/notes_toggle.html" %}</div></th></tr></thead>
         <tbody>
         {% for test in tests %}
-            <tr>
+            <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">
                 <td class="datestamp">{{test.creation|date:"U"}}</td>
                 {% include "OpenBench/Blocks/testsummary.html" %}
             </tr>
+            {% include "OpenBench/Blocks/testnotes.html" with columns=7 %}
         {% endfor %}
         </tbody>
     </table>
     {% elif request.GET.go %}
-        <div class="empty-state"><strong>No matching tests</strong>Try fewer filters or different search terms.</div>
+        <div class="empty-state"><strong>No matching tests</strong></div>
     {% endif %}
 {% endblock %}

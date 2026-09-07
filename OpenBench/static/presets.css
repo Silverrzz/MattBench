@@ -1,12 +1,14 @@
-.preset-bar, .preset-group-buttons, .workload-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; white-space: normal; }
+.preset-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; white-space: normal; }
 .preset-bar { align-items: flex-start; margin: 0 0 26px; padding-bottom: 24px; border-bottom: 1px solid var(--line); gap: 20px; }
 #preset-slots { flex: 1; min-width: 0; display: grid; gap: 18px; white-space: normal; }
-#content #preset-slots .anchorbutton { width: auto; margin: 0; padding: 9px 16px; min-height: 38px; background: var(--surface); border-color: var(--line-strong); color: var(--muted); }
-#content #preset-slots .anchorbutton:hover { border-color: var(--accent); color: var(--text); }
+#content #preset-slots .anchorbutton { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 9px 16px; min-height: 38px; white-space: normal; overflow-wrap: anywhere; background: var(--surface); border-color: var(--line-strong); color: var(--muted); }
+#content #preset-slots .anchorbutton:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+#content #preset-slots .preset-placeholder { background: transparent; border: 1px solid var(--line-strong); }
+#content #preset-slots .preset-placeholder:disabled { cursor: default; opacity: 1; }
 #content #preset-slots .anchorbutton[aria-pressed="true"] { border-color: var(--brand); background: #3b2025; color: var(--text); }
 .preset-group { min-width: 0; }
 .preset-group-label { margin-bottom: 10px; color: var(--muted); font-size: 13px; font-weight: 500; }
-.preset-group-buttons { align-items: stretch; }
+.preset-group-buttons { display: grid; grid-template-columns: repeat(var(--preset-columns, 4), minmax(0, 1fr)); gap: 8px; align-items: stretch; }
 .preset-link { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; color: var(--text); font: inherit; font-size: 13px; padding: 9px 14px; margin-top: 30px; min-height: 38px; cursor: pointer; }
 .preset-link:hover { background: var(--surface-raised); border-color: var(--muted); }
 #preset-message { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; white-space: normal; color: var(--muted); font-size: 14px; margin: -8px 0 24px; }
@@ -14,34 +16,20 @@
 #preset-message button:hover { color: var(--accent-hover); }
 #preset-message .preset-notice-dismiss { padding: 4px 8px; color: var(--muted); text-decoration: none; }
 #preset-message:empty, .preset-bar [hidden] { display: none; }
-.workload-actions { justify-content: flex-end; width: 100%; gap: 12px; padding-top: 24px; border-top: 1px solid var(--line); }
-#content .workload-actions .btn-start { width: auto; min-width: 170px; max-width: none; order: 1; }
-#content #preset-save-open { background: var(--surface-raised); border: 1px solid var(--line-strong); color: var(--text); padding: 9px 15px; }
-#content #preset-save-open:hover { border-color: var(--muted); }
 .preset-dialog { width: min(440px, calc(100% - 32px)); max-height: calc(100% - 48px); padding: 28px; background: var(--canvas); color: var(--text); border: 1px solid var(--line-strong); border-top: 3px solid var(--brand); border-radius: 4px; white-space: normal; font: 14px/1.5 var(--sans); }
 .preset-dialog::backdrop { background: rgb(0 0 0 / .7); }
-.preset-dialog h3 { margin: 0 0 24px; color: var(--text); font-size: 21px; }
-.preset-dialog label { display: block; margin: 18px 0 8px; color: var(--muted); }
-.preset-dialog input, .preset-dialog select, .preset-dialog button { padding: 10px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 3px; font: inherit; }
-.preset-dialog input, .preset-dialog select { width: 100%; }
-.preset-dialog button { cursor: pointer; }
-.preset-dialog button:hover { border-color: var(--muted); }
-.preset-dialog button:disabled { opacity: .5; cursor: not-allowed; }
-.preset-dialog .preset-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-.preset-dialog .preset-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
-.preset-dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 28px; }
+.preset-dialog h3 { margin: 0; color: var(--text); font-size: 21px; }
 .preset-dialog .preset-error { color: var(--red); margin-top: 14px; }
 .preset-dialog :focus-visible, .preset-bar :focus-visible, #preset-message :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .preset-manager { width: min(580px, calc(100% - 32px)); }
-#preset-editor { margin-top: 20px; }
+#preset-editor { min-width: 0; }
 .preset-edit-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .preset-edit-row > span { width: 20px; flex-shrink: 0; color: var(--subtle); }
 .preset-edit-row input { min-width: 0; flex: 1; }
 .preset-edit-row button { flex-shrink: 0; }
 @media (max-width: 640px) {
     #preset-slots { flex-basis: 100%; }
+    #content #preset-slots .anchorbutton { padding: 9px 6px; }
     .preset-link { margin-top: 0; }
     .preset-dialog { padding: 20px; }
-    .preset-dialog input, .preset-dialog select { font-size: 16px; }
-    .workload-actions > * { flex: 1 1 auto; }
 }

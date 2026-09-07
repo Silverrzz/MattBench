@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const selected = row.querySelector('input[type="radio"]').checked;
             const remove = row.querySelector('.remove-repo');
             remove.disabled = selected;
-            remove.title = selected ? 'Choose another default engine before removing this repository' : 'Remove repository';
+            remove.title = selected ? 'Default engine' : 'Remove repository';
         });
     }
 
@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 engineSelect.add(new Option(engine, engine));
             }
             feedback.hidden = false;
-            feedback.textContent = `${engine} will be removed when you save. Reload this page to discard unsaved changes.`;
+            feedback.textContent = `Pending removal: ${engine}`;
             engineSelect.focus();
         });
     });
@@ -36,17 +36,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function validateRepository() {
         const value = repository.value.trim();
         repository.required = engineSelect.value !== 'None';
-        engineSelect.setCustomValidity(value && engineSelect.value === 'None' ? 'Choose an engine for this repository.' : '');
+        engineSelect.setCustomValidity(value && engineSelect.value === 'None' ? 'Engine required.' : '');
         repository.setCustomValidity('');
         if (!value) return;
         try {
             const url = new URL(value);
             const validPath = /^\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/?$/.test(url.pathname);
             if (url.protocol !== 'https:' || url.host !== 'github.com' || url.username || url.password || url.search || url.hash || !validPath) {
-                repository.setCustomValidity('Enter a GitHub repository URL, such as https://github.com/owner/engine.');
+                repository.setCustomValidity('Invalid GitHub repository URL.');
             }
         } catch {
-            repository.setCustomValidity('Enter the full HTTPS URL of your GitHub repository.');
+            repository.setCustomValidity('Invalid GitHub repository URL.');
         }
     }
 

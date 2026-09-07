@@ -68,33 +68,35 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
 
     data = content.copy()
     page_titles = {
-        'index.html': ('Tests', 'Active workloads and recent results.'),
-        'profile.html': ('Profile', 'Your account, contributions and engine repositories.'),
-        'search.html': ('Search tests', 'Find workloads by engine, author, revision or result.'),
-        'users.html': ('Contributors', 'The people contributing games and engine improvements.'),
-        'machines.html': ('Machines', 'Workers connected to the testing network.'),
-        'machine.html': ('Machine details', 'Hardware, capabilities and workload activity.'),
-        'networks.html': ('Networks', 'Neural network files available to engine workers.'),
-        'network.html': ('Network details', ''),
-        'uploadnet.html': ('Upload network', 'Add a neural network file for your engine.'),
-        'events.html': ('Events', 'Workload changes and activity across MattBench.'),
-        'event.html': ('Event details', ''),
-        'errors.html': ('Errors', 'Crashes and issues reported by workers.'),
-        'login.html': ('Log in', 'Welcome back to MattBench.'),
-        'register.html': ('Create an account', 'Join the MattBench testing community.'),
-        'create_workload.html': ('New workload', 'Configure an engine run.'),
-        'workload.html': ('Workload', 'Results and configuration.'),
-        'configuration.html': ('Manage', 'Installation settings and engine configuration.'),
+        'index.html': 'Tests',
+        'profile.html': 'Profile',
+        'search.html': 'Search tests',
+        'users.html': 'Contributors',
+        'machines.html': 'Machines',
+        'machine.html': 'Machine details',
+        'networks.html': 'Networks',
+        'network.html': 'Network details',
+        'uploadnet.html': 'Upload network',
+        'events.html': 'Events',
+        'event.html': 'Event details',
+        'errors.html': 'Errors',
+        'login.html': 'Log in',
+        'register.html': 'Create an account',
+        'create_workload.html': 'New workload',
+        'workload.html': 'Workload',
+        'configuration.html': 'Manage',
     }
-    title, description = page_titles.get(template, ('MattBench', ''))
+    title = page_titles.get(template, 'MattBench')
     if template == 'create_workload.html':
         title = {'TEST': 'New test', 'TUNE': 'New tune', 'DATAGEN': 'New datagen'}.get(data.get('workload'), title)
     if template == 'configuration.html':
-        title, description = data.get('title', title), data.get('description', description)
+        title = data.get('title', title)
     data.setdefault('page_title', title)
-    data.setdefault('page_description', description)
     data.update({ 'config' : dict(OPENBENCH_CONFIG) })
-    data.update({ 'static_version' : OPENBENCH_STATIC_VERSION })
+    static_directory = os.path.join(os.path.dirname(__file__), 'static')
+    with os.scandir(static_directory) as static_files:
+        static_revision = max((asset.stat().st_mtime_ns for asset in static_files if asset.is_file()), default=0)
+    data.update({ 'static_version' : '%s-%s' % (OPENBENCH_STATIC_VERSION, static_revision) })
 
     if OPENBENCH_CONFIG['require_login_to_view']:
         if not request.user.is_authenticated and not always_allow:
@@ -316,7 +318,6 @@ def user(request, username, page=1):
 
     data = {
         'page_title': '%s\u2019s tests' % username,
-        'page_description': 'Workloads and results contributed by %s.' % username,
         'pending'   : pending,
         'active'    : OpenBench.utils.group_active_tests_by_priority(active),
         'completed' : completed[start:end],
@@ -331,8 +332,7 @@ def greens(request, page=1):
     completed = OpenBench.utils.get_completed_tests().filter(passed=True)
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'greens')
 
-    data = { 'completed' : completed[start:end], 'paging' : paging, 'page_title' : 'Passed tests',
-             'page_description' : 'Completed workloads that passed their acceptance criteria.' }
+    data = { 'completed' : completed[start:end], 'paging' : paging, 'page_title' : 'Passed tests' }
     return render(request, 'index.html', data)
 
 def search(request):
@@ -1085,7 +1085,15 @@ def api_workload(request, workload_id, query):
     if query == 'summary':
         return api_response({ 'summary' : fetch_result_summaries(workload) })
 
-    valid_endpoints = [ 'results', 'info', 'summary' ]
+    if query == 'llr':
+        if workload.test_mode != 'SPRT':
+            return JsonResponse({'error': 'LLR history is only available for SPRT tests'}, status=400)
+        from OpenBench.llr_history import workload_llr_history
+        response = JsonResponse(workload_llr_history(workload))
+        response['Cache-Control'] = 'no-store'
+        return response
+
+    valid_endpoints = [ 'results', 'info', 'summary', 'llr' ]
     return api_response({ 'error' : 'Valid /query/ endpoints are: [ %s ]' % (', '.join(valid_endpoints)) })
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #

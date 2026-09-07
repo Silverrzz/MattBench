@@ -60,9 +60,10 @@ class ConfigurationForm(forms.Form):
             self.fields['source'].label = 'Download URL' if isinstance(instance, OpeningBook) else 'Repository URL'
         if 'nps' in self.fields and self.fields['nps'].initial is None:
             self.fields['nps'].initial = 0
-        for name, field in self.fields.items():
-            if field.help_text:
-                field.widget.attrs['aria-describedby'] = 'id_%s-help' % name
+        for field in self.fields.values():
+            field.help_text = ''
+            if isinstance(field.widget, forms.CheckboxSelectMultiple):
+                field.widget.attrs['class'] = 'choice-list'
 
     def groups(self):
         definitions = [
@@ -91,7 +92,7 @@ class ConfigurationForm(forms.Form):
     def columns(self):
         groups = self.groups()
         midpoint = (len(groups) + 1) // 2
-        return (groups[:midpoint], groups[midpoint:])
+        return tuple(column for column in (groups[:midpoint], groups[midpoint:]) if column)
 
     def add_settings(self, schema, values, prefix=''):
         for key, spec in schema['properties'].items():

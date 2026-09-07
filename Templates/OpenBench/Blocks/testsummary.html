@@ -16,5 +16,6 @@
     {% if test|test_is_time_odds %}<span class="test-flag" title="Different time controls">Time odds</span>{% endif %}
     {% if test|test_is_smp_odds %}<span class="test-flag" title="Different thread counts">Thread odds</span>{% endif %}
 </td>
-<td class="statblock statblock-{{ test|testResultColour }}">{{ test|shortStatBlock|linebreaksbr }}</td>
-<td class="test-info"><div>{{ test.info }}</div></td>
+<td class="statblock statblock-{{ test|testResultColour }}">
+    {{ test|shortStatBlock|linebreaksbr }}
+</td>
