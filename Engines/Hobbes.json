@@ -1,6 +1,6 @@
 {
     "private" : false,
-    "nps"     : 1200000,
+    "nps"     : 900000,
     "source"  : "https://github.com/kelseyde/hobbes-chess-engine",
 
     "build" : {
