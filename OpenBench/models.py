@@ -36,7 +36,7 @@ class Engine(Model):
 class Profile(Model):
 
     user     = ForeignKey(User, PROTECT, related_name='user')
-    games    = IntegerField(default=0)
+    games    = BigIntegerField(default=0)
     tests    = IntegerField(default=0)
     repos    = JSONField(default=dict, blank=True, null=True)
     engine   = CharField(max_length=128, blank=True)
@@ -53,7 +53,7 @@ class Machine(Model):
     mnps      = FloatField(default=0.00)
     dev_mnps  = FloatField(default=0.00)
     base_mnps = FloatField(default=0.00)
-    updated   = DateTimeField(auto_now=True)
+    updated   = DateTimeField(auto_now=True, db_index=True)
     secret    = CharField(max_length=64, default='None')
     info      = JSONField()
     workload  = IntegerField(default=0)
@@ -84,6 +84,14 @@ class Result(Model):
     crashes  = IntegerField(default=0)
     timeloss = IntegerField(default=0)
 
+    # Total counters for nodes and ms for NPS tracking
+    dev_nodes         = BigIntegerField(default=0)
+    dev_time          = BigIntegerField(default=0)
+    dev_time_scaled   = BigIntegerField(default=0)
+    base_nodes        = BigIntegerField(default=0)
+    base_time         = BigIntegerField(default=0)
+    base_time_scaled  = BigIntegerField(default=0)
+
     def __str__(self):
         return '{0} {1}'.format(self.test.dev.name, self.machine.__str__())
 
@@ -97,6 +105,7 @@ class Test(Model):
     # Misc information
     author      = CharField(max_length=64)
     upload_pgns = CharField(max_length=16, default='FALSE')
+    info        = CharField(max_length=1024, default='', blank=True)
 
     # Opening book settings
     book_name  = CharField(max_length=32)
@@ -169,7 +178,6 @@ class Test(Model):
     finished    = BooleanField(default=False)
     deleted     = BooleanField(default=False)
     approved    = BooleanField(default=False)
-    awaiting    = BooleanField(default=False)
     error       = BooleanField(default=False)
 
     # Datetime house keeping for meta data
