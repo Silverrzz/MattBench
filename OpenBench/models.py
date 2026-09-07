@@ -154,6 +154,7 @@ class Test(Model):
     currentllr    = FloatField(default=0.0) # SPRT
     upperllr      = FloatField(default=0.0) # SPRT
     llr_history_state = JSONField(default=dict, blank=True)
+    execution = JSONField(default=dict, blank=True)
     max_games     = IntegerField(default=0) # GAMES or DATAGEN
     genfens_args  = CharField(max_length=256, default='', blank=True) # DATAGEN
     play_reverses = BooleanField(default=False) # DATAGEN

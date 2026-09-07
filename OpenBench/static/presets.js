@@ -7,6 +7,7 @@ let replacePreset = false;
 const editedFields = new Set();
 const presetColumns = 4;
 const presetGroups = [
+    ['variant', 'book_name'],
     ['test_mode', 'test_bounds', 'test_confidence', 'test_max_games'],
     ['scale_method', 'scale_nps'],
     ['dev_branch', 'dev_bench'],

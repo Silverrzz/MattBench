@@ -22,13 +22,15 @@ def import_variant_defaults():
                                settings={key: data[key] for key in ('fastchess_variant', 'syzygy')})
 
 
-def read_directory(directory, kind):
+def read_directory(directory, kind, names=None):
 
     root = Path(directory).resolve()
     if not root.is_dir():
         raise ValidationError('Directory does not exist: %s' % root)
     entries = {}
     for path in sorted(root.glob('*.json')):
+        if names is not None and path.stem not in names:
+            continue
         if not path.resolve().is_relative_to(root):
             raise ValidationError('Configuration path escapes its directory: %s' % path.name)
         try:
@@ -53,7 +55,9 @@ def read_directory(directory, kind):
                     verify_preset(workload, resolved)
                     presets[workload][label] = resolved
             try:
-                verify_engine_config(data)
+                if type(data.get('enabled', True)) is not bool:
+                    raise ValidationError('Enabled must be a boolean')
+                verify_engine_config(data, data.get('enabled', True))
             except ValidationError as error:
                 raise ValidationError('%s: %s' % (path.name, '; '.join(error.messages))) from error
         else:
@@ -63,15 +67,17 @@ def read_directory(directory, kind):
             except ValidationError as error:
                 raise ValidationError('%s: %s' % (path.name, '; '.join(error.messages))) from error
         entries[name] = (data, presets)
+    if names is not None and set(names) - entries.keys():
+        raise ValidationError('Missing configuration files: %s' % ', '.join(sorted(set(names) - entries.keys())))
     if not entries:
         raise ValidationError('No JSON configuration files found in %s' % root)
     return entries
 
 
 @transaction.atomic
-def import_directory(directory, kind, apply=False, replace=False, disable_missing=False):
+def import_directory(directory, kind, apply=False, replace=False, disable_missing=False, names=None):
 
-    entries = read_directory(directory, kind)
+    entries = read_directory(directory, kind, names)
     model = EngineConfig if kind == 'engines' else OpeningBook
     existing = set(model.objects.filter(name__in=entries).values_list('name', flat=True))
     missing = model.objects.exclude(name__in=entries).filter(enabled=True)
@@ -85,7 +91,8 @@ def import_directory(directory, kind, apply=False, replace=False, disable_missin
         if row and not replace:
             continue
         row = row or model(name=name)
-        row.settings, row.enabled = copy.deepcopy(data), True
+        row.settings = copy.deepcopy(data)
+        row.enabled = row.settings.pop('enabled', True)
         if kind == 'engines':
             names = data.get('variants', ['standard', 'fischerandom'])
         else:

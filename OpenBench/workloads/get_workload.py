@@ -30,7 +30,8 @@ import sys
 
 import OpenBench.utils
 
-from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CUSTOM_FOCUS
+from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CUSTOM_FOCUS, workload_execution
+from django.core.exceptions import ValidationError
 from OpenBench.models import Result, Test
 from OpenBench.spsa_utils import spsa_workload_assignment_dict
 
@@ -100,8 +101,9 @@ def filter_valid_workloads(request, machine):
 
     # Skip engines that the Machine cannot handle. Expressed as a whitelist, so
     # the query carries two IN() clauses instead of one NOT for every engine
-    supported = machine.info['supported']
+    supported = set(machine.info['supported']).intersection(OPENBENCH_CONFIG['engines'])
     workloads = workloads.filter(dev_engine__in=supported, base_engine__in=supported)
+    workloads = workloads.filter(book_name__in=['NONE', *OPENBENCH_CONFIG['books']])
 
     # Skip workloads that are blacklisted on the machine
     if blacklisted := request.POST.getlist('blacklist'):
@@ -117,7 +119,7 @@ def filter_valid_workloads(request, machine):
         workloads = [x for x in workloads if not OpenBench.utils.workload_uses_time_based_tc(x)]
 
     # Skip workloads that we have insufficient threads to play
-    options = [x for x in workloads if valid_hardware_assignment(x, machine)]
+    options = [x for x in workloads if valid_execution_assignment(x) and valid_hardware_assignment(x, machine)]
 
     # Possible that no work exists for the machine
     if not options:
@@ -174,6 +176,15 @@ def valid_hardware_assignment(workload, machine):
     # All Criteria have been met
     return True
 
+
+def valid_execution_assignment(workload):
+    try:
+        workload_execution(workload.book_name, [workload.dev_engine, workload.base_engine],
+                           workload.execution.get('variant'))
+        return True
+    except ValidationError:
+        return False
+
 def compute_resource_distribution(workloads, machine, has_engine_preference):
 
     # Return a thread count, and engine name for each workload, as well as the throughput.
@@ -207,6 +218,7 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
 def workload_to_dictionary(test, result, machine):
 
     workload = {}
+    execution = test.execution or workload_execution(test.book_name, [test.dev_engine, test.base_engine])
 
     workload['result'] = {
         'id'  : result.id,
@@ -225,12 +237,18 @@ def workload_to_dictionary(test, result, machine):
         'play_reverses' : test.play_reverses,
         'scale_method'  : test.scale_method,
         'scale_nps'     : test.scale_nps,
+        'variant'       : execution['fastchess_variant'],
+        'runner'        : execution['runner'],
     }
+    if not execution['syzygy']:
+        workload['test']['syzygy_wdl'] = 'DISABLED'
+        workload['test']['syzygy_adj'] = 'DISABLED'
 
     workload['test']['book'] = {
         'name'   : test.book_name,
         'sha'    : OPENBENCH_CONFIG['books'].get(test.book_name, { 'sha'    : None })['sha'   ],
         'source' : OPENBENCH_CONFIG['books'].get(test.book_name, { 'source' : None })['source'],
+        'format' : OPENBENCH_CONFIG['books'].get(test.book_name, {}).get('format'),
     }
 
     workload['test']['dev'] = {

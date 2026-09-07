@@ -54,7 +54,7 @@ def load_config():
         release = variant.runner_release
         config['variants'][variant.name] = dict(variant.settings, runner={
             'repo_url': release.runner.settings['source'],
-            'repo_ref': release.settings.get('commit', release.settings['ref']),
+            'repo_ref': release.settings.get('commit') or release.settings['ref'],
             'min_version': release.settings['min_version'],
         })
     config['books'] = {book.name: dict(book.settings, variant=book.variant.name, format=book.name.rsplit('.', 1)[-1].lower())
@@ -110,8 +110,25 @@ def fingerprint(value):
 
 
 def eligibility_fingerprint():
-    return fingerprint({name: {key: data[key] for key in ('build', 'private', 'source')}
+    return fingerprint({name: {key: data[key] for key in ('build', 'private', 'source', 'variants')}
                         for name, data in OPENBENCH_CONFIG['engines'].items()})
+
+
+def workload_execution(book_name, engines, variant_name=None):
+    config = OPENBENCH_CONFIG
+    book = config['books'].get(book_name)
+    if book is None and book_name != 'NONE':
+        raise ValidationError('Choose an enabled opening book')
+    if book and variant_name and variant_name != book['variant']:
+        raise ValidationError('The opening book does not match the selected variant')
+    name = variant_name or (book['variant'] if book else 'standard')
+    variant = config['variants'].get(name)
+    if variant is None:
+        raise ValidationError('Choose an enabled variant and runner release')
+    for engine in engines:
+        if name not in config['engines'].get(engine, {}).get('variants', []):
+            raise ValidationError('%s does not support %s' % (engine, name))
+    return dict(copy.deepcopy(variant), variant=name)
 
 
 def verify_engine_config(data, enabled=True):
@@ -215,7 +232,7 @@ def verify_engine_test_preset(test_preset):
         'draw_adj',
     ]
 
-    valid_keys += ['test_mode', 'dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info']
+    valid_keys += ['test_mode', 'dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info', 'variant']
 
     for key in test_preset.keys():
         if key not in valid_keys:
@@ -257,7 +274,7 @@ def verify_engine_tune_preset(tune_preset):
         'draw_adj',
     ]
 
-    valid_keys += ['dev_repo', 'scale_method', 'scale_nps', 'spsa_inputs', 'info']
+    valid_keys += ['dev_repo', 'scale_method', 'scale_nps', 'spsa_inputs', 'info', 'variant']
 
     for key in tune_preset.keys():
         if key not in valid_keys:
@@ -302,7 +319,7 @@ def verify_engine_datagen_preset(datagen_preset):
         'datagen_max_games',
     ]
 
-    valid_keys += ['dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info']
+    valid_keys += ['dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info', 'variant']
 
     for key in datagen_preset.keys():
         if key not in valid_keys:

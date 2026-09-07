@@ -49,6 +49,18 @@ def verify_workload(request, workload_type):
     assert workload_type in [ 'TEST', 'TUNE', 'DATAGEN' ]
 
     errors = []
+    try:
+        engines = [request.POST.get('dev_engine')]
+        if workload_type != 'TUNE':
+            engines.append(request.POST.get('base_engine'))
+        request.workload_execution = OpenBench.config.workload_execution(
+            request.POST.get('book_name'), engines, request.POST.get('variant'))
+        if not request.workload_execution['syzygy']:
+            for field in ('syzygy_wdl', 'syzygy_adj'):
+                if request.POST.get(field) not in ('DISABLED', 'OPTIONAL'):
+                    errors.append('The selected variant does not support Syzygy')
+    except OpenBench.config.ValidationError as error:
+        errors.extend(error.messages)
 
     if workload_type == 'TEST':
         verify_test_creation(errors, request)

@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
@@ -9,7 +12,7 @@ def seed_history(apps, schema_editor):
     History = apps.get_model('OpenBench', 'LLRHistory')
     database = schema_editor.connection.alias
     batch = []
-    tests = Test.objects.using(database).filter(test_mode='SPRT').only('id', 'games', 'currentllr')
+    tests = Test.objects.using(database).filter(test_mode='SPRT', llr_history__isnull=True).only('id', 'games', 'currentllr')
     for test in tests.iterator(chunk_size=1000):
         test.llr_history_state = {'count': 1, 'last_games': test.games}
         batch.append(test)
@@ -26,24 +29,64 @@ def seed_history(apps, schema_editor):
         Test.objects.using(database).bulk_update(batch, ['llr_history_state'])
 
 
-class Migration(migrations.Migration):
+def preserve_existing_execution(apps, schema_editor):
+    database = schema_editor.connection.alias
+    site = json.loads((Path(settings.BASE_DIR) / 'Config' / 'config.json').read_text(encoding='utf-8-sig'))
+    Test = apps.get_model('OpenBench', 'Test')
+    batch = []
+    for test in Test.objects.using(database).filter(execution={}).only('id', 'book_name').iterator(chunk_size=1000):
+        variant = 'fischerandom' if any(marker in test.book_name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard'
+        test.execution = {'variant': variant, 'fastchess_variant': variant, 'syzygy': True,
+            'runner': {key: site['fastchess_' + key] for key in ('repo_url', 'repo_ref', 'min_version')}}
+        batch.append(test)
+        if len(batch) == 1000:
+            Test.objects.using(database).bulk_update(batch, ['execution'])
+            batch = []
+    if batch:
+        Test.objects.using(database).bulk_update(batch, ['execution'])
 
-    replaces = [
-        ('OpenBench', '0015_merge_configuration_and_nps_tracking'),
-        ('OpenBench', '0016_configuration_foundation'),
-        ('OpenBench', '0017_llr_history'),
-        ('OpenBench', '0018_bound_llr_history'),
-        ('OpenBench', '0019_gap_sample_llr_history'),
-        ('OpenBench', '0018_simplify_configuration'),
-        ('OpenBench', '0019_restore_variant_and_runner_management'),
-    ]
+
+class ApplyMissingSchema(migrations.SeparateDatabaseAndState):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        state = from_state.clone()
+        for operation in self.state_operations:
+            next_state = state.clone()
+            operation.state_forwards(app_label, next_state)
+            name = operation.name if isinstance(operation, migrations.CreateModel) else operation.model_name
+            model = next_state.apps.get_model(app_label, name)
+            table = model._meta.db_table
+            with schema_editor.connection.cursor() as cursor:
+                introspection = schema_editor.connection.introspection
+                tables = introspection.table_names(cursor)
+                if isinstance(operation, migrations.CreateModel):
+                    missing = table not in tables
+                elif isinstance(operation, migrations.AddField):
+                    field = model._meta.get_field(operation.name)
+                    if field.many_to_many:
+                        missing = field.remote_field.through._meta.db_table not in tables
+                    else:
+                        missing = field.column not in {column.name for column in introspection.get_table_description(cursor, table)}
+                elif isinstance(operation, migrations.AddConstraint):
+                    missing = operation.constraint.name not in introspection.get_constraints(cursor, table)
+                else:
+                    raise TypeError('Unsupported schema operation: %s' % type(operation).__name__)
+            if missing:
+                operation.database_forwards(app_label, schema_editor, state, next_state)
+            state = next_state
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        from django.db.migrations.exceptions import IrreversibleError
+        raise IrreversibleError('The combined migration preserves schema from earlier PR migrations')
+
+
+class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('OpenBench', '0014_merge_legacy_scale_and_nps_tracking'),
     ]
 
-    operations = [
+    schema_operations = [
         migrations.CreateModel(
             name='EngineConfig',
             fields=[
@@ -146,5 +189,11 @@ class Migration(migrations.Migration):
             model_name='llrhistory',
             constraint=models.UniqueConstraint(fields=('test', 'games'), name='unique_test_llr_games'),
         ),
+        migrations.AddField(model_name='test', name='execution', field=models.JSONField(blank=True, default=dict)),
+    ]
+
+    operations = [
+        ApplyMissingSchema(state_operations=schema_operations),
         migrations.RunPython(seed_history, migrations.RunPython.noop),
+        migrations.RunPython(preserve_existing_execution, migrations.RunPython.noop),
     ]

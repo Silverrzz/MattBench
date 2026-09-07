@@ -116,6 +116,7 @@ def create_new_test(request):
         return None, errors
 
     test                   = Test()
+    test.execution         = request.workload_execution
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']
@@ -183,6 +184,7 @@ def create_new_tune(request):
         return None, errors
 
     test                  = Test()
+    test.execution        = request.workload_execution
     test.author           = request.user.username
     test.book_name        = request.POST['book_name']
     test.upload_pgns      = request.POST['upload_pgns']
@@ -232,6 +234,7 @@ def create_new_datagen(request):
         return None, errors
 
     test                   = Test()
+    test.execution         = request.workload_execution
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']

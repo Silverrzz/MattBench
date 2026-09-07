@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
@@ -21,11 +22,20 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         try:
+            selection = {}
+            if self.kind is None:
+                root = Path(options['directory'])
+                source = root / 'Config' / 'config.json'
+                if source.exists():
+                    data = json.loads(source.read_text(encoding='utf-8-sig'))
+                    for kind in ('engines', 'books'):
+                        if kind in data:
+                            selection[kind] = list(data[kind])
             for kind in ([self.kind] if self.kind else ['engines', 'books']):
                 directory = Path(options['directory'])
                 if self.kind is None:
                     directory /= kind.title()
-                counts = import_directory(directory, kind, options['apply'], options['replace'], options.get('disable_missing', False))
+                counts = import_directory(directory, kind, options['apply'], options['replace'], options.get('disable_missing', False), selection.get(kind))
                 self.stdout.write('%s: %d new, %d updated, %d skipped, %d disabled' %
                                   (kind, counts['new'], counts['updated'], counts['skipped'], counts['disabled']))
             self.stdout.write('Import complete.' if options['apply'] else 'Validation complete; use --apply to write changes.')
