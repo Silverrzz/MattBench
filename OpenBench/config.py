@@ -20,7 +20,7 @@
 
 from OpenBench.configuration import ConfigMapping, eligibility_fingerprint
 
-OPENBENCH_STATIC_VERSION = 'v18'
+OPENBENCH_STATIC_VERSION = 'v19'
 OPENBENCH_CONFIG = ConfigMapping()
 OPENBENCH_CUSTOM_FOCUS = True
 
@@ -63,9 +63,12 @@ def verify_engine_test_preset(test_preset):
         'draw_adj',
     ]
 
+    valid_keys += ['test_mode', 'dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info']
+
     for key in test_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys
 
 def verify_engine_tune_preset(tune_preset):
 
@@ -102,9 +105,12 @@ def verify_engine_tune_preset(tune_preset):
         'draw_adj',
     ]
 
+    valid_keys += ['dev_repo', 'scale_method', 'scale_nps', 'spsa_inputs', 'info']
+
     for key in tune_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys
 
 def verify_engine_datagen_preset(datagen_preset):
 
@@ -144,6 +150,9 @@ def verify_engine_datagen_preset(datagen_preset):
         'datagen_max_games',
     ]
 
+    valid_keys += ['dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info']
+
     for key in datagen_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys

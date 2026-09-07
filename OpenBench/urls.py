@@ -20,8 +20,11 @@
 
 import django.urls, OpenBench.views
 import OpenBench.configuration_views
+import OpenBench.presets
 
 urlpatterns = [
+
+    django.urls.path('presets/<str:kind>/', OpenBench.presets.presets),
 
     django.urls.path('manage/', OpenBench.configuration_views.manage),
     django.urls.path('manage/<str:section>/', OpenBench.configuration_views.manage),
