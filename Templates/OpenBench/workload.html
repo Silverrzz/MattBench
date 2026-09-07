@@ -1,9 +1,13 @@
 {% extends "OpenBench/base.html" %}
 
-{% block title %}{{ workload }}{% endblock %}
+{% block title %}{{ workload }} · MattBench{% endblock %}
 
 {% load mytags %}
 {% load static %}
+
+{% block heading %}{{ workload|prettyDevName }}{% endblock %}
+{% block description %}<p>{{ workload.dev_engine }} · {{ workload.test_mode }} · Workload #{{ workload.id }}</p>{% endblock %}
+{% block page_actions %}{% include "OpenBench/Blocks/workloadstatus.html" with test=workload %}{% endblock %}
 
 {% block scripts %}
 
@@ -19,11 +23,10 @@
 
 {% block content %}
 
-    <meta http-equiv="refresh" content="30">
-
-    <div class="workload-container">
+    <div class="workload-container" data-refresh-seconds="30">
 
     <div id="config" style="display: block; overflow-x: auto;">
+        <h2>Configuration</h2>
         <table class="test-config left-align wrappable" style="table-layout: auto; width: 100%;">
 
             <tr><td class="td-label">Author</td><td>{{workload.author|capfirst}}</td></tr>
@@ -34,7 +37,7 @@
             <tr><td class="td-label">{{dev_text}} Sha</td><td>{{workload.dev.sha}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Branch</td><td class="branch_name">{{workload.dev.name|prettyName}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Bench</td><td>{{workload.dev.bench}}</td></tr>
-            <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</td></tr>
+            <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</a></td></tr>
             <tr><td class="td-label">{{dev_text}} Options</td><td class="engine-options">{{workload.dev_options}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Time</td><td>{{workload.dev_time_control}}</td></tr>
 
@@ -44,7 +47,7 @@
                 <tr><td class="td-label">Base Sha</td><td>{{workload.base.sha}}</td></tr>
                 <tr><td class="td-label">Base Branch</td><td class="branch_name">{{workload.base.name|prettyName}}</td></tr>
                 <tr><td class="td-label">Base Bench</td><td>{{workload.base.bench}}</td></tr>
-                <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</td></tr>
+                <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</a></td></tr>
                 <tr><td class="td-label">Base Options</td><td class="engine-options">{{workload.base_options}}</td></tr>
                 <tr><td class="td-label">Base Time</td><td>{{workload.base_time_control}}</td></tr>
             {% endif %}
@@ -130,32 +133,32 @@
         <!-- Copy Button: Copy the current results statblock -->
         {% if type == "TEST" or type == "DATAGEN" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_text_codeblock('long-statblock', true)">Copy Stat Block</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button>
             </div>
         {% endif %}
 
         <!-- PGN Download Button -->
         {% if workload.upload_pgns != "FALSE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" href="/api/pgns/{{workload.id}}/">Download PGN Archive</a>
+                <a class="mt-1 anchorbutton" href="/api/pgns/{{workload.id}}/">Download PGN archive</a>
             </div>
         {% endif %}
 
         <!-- Copies Raw SPSA Input from /api/spsa/{{workload.id}}/inputs/ -->
         {% if type == "TUNE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_spsa_inputs({{workload.id}})">Copy SPSA Inputs</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_spsa_inputs({{workload.id}})">Copy SPSA inputs</button>
             </div>
         {% endif %}
 
         <!-- Copies Optimal Values from /api/spsa/{{workload.id}}/outputs/ -->
         {% if type == "TUNE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_spsa_outputs({{workload.id}})">Copy SPSA Outputs</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_spsa_outputs({{workload.id}})">Copy SPSA outputs</button>
             </div>
         {% endif %}
 
-        <!-- Elo, (SPRT/LRR if SPRT, otherwise CONF), Games -->
+        <p id="workload-feedback" class="field-note" role="status"></p>
         {% if type == "TEST" %}
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
         {% elif type == "TUNE" %}
@@ -196,7 +199,7 @@
                     {% if profile.approver or profile.user.username == workload.author %}
                         <input class="anchorbutton btn-blue w-100" type="submit" name="submit" value="Modify">
                     {% else %}
-                        <input class="anchorbutton btn-disabled w-100" type="submit" name="submit" value="Modify">
+                        <input class="anchorbutton btn-disabled w-100" type="submit" name="submit" value="Modify" disabled>
                     {% endif %}
                 </div>
             </div>
@@ -255,7 +258,8 @@
         </table>
 
         <!-- Individual per-machine results are only ever fetched on demand -->
-        <button class="w-100 mt-1 anchorbutton btn-blue" type="submit" onclick="fetch_results({{workload.id}})">Fetch Individual Results</button>
+        <button id="fetch-results" class="w-100 mt-1 anchorbutton" type="button" onclick="fetch_results({{workload.id}})">Fetch individual results</button>
+        <p id="results-feedback" class="field-note" role="status"></p>
     </div>
 
     </div>

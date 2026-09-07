@@ -18,29 +18,32 @@
 
 {% endblock %}
 
+{% block page_actions %}{% if user.is_authenticated %}<a class="button button-primary" href="/newNetwork/">Upload network</a>{% endif %}{% endblock %}
+
 {% block content %}
 
     <table id="network-table" class="hoverable">
 
-        <tr class="table-header">
-            <th class="cursor" onclick="sort_networks(['default'])"></th>
-            <th class="cursor" onclick="sort_networks(['engine'])">Engine</th>
-            <th class="cursor" onclick="sort_networks(['author'])">Author</th>
-            <th class="cursor" onclick="sort_networks(['name'])">Name</th>
-            <th class="cursor" onclick="sort_networks(['sha256'])")>Hash</th>
-            <th></th>
-            <th></th>
-        </tr>
+        <thead><tr class="table-header">
+            <th scope="col"><button type="button" class="table-sort" onclick="sort_networks(['default'])">Default</button></th>
+            <th scope="col"><button type="button" class="table-sort" onclick="sort_networks(['engine'])">Engine</button></th>
+            <th scope="col"><button type="button" class="table-sort" onclick="sort_networks(['author'])">Author</button></th>
+            <th scope="col"><button type="button" class="table-sort" onclick="sort_networks(['name'])">Name</button></th>
+            <th scope="col"><button type="button" class="table-sort" onclick="sort_networks(['sha256'])">Hash</button></th>
+            <th scope="col"><span class="sr-only">Edit</span></th>
+            <th scope="col"><span class="sr-only">Delete</span></th>
+        </tr></thead>
+        <tbody>
 
         {% for network in networks %}
             <tr>
                 {% if network.default %}
-                    <td><i class="fas fa-star default-network" aria-hidden="true"></i></td>
+                    <td><span class="sr-only">Default network</span><i class="fas fa-star default-network" aria-hidden="true"></i></td>
                 {% elif network.was_default %}
-                    <td><a href="/networks/{{network.engine}}/DEFAULT/{{network.sha256}}">
+                    <td><a class="table-action" aria-label="Set {{ network.name }} as default" href="/networks/{{network.engine}}/DEFAULT/{{network.sha256}}">
                     <i class="fas fa-star was-default-network" aria-hidden="true"></i></a></td>
                 {% else %}
-                    <td><a href="/networks/{{network.engine}}/DEFAULT/{{network.sha256}}">
+                    <td><a class="table-action" aria-label="Set {{ network.name }} as default" href="/networks/{{network.engine}}/DEFAULT/{{network.sha256}}">
                     <i class="far fa-star non-default-network" aria-hidden="true"></i></a></td>
                 {% endif %}
 
@@ -50,24 +53,27 @@
                 <td>{{network.sha256}}</td>
 
                 <td>
-                    <a href="/networks/{{network.engine}}/EDIT/{{network.sha256}}">
-                        <i class="fa-solid fa-pen-to-square" style="color: grey;"></i>
+                    <a class="table-action" aria-label="Edit {{ network.name }}" href="/networks/{{network.engine}}/EDIT/{{network.sha256}}">
+                        <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
                     </a>
                 </td>
 
                 <td>
                     {% if not network.default and not network.was_default %}
-                        <a onclick="return confirm('YOU ARE DELETING THIS NETWORK FILE FOREVER')"
+                        <a class="table-action" aria-label="Delete {{ network.name }}" onclick="return confirm('YOU ARE DELETING THIS NETWORK FILE FOREVER')"
                             href="/networks/{{network.engine}}/DELETE/{{network.sha256}}">
-                        <i class="fa-solid fa-trash-can" style="color: #A03030;"></i></a>
+                        <i class="fa-solid fa-trash-can" aria-hidden="true"></i></a>
                     {% else %}
-                        <a onclick="return alert('You must unset the default and previous-default flags manually before deleting')"
+                        <a class="table-action" aria-label="Delete {{ network.name }}" onclick="return alert('You must unset the default and previous-default flags manually before deleting')"
                             href="/networks/{{network.engine}}/EDIT/{{network.sha256}}">
-                        <i class="fa-solid fa-trash-can" style="color: grey;"></i></a>
+                        <i class="fa-solid fa-trash-can" aria-hidden="true"></i></a>
                     {% endif %}
                 </td>
             </tr>
+        {% empty %}
+            <tr><td colspan="7" class="empty-state">No networks have been uploaded.</td></tr>
         {% endfor %}
+        </tbody>
 
     </table>
 

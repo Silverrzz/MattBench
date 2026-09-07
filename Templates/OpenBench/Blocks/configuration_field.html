@@ -1,0 +1,25 @@
+<div class="config-field{% if field.errors %} invalid{% endif %}">
+    {% if field.field.widget.allow_multiple_selected %}
+        <div class="config-field-label" id="{{ field.auto_id }}-label">{{ field.label }}</div>
+    {% else %}
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {% endif %}
+    <div class="config-control"{% if field.field.widget.allow_multiple_selected %} role="group" aria-labelledby="{{ field.auto_id }}-label"{% endif %}>
+        {% if field.name == 'name' and field.field.disabled %}
+            <input id="{{ field.id_for_label }}" value="{{ field.value }}" readonly aria-describedby="{{ field.auto_id }}-help">
+        {% elif field.field.widget.input_type == 'checkbox' and not field.field.widget.allow_multiple_selected %}
+            <label class="config-toggle">{{ field }}<span class="toggle-on">On</span><span class="toggle-off">Off</span></label>
+        {% else %}
+            {{ field }}
+        {% endif %}
+        {% if field.help_text %}<p class="config-help" id="{{ field.auto_id }}-help">{{ field.help_text }}</p>{% endif %}
+        {{ field.errors }}
+        {% if user.is_superuser %}
+            <div class="config-field-links">
+                {% if field.name == 'variants' or field.name == 'variant' %}<a href="/manage/variants/">Manage variants</a>{% endif %}
+                {% if field.name == 'runner' %}<a href="/manage/runners/new/">Add runner</a>{% endif %}
+                {% if field.name == 'runner_release' %}<a href="/manage/runners/">Manage runners and releases</a>{% endif %}
+            </div>
+        {% endif %}
+    </div>
+</div>

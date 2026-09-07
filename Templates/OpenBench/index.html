@@ -1,60 +1,60 @@
 {% extends "OpenBench/base.html" %}
-
 {% load mytags %}
 
-{% block content %}
-
-    <meta http-equiv="refresh" content="30">
-{% block scripts %}
-<style>
-    #content {
-        max-width: 100%;
-    }
-</style>
+{% block page_actions %}
+    <a class="button button-primary" href="/test/new/"><span aria-hidden="true">+</span> New test</a>
 {% endblock %}
 
-    <table class="test-list stripes hoverable">
-
-        <!-- Only show Pending tests for the front page of the Index -->
-        {% if paging.page == 1 %}
-
-            <!-- Currently Pending tests (Waiting to be approved) -->
-            {% if pending %}
-                <tr class="table-header"><th colspan='7'>Pending</th></tr>
-                {% for test in pending %}
-                    <tr>
-                        {% include "OpenBench/Blocks/testsummary.html" %}
-                    </tr>
-                {% endfor %}
-                <tr class="table-spacer"><th colspan='7'></th></tr>
-            {% endif %}
-
-            <!-- Currently Running tests (Waiting to be completed) -->
-            {% if active %}
-                <tr class="table-header"><th colspan='7'>Active {{status}}</th></tr>
-                {% for group in active %}
-                    <tr class="table-small-header"><th colspan='7'>Priority {{group.priority}}</th></tr>
-                    {% for test in group.tests %}
-                        <tr>
-                            {% include "OpenBench/Blocks/testsummary.html" %}
-                        </tr>
-                    {% endfor %}
-                {% endfor %}
-                <tr class="table-spacer"><th colspan='7'></th></tr>
-            {% endif %}
-
+{% block content %}
+    <div data-refresh-seconds="30">
+        {% if status %}
+            <div class="compute-strip">
+                <span><strong>Compute online</strong>{{ status|cut:": " }}</span>
+                <span class="refresh-note">Refreshes every 30 seconds</span>
+            </div>
         {% endif %}
-
-        <!-- Tests which have already finished -->
-        <tr class="table-header"><th colspan='7'>Finished</th></tr>
-        {% for test in completed %}
-            <tr>
-                {% include "OpenBench/Blocks/testsummary.html" %}
-            </tr>
-        {% endfor %}
-
-    </table>
-
-    {% include "OpenBench/Blocks/pagebrowser.html" %}
-
+        <div class="table-scroll" role="region" aria-label="Engine tests; scroll horizontally for more columns" tabindex="0">
+            <table class="test-list stripes hoverable" aria-label="Engine tests">
+                <thead>
+                    <tr class="column-headings">
+                        <th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Revision / status</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col">Results</th><th scope="col">Notes</th>
+                    </tr>
+                </thead>
+                {% if paging.page == 1 %}
+                    {% if pending %}
+                        <tbody>
+                            <tr class="table-header"><th colspan="7" scope="rowgroup">Awaiting approval <span class="section-count">{{ pending|length }}</span></th></tr>
+                            {% for test in pending %}
+                                <tr>{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                            {% endfor %}
+                            <tr class="table-spacer" aria-hidden="true"><th colspan="7"></th></tr>
+                        </tbody>
+                    {% endif %}
+                    {% if status %}
+                        <tbody>
+                            <tr class="table-header"><th colspan="7" scope="rowgroup">Active workloads</th></tr>
+                            {% for group in active %}
+                                <tr class="table-small-header"><th colspan="7" scope="rowgroup">Priority {{ group.priority }}</th></tr>
+                                {% for test in group.tests %}
+                                    <tr>{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                                {% endfor %}
+                            {% empty %}
+                                <tr><td colspan="7"><div class="empty-state"><strong>No active workloads</strong>New tests, tunes and datagen runs will appear here.</div></td></tr>
+                            {% endfor %}
+                            <tr class="table-spacer" aria-hidden="true"><th colspan="7"></th></tr>
+                        </tbody>
+                    {% endif %}
+                {% endif %}
+                <tbody>
+                    <tr class="table-header"><th colspan="7" scope="rowgroup">Finished <span class="section-count">{{ completed|length }} shown</span></th></tr>
+                    {% for test in completed %}
+                        <tr>{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                    {% empty %}
+                        <tr><td colspan="7"><div class="empty-state"><strong>No finished tests</strong>Completed workloads will appear here with their results.</div></td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% include "OpenBench/Blocks/pagebrowser.html" %}
+    </div>
 {% endblock %}

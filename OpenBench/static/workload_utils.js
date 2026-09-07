@@ -6,13 +6,16 @@ function copy_text(text) {
     area.select();
 
     try {
-        document.execCommand("copy");
+        const copied = document.execCommand("copy");
         document.body.removeChild(area);
+        const feedback = document.getElementById('workload-feedback');
+        if (feedback) feedback.textContent = copied ? 'Copied to clipboard.' : 'Unable to copy. Select the text and copy it manually.';
     }
 
     catch (err) {
         document.body.removeChild(area);
-        console.error("Unable to copy to Clipboard");
+        const feedback = document.getElementById('workload-feedback');
+        if (feedback) feedback.textContent = 'Unable to copy. Select the text and copy it manually.';
     }
 }
 
@@ -72,9 +75,24 @@ function populate_results(results) {
 }
 
 async function fetch_results(workload_id) {
-    fetch(`/api/workload/${workload_id}/results/`)
-        .then(r => r.json())
-        .then(data => populate_results(data.results))
+    const button = document.getElementById('fetch-results');
+    const feedback = document.getElementById('results-feedback');
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Loading results…';
+    feedback.textContent = '';
+    try {
+        const response = await fetch(`/api/workload/${workload_id}/results/`);
+        if (!response.ok) throw new Error('Request failed');
+        const data = await response.json();
+        populate_results(data.results);
+        feedback.textContent = data.results.length ? `${data.results.length} worker results loaded.` : 'No individual worker results yet.';
+    } catch {
+        feedback.textContent = 'Could not load worker results. Please try again.';
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Fetch individual results';
+    }
 }
 
 
@@ -167,21 +185,46 @@ function append_summary_section(table, label, rows, key_formatter) {
 }
 
 async function fetch_summary(workload_id) {
-    fetch(`/api/workload/${workload_id}/summary/`)
-        .then(r => r.json())
-        .then(data => {
-            const container = document.getElementById('summary-container');
-            container.innerHTML = ''; // Rebuild the whole table each fetch
-
-            const table = document.createElement('table');
-            table.className = 'stripes wrappable summary-table';
-
-            append_summary_section(table, 'User', data.summary.user);
-            append_summary_section(table, 'CPU',  data.summary.cpu_name, format_cpu_name);
-            append_summary_section(table, 'ISA',  data.summary.isa_name);
-
-            container.appendChild(table);
-        })
+    const container = document.getElementById('summary-container');
+    container.setAttribute('aria-busy', 'true');
+    const message = document.createElement('p');
+    message.className = 'field-note';
+    message.setAttribute('role', 'status');
+    message.textContent = 'Loading worker summary…';
+    container.replaceChildren(message);
+    try {
+        const response = await fetch(`/api/workload/${workload_id}/summary/`);
+        if (!response.ok) throw new Error('Request failed');
+        const data = await response.json();
+        if (!data.summary.user.length) {
+            message.textContent = 'No worker results yet. The summary will appear as games are reported.';
+            return;
+        }
+        const heading = document.createElement('h2');
+        heading.textContent = 'Worker summary';
+        const region = document.createElement('div');
+        region.className = 'table-scroll';
+        region.tabIndex = 0;
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', 'Worker summary; scroll horizontally for more columns');
+        const table = document.createElement('table');
+        table.className = 'stripes wrappable summary-table';
+        append_summary_section(table, 'User', data.summary.user);
+        append_summary_section(table, 'CPU', data.summary.cpu_name, format_cpu_name);
+        append_summary_section(table, 'ISA', data.summary.isa_name);
+        region.append(table);
+        container.replaceChildren(heading, region);
+    } catch {
+        message.textContent = 'Could not load the worker summary.';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'button';
+        retry.textContent = 'Try again';
+        retry.addEventListener('click', () => fetch_summary(workload_id));
+        container.append(retry);
+    } finally {
+        container.removeAttribute('aria-busy');
+    }
 }
 
 

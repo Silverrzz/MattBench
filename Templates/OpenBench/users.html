@@ -6,18 +6,19 @@
 
     <table class="hoverable">
 
-        <tr class="table-header">
-            <th>Username</th>
-            <th>Games</th>
-            <th>Tests</th>
-            <th>Engine</th>
-            <th>Created</th>
-        </tr>
+        <thead><tr class="table-header">
+            <th scope="col">Username</th>
+            <th scope="col">Games</th>
+            <th scope="col">Tests</th>
+            <th scope="col">Engine</th>
+            <th scope="col">Created</th>
+        </tr></thead>
+        <tbody>
 
         {% for profile in profiles %}
             {% if profile.games or profile.tests or profile.approver %}
                 <tr>
-                    <td><a href="/user/{{profile.user.username}}">{{profile.user.username|capfirst}}</a></td>
+                    <td><a href="/user/{{profile.user.username}}">{{profile.user.username}}</a></td>
                     <td style="text-align: right">{{profile.games|insertCommas}}</td>
                     <td style="text-align: right">{{profile.tests|insertCommas}}</td>
                     <td>{{profile.engine}}</td>
@@ -25,6 +26,7 @@
                 </tr>
             {% endif %}
         {% endfor %}
+        </tbody>
 
     </table>
 

@@ -163,7 +163,8 @@ def read_git_credentials(engine):
     fpath = os.path.join(PROJECT_PATH, 'Config', fname)
     if os.path.exists(fpath):
         with open(fpath) as fin:
-            return { 'Authorization' : 'token %s' % fin.readlines()[0].rstrip() }
+            return {'Authorization': 'token %s' % fin.readlines()[0].rstrip()}
+
 
 def extract_option(options, option):
 

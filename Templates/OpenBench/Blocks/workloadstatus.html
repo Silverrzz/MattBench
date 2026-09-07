@@ -1,0 +1,13 @@
+{% if test.deleted %}
+    <span class="status-label">Deleted</span>
+{% elif test.passed %}
+    <span class="status-label status-passed">Passed</span>
+{% elif test.failed %}
+    <span class="status-label status-failed">Failed</span>
+{% elif test.finished %}
+    <span class="status-label">Finished</span>
+{% elif test.approved %}
+    <span class="status-label status-running">Active</span>
+{% else %}
+    <span class="status-label status-pending">Pending</span>
+{% endif %}

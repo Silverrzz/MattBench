@@ -35,7 +35,7 @@ from OpenBench.workloads.modify_workload import modify_workload
 from OpenBench.workloads.verify_workload import verify_workload
 from OpenBench.workloads.view_workload import view_workload, fetch_results, fetch_result_summaries
 
-from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CONFIG_CHECKSUM, OPENBENCH_STATIC_VERSION
+from OpenBench.config import OPENBENCH_CONFIG, eligibility_fingerprint, OPENBENCH_STATIC_VERSION
 from OpenSite.settings import PROJECT_PATH
 
 from OpenBench.models import *
@@ -67,7 +67,33 @@ class UnableToAuthenticate(Exception):
 def render(request, template, content={}, always_allow=False, error=None, warning=None, status=None):
 
     data = content.copy()
-    data.update({ 'config' : OPENBENCH_CONFIG })
+    page_titles = {
+        'index.html': ('Tests', 'Active workloads and recent results.'),
+        'profile.html': ('Profile', 'Your account, contributions and engine repositories.'),
+        'search.html': ('Search tests', 'Find workloads by engine, author, revision or result.'),
+        'users.html': ('Contributors', 'The people contributing games and engine improvements.'),
+        'machines.html': ('Machines', 'Workers connected to the testing network.'),
+        'machine.html': ('Machine details', 'Hardware, capabilities and workload activity.'),
+        'networks.html': ('Networks', 'Neural network files available to engine workers.'),
+        'network.html': ('Network details', ''),
+        'uploadnet.html': ('Upload network', 'Add a neural network file for your engine.'),
+        'events.html': ('Events', 'Workload changes and activity across MattBench.'),
+        'event.html': ('Event details', ''),
+        'errors.html': ('Errors', 'Crashes and issues reported by workers.'),
+        'login.html': ('Log in', 'Welcome back to MattBench.'),
+        'register.html': ('Create an account', 'Join the MattBench testing community.'),
+        'create_workload.html': ('New workload', 'Configure an engine run.'),
+        'workload.html': ('Workload', 'Results and configuration.'),
+        'configuration.html': ('Manage', 'Installation settings and engine configuration.'),
+    }
+    title, description = page_titles.get(template, ('MattBench', ''))
+    if template == 'create_workload.html':
+        title = {'TEST': 'New test', 'TUNE': 'New tune', 'DATAGEN': 'New datagen'}.get(data.get('workload'), title)
+    if template == 'configuration.html':
+        title, description = data.get('title', title), data.get('description', description)
+    data.setdefault('page_title', title)
+    data.setdefault('page_description', description)
+    data.update({ 'config' : dict(OPENBENCH_CONFIG) })
     data.update({ 'static_version' : OPENBENCH_STATIC_VERSION })
 
     if OPENBENCH_CONFIG['require_login_to_view']:
@@ -77,6 +103,7 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
     if request.user.is_authenticated:
 
         profile = Profile.objects.filter(user=request.user)
+        data['can_manage_configuration'] = request.user.is_active and (request.user.is_superuser or OpenBench.models.EngineMaintainer.objects.filter(user=request.user).exists())
         data.update({'profile' : profile.first()})
 
         if profile.first() and not profile.first().enabled:
@@ -288,6 +315,8 @@ def user(request, username, page=1):
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'user/%s' % (username))
 
     data = {
+        'page_title': '%s\u2019s tests' % username,
+        'page_description': 'Workloads and results contributed by %s.' % username,
         'pending'   : pending,
         'active'    : OpenBench.utils.group_active_tests_by_priority(active),
         'completed' : completed[start:end],
@@ -302,7 +331,8 @@ def greens(request, page=1):
     completed = OpenBench.utils.get_completed_tests().filter(passed=True)
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'greens')
 
-    data = { 'completed' : completed[start:end], 'paging' : paging }
+    data = { 'completed' : completed[start:end], 'paging' : paging, 'page_title' : 'Passed tests',
+             'page_description' : 'Completed workloads that passed their acceptance criteria.' }
     return render(request, 'index.html', data)
 
 def search(request):
@@ -600,7 +630,7 @@ def verify_worker(function):
             return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
         # Prompt the worker to soft-restart if its config is out of date
-        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != OPENBENCH_CONFIG_CHECKSUM:
+        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != eligibility_fingerprint():
             return JsonResponse({ 'error' : 'Bad Client Version: Server Configuration Changed' })
 
         # Use the secret token as our soft verification
@@ -666,7 +696,7 @@ def client_worker_info(request):
     machine.secret = secrets.token_hex(32)
 
     # Note the Config checksum at the time of init, in case it changes
-    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = OPENBENCH_CONFIG_CHECKSUM
+    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = eligibility_fingerprint()
 
     # Tag engines that the Machine can build and/or run with binaries
     machine.info['supported'] = []
@@ -785,7 +815,6 @@ def client_heartbeat(request, machine):
 
     return JsonResponse([{}, { 'stop' : True }][bool(finished)])
 
-"""
 @csrf_exempt
 @verify_worker
 def client_submit_nps_stats(request, _):

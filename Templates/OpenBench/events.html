@@ -6,13 +6,14 @@
 
     <table class="hoverable">
 
-        <tr class="table-header">
-            <th>Date</th>
-            <th>User</th>
-            <th>Test</th>
-            <th>TC</th>
-            <th>Summary</th>
-        </tr>
+        <thead><tr class="table-header">
+            <th scope="col">Date</th>
+            <th scope="col">User</th>
+            <th scope="col">Test</th>
+            <th scope="col">TC</th>
+            <th scope="col">Summary</th>
+        </tr></thead>
+        <tbody>
 
         {% for event in events %}
             <tr>
@@ -22,9 +23,12 @@
                 <td>{{event.test_id|testIdToTimeControl}}</td>
                 <td>{{event.summary}}</td>
             </tr>
+        {% empty %}
+            <tr><td colspan="5" class="empty-state">No activity has been recorded yet.</td></tr>
         {% endfor %}
+        </tbody>
 
-    <table>
+    </table>
 
     {% include "OpenBench/Blocks/pagebrowser.html" %}
 

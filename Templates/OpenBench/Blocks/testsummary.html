@@ -1,16 +1,20 @@
 {% load mytags %}
-<td><a href="/user/{{test.author}}">{{test.author|capfirst|slice:":6"}}</a></td>
-<td>{{test.dev_engine}}</td>
-<td>
-    <a href="{{test|workload_url}}">{{test|prettyDevName}}</a>
-    {% if test.error %} <span style="color: red; cursor: pointer" title="Crash or illegal move">*</span> {% endif %}
-    {% if test|test_is_fischer %} <span style="color: green; cursor: pointer" title="Fischer random chess">*</span> {% endif %}
+<td class="test-author"><a href="/user/{{ test.author }}/">{{ test.author }}</a></td>
+<td class="test-engine">{{ test.dev_engine }}</td>
+<td class="test-revision">
+    <a class="revision-link" href="{{ test|workload_url }}">{{ test|prettyDevName }}</a>
+    <div class="revision-meta">
+        <span class="workload-id">#{{ test.id }}</span>
+        {% include "OpenBench/Blocks/workloadstatus.html" %}
+        {% if test.error %}<span class="test-error" title="A worker reported a crash or illegal move">Error</span>{% endif %}
+        {% if test|test_is_fischer %}<span class="test-flag" title="Fischer random chess">FRC</span>{% endif %}
+    </div>
 </td>
-<td class="textcenter"><a href="{{test|gitDiffLink}}">diff</a></td>
-<td>
-    {{test.dev_time_control}}
-    {% if test|test_is_time_odds %} <span style="color: yellow; cursor: pointer" title="Time odds">*</span> {% endif %}
-    {% if test|test_is_smp_odds %} <span style="color: orange; cursor: pointer" title="Thread odds">*</span> {% endif %}
+<td class="test-comparison"><a href="{{ test|gitDiffLink }}" aria-label="Compare code for test {{ test.id }}">diff ↗</a></td>
+<td class="time-control">
+    {{ test.dev_time_control }}
+    {% if test|test_is_time_odds %}<span class="test-flag" title="Different time controls">Time odds</span>{% endif %}
+    {% if test|test_is_smp_odds %}<span class="test-flag" title="Different thread counts">Thread odds</span>{% endif %}
 </td>
-<td class='statblock statblock-{{test|testResultColour}}'><strong>{{test|shortStatBlock|linebreaksbr}}</strong></td>
-<td class="test-info"><div>{{test.info}}</div></td>
+<td class="statblock statblock-{{ test|testResultColour }}">{{ test|shortStatBlock|linebreaksbr }}</td>
+<td class="test-info"><div>{{ test.info }}</div></td>

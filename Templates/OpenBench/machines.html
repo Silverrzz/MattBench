@@ -6,16 +6,17 @@
 
     <table class="hoverable">
 
-        <tr class="table-header">
-            <th>#</th>
-            <th>User</th>
-            <th>Name</th>
-            <th>System</th>
-            <th>ISA</th>
-            <th>Workload</th>
-            <th>Threads</th>
-            <th>NPS</th>
-        </tr>
+        <thead><tr class="table-header">
+            <th scope="col">#</th>
+            <th scope="col">User</th>
+            <th scope="col">Name</th>
+            <th scope="col">System</th>
+            <th scope="col">ISA</th>
+            <th scope="col">Workload</th>
+            <th scope="col">Threads</th>
+            <th scope="col">NPS</th>
+        </tr></thead>
+        <tbody>
 
         {% for machine in machines %}
             <tr>
@@ -36,7 +37,10 @@
                 <td class="numeric">{{machine.info.concurrency}}</td>
                 <td class="numeric">{{machine.dev_mnps|twoDigitPrecision}}M / {{machine.base_mnps|twoDigitPrecision}}M</td>
             </tr>
+        {% empty %}
+            <tr><td colspan="8" class="empty-state">No machines are connected.</td></tr>
         {% endfor %}
+        </tbody>
 
     </table>
 
