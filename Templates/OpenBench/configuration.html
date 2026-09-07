@@ -1,121 +1,123 @@
 {% extends "OpenBench/base.html" %}
 
-{% block heading %}{% if form and section != 'site' %}{% if is_new %}New {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}{{ title }}{% endif %}{% endblock %}
-{% block page_actions %}{% if form and section != 'site' %}<a class="button" href="/manage/{{ active_section }}/">Back to {{ title|lower }}</a>{% endif %}{% endblock %}
+{% block heading %}{% if editing %}{% if is_new %}Add {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}Manage{% endif %}{% endblock %}
+{% block page_actions %}
+    {% if editing %}<a class="button" href="/manage/{{ section }}/">Back to {{ title|lower }}</a>
+    {% elif section != 'site' %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
+{% endblock %}
 
 {% block content %}
-<section class="management">
-    <nav class="tabs" aria-label="Configuration sections">
-        {% for key, label in navigation %}
-            <a href="/manage/{{ key }}/" {% if key == active_section %}aria-current="page"{% endif %}>{{ label }}</a>
-        {% endfor %}
+    <nav class="tabs" aria-label="Manage sections">
+        {% for key, label in navigation %}<a href="/manage/{{ key }}/" {% if key == active_section %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
     </nav>
-    {% if form %}
-        <form method="post" class="form form-stack content-width{% if form.columns|length == 1 %} form-medium{% endif %}">
+    {% if editing %}
+        <form method="post" class="form form-stack form-medium">
             {% csrf_token %}
-            {% for hidden in form.hidden_fields %}{{ hidden }}{{ hidden.errors }}{% endfor %}
-            {% if form.errors %}
-                <div class="error-message" role="alert">
-                    <strong>Changes were not saved.</strong>
-                    {{ form.non_field_errors }}
+            <input type="hidden" name="version" value="{{ version }}">
+            {% if errors %}<ul class="errorlist" role="alert">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+            <div class="field">
+                <label for="name">Name</label>
+                <input id="name" name="name" value="{{ values.name }}" maxlength="128" required {% if not is_new %}readonly{% endif %}>
+            </div>
+            <label class="choice"><input type="checkbox" name="enabled" {% if values.enabled %}checked{% endif %}> Enabled</label>
+            {% if section == 'engines' or section == 'books' or section == 'runners' %}
+            <div class="field">
+                <label for="source">{% if section == 'books' %}Download URL{% else %}Repository URL{% endif %}</label>
+                <input type="url" id="source" name="source" value="{{ values.source }}" placeholder="https://">
+            </div>
+            {% endif %}
+            {% if relation_name %}
+                <div class="field">
+                    <label for="{{ relation_name }}">{{ relation_label }}</label>
+                    <select id="{{ relation_name }}" name="{{ relation_name }}" required {% if immutable_release %}disabled{% endif %}>
+                        <option value="">Select {{ relation_label|lower }}</option>
+                        {% for entry in related_objects %}<option value="{{ entry.pk }}" {% if entry.pk|stringformat:'s' == selected_relation %}selected{% endif %}>{{ entry }}{% if not entry.enabled %} (disabled){% endif %}</option>{% endfor %}
+                    </select>
                 </div>
             {% endif %}
-            {% if immutable_release %}
-                <div class="field-links"><a href="/manage/releases/new/?runner={{ instance.runner_id }}">+ Add release</a></div>
+            {% if section == 'engines' %}
+                <fieldset class="form-section">
+                    <legend>Supported variants</legend>
+                    {% for variant in variants %}<label class="choice"><input type="checkbox" name="variants" value="{{ variant.pk }}" {% if variant.pk|stringformat:'s' in selected_variants %}checked{% endif %}> {{ variant.name }}{% if not variant.enabled %} (disabled){% endif %}</label>{% endfor %}
+                </fieldset>
+                <label class="choice"><input type="checkbox" name="private" {% if values.private %}checked{% endif %}> Private engine</label>
+                <div class="field">
+                    <label for="nps">Reference NPS</label>
+                    <input type="number" id="nps" name="nps" value="{{ values.nps|default:0 }}" min="0" required>
+                </div>
+                <div class="field">
+                    <label for="path">Build path</label>
+                    <input id="path" name="path" value="{{ values.path }}" placeholder='"" (repository root)'>
+                </div>
+                <div class="field">
+                    <label for="compilers">Compilers (one per line)</label>
+                    <textarea id="compilers" name="compilers" rows="2">{{ values.compilers }}</textarea>
+                </div>
+                <div class="field">
+                    <label for="systems">Operating systems (one per line)</label>
+                    <textarea id="systems" name="systems" rows="2">{{ values.systems }}</textarea>
+                </div>
+                <div class="field">
+                    <label for="cpuflags">Required CPU features (one per line)</label>
+                    <textarea id="cpuflags" name="cpuflags" rows="2">{{ values.cpuflags }}</textarea>
+                </div>
+            {% elif section == 'books' %}
+                <div class="field">
+                    <label for="sha">SHA-256</label>
+                    <input id="sha" name="sha" value="{{ values.sha }}" minlength="64" maxlength="64" required>
+                </div>
+            {% elif section == 'variants' %}
+                <div class="field"><label for="fastchess_variant">Fastchess variant name</label><input id="fastchess_variant" name="fastchess_variant" value="{{ values.fastchess_variant }}" required></div>
+                <label class="choice"><input type="checkbox" name="syzygy" {% if values.syzygy %}checked{% endif %}> Supports Syzygy</label>
+            {% elif section == 'releases' %}
+                <div class="field"><label for="ref">Branch or tag</label><input id="ref" name="ref" value="{{ values.ref }}" required {% if immutable_release %}readonly{% endif %}></div>
+                <div class="field"><label for="commit">Pinned commit</label><input id="commit" name="commit" value="{{ values.commit }}" maxlength="40" {% if immutable_release %}readonly{% endif %}></div>
+                <div class="field"><label for="min_version">Minimum version</label><input id="min_version" name="min_version" value="{{ values.min_version }}" placeholder="1.8.1" required {% if immutable_release %}readonly{% endif %}></div>
+                {% if immutable_release %}<a href="/manage/releases/new/?runner={{ instance.runner_id }}">Add release</a>{% endif %}
             {% endif %}
-            <div class="form-columns">
-                {% for column in form.columns %}
-                    <div class="form-column">
-                        {% for heading, description, fields in column %}
-                            <section class="form-section" id="{{ heading|slugify }}">
-                                <h2>{{ heading }}</h2>
-                                {% for field in fields %}{% include "OpenBench/Blocks/configuration_field.html" %}{% endfor %}
-                            </section>
-                        {% endfor %}
-                    </div>
-                {% endfor %}
-            </div>
             {% if section == 'runners' and not is_new %}
                 <section class="form-section">
                     <h2>Releases</h2>
-                    <div class="field-links">
-                        {% for release in instance.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a>{% empty %}<span>No releases</span>{% endfor %}
-                        <a href="/manage/releases/new/?runner={{ instance.pk }}">+ Add release</a>
-                    </div>
+                    {% for release in instance.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a>{% empty %}<span>No releases</span>{% endfor %}
+                    <a href="/manage/releases/new/?runner={{ instance.pk }}">Add release</a>
                 </section>
             {% endif %}
-            {% if section == 'variants' and not is_new %}<div class="field-links"><a href="/manage/books/new/?variant={{ instance.pk }}">+ Add book</a></div>{% endif %}
             <div class="form-actions">
-                <a class="button" href="/manage/{{ active_section }}/">Cancel</a>
-                <button type="submit" class="anchorbutton btn-start">Save changes</button>
+                <a class="button" href="/manage/{{ section }}/">Cancel</a>
+                <button type="submit" class="button button-primary">Save changes</button>
             </div>
         </form>
-    {% elif section == 'history' %}
-        <div class="table-scroll" role="region" aria-label="Configuration history" tabindex="0">
-            <table class="stripes hoverable data-table">
-                <thead><tr class="table-header"><th scope="col">Revision</th><th scope="col">When</th><th scope="col">Who</th><th scope="col">Change</th></tr></thead>
-                <tbody>
-                    {% for revision in history %}
-                        <tr><td class="numeric">{{ revision.generation }}</td><td class="timestamp">{{ revision.created|date:'U' }}</td><td>{{ revision.actor|default:"Import / setup" }}</td><td>{{ revision.summary }}</td></tr>
-                    {% empty %}
-                        <tr><td colspan="4" class="empty-state">No revisions</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        <nav class="pagination-toolbar" aria-label="Configuration history pages">
-            {% if history.has_previous %}<a class="button" href="?page={{ history.previous_page_number }}">Previous</a>{% endif %}
-            <span>Page {{ history.number }} of {{ history.paginator.num_pages }}</span>
-            {% if history.has_next %}<a class="button" href="?page={{ history.next_page_number }}">Next</a>{% endif %}
-        </nav>
+    {% elif section == 'site' %}
+        <table class="stripes data-table">
+            <thead><tr><th scope="col">Setting</th><th scope="col">Value</th></tr></thead>
+            <tbody>{% for key, value in site_settings %}<tr><td>{{ key }}</td><td>{{ value }}</td></tr>{% endfor %}</tbody>
+        </table>
     {% else %}
-        <div class="toolbar">
-            <form method="get" role="search" class="toolbar-search">
-                <label class="sr-only" for="config-search">{{ title }} name</label>
-                <div class="input-actions">
-                    <input id="config-search" name="q" type="search" value="{{ query }}" placeholder="Name">
-                    <button type="submit" class="anchorbutton">Search</button>
-                    {% if query %}<a href="/manage/{{ section }}/">Clear</a>{% endif %}
-                </div>
-            </form>
-            {% if can_add %}<a class="anchorbutton btn-start" href="/manage/{{ section }}/new/">+ Add {{ singular }}</a>{% endif %}
-        </div>
-        <div class="table-scroll" role="region" aria-label="{{ title }} configuration" tabindex="0">
-            <table class="stripes hoverable data-table">
-                <thead><tr class="table-header"><th scope="col">{{ title }} <span class="section-count">{{ count }}</span></th><th scope="col">Status</th><th scope="col">{% if section == 'engines' %}Maintainers{% else %}Connected to{% endif %}</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-                <tbody>
-                    {% for entry in objects %}
-                        <tr>
-                            <td>
-                                <div class="table-identity">
-                                    <a class="table-title" href="/manage/{{ section }}/{{ entry.pk }}/">{{ entry }}</a>
-                                    <div class="table-meta">{% if section == 'engines' or section == 'runners' or section == 'books' %}{% if entry.settings.source %}<a href="{{ entry.settings.source }}">{{ entry.settings.source }}</a>{% endif %}{% elif section == 'variants' %}{{ entry.settings.fastchess_variant }}{% elif section == 'releases' %}{{ entry.settings.ref }}{% endif %}</div>
-                                </div>
-                            </td>
-                            <td><span class="status-label {% if entry.enabled %}status-passed{% endif %}">{{ entry.enabled|yesno:"Enabled,Draft / disabled" }}</span></td>
-                            <td>
-                                {% if section == 'engines' %}
-                                    {% for grant in entry.maintainers.all %}{{ grant.user }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-muted">Administrators only</span>{% endfor %}
-                                {% elif section == 'books' %}
-                                    <a href="/manage/variants/{{ entry.variant_id }}/">{{ entry.variant.name }}</a>
-                                {% elif section == 'variants' %}
-                                    <a href="/manage/releases/{{ entry.runner_release_id }}/">{{ entry.runner_release }}</a>
-                                {% elif section == 'runners' %}
-                                    {% for release in entry.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a><br>{% empty %}<a href="/manage/releases/new/?runner={{ entry.pk }}">Add first release</a>{% endfor %}
-                                {% elif section == 'releases' %}
-                                    <a href="/manage/runners/{{ entry.runner_id }}/">{{ entry.runner }}</a>
-                                {% endif %}
-                            </td>
-                            <td><a class="table-action" href="/manage/{{ section }}/{{ entry.pk }}/" aria-label="Edit {{ entry }}" title="Edit {{ entry }}"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i></a></td>
-                        </tr>
-                    {% empty %}
-                        <tr><td colspan="4" class="empty-state">
-                            <h3>{% if query %}No matching {{ title|lower }}{% else %}No {{ title|lower }} yet{% endif %}</h3>
-                        </td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+        <table class="stripes hoverable data-table">
+            <thead><tr class="table-header">
+                <th scope="col">Name</th>
+                <th scope="col">{% if section == 'books' %}Download{% elif section == 'variants' %}Fastchess variant{% elif section == 'releases' %}Runner{% else %}Source{% endif %}</th>
+                <th scope="col">{% if section == 'engines' %}NPS{% elif section == 'books' %}Variant{% elif section == 'variants' %}Runner release{% elif section == 'runners' %}Releases{% else %}Reference{% endif %}</th>
+                {% if admin %}<th scope="col">Status</th><th scope="col">Actions</th>{% endif %}
+            </tr></thead>
+            <tbody>
+                {% for entry in objects %}
+                    <tr>
+                        <td>{{ entry }}</td>
+                        <td>{% if section == 'variants' %}{{ entry.settings.fastchess_variant }}{% elif section == 'releases' %}<a href="/manage/runners/{{ entry.runner_id }}/">{{ entry.runner }}</a>{% else %}<a href="{{ entry.settings.source }}">{{ entry.settings.source }}</a>{% endif %}</td>
+                        <td>
+                            {% if section == 'engines' %}{{ entry.settings.nps }}
+                            {% elif section == 'books' %}{{ entry.variant }}
+                            {% elif section == 'variants' %}<a href="/manage/releases/{{ entry.runner_release_id }}/">{{ entry.runner_release }}</a>
+                            {% elif section == 'runners' %}{% for release in entry.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release.settings.ref }}</a>{% if not forloop.last %}, {% endif %}{% endfor %} <a href="/manage/releases/new/?runner={{ entry.pk }}">Add release</a>
+                            {% else %}{{ entry.settings.ref }}{% endif %}
+                        </td>
+                        {% if admin %}<td>{{ entry.enabled|yesno:"Enabled,Disabled" }}</td><td><a href="/manage/{{ section }}/{{ entry.pk }}/">Edit</a></td>{% endif %}
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="{% if admin %}5{% else %}3{% endif %}" class="empty-state">No {{ title|lower }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% endif %}
-</section>
 {% endblock %}

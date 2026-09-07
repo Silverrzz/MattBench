@@ -1,120 +1,112 @@
-import copy
-import json
-import re
-from pathlib import Path
+import copy, json
 
+from pathlib import Path
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from OpenBench.config import fingerprint, read_site_config, verify_engine_config, verify_book_config, verify_preset
+from OpenBench.models import EngineConfig, OpeningBook, WorkloadPreset, Runner, RunnerRelease, Variant
 
-from OpenBench.configuration import publish, lock_settings
-from OpenBench.configuration_schema import DEFAULT_SITE, validate_settings, validate_preset
+
+def import_variant_defaults():
+
+    for name, data in read_site_config()['variants'].items():
+        if Variant.objects.filter(name=name).exists():
+            continue
+        source = data['runner']['repo_url']
+        runner, _ = Runner.objects.get_or_create(name='import-' + fingerprint(source)[:16],
+                                                defaults={'enabled': True, 'settings': {'source': source}})
+        release_data = {'ref': data['runner']['repo_ref'], 'min_version': data['runner']['min_version'], 'protocol': 'fastchess-ob'}
+        release, _ = RunnerRelease.objects.get_or_create(name='import-' + fingerprint([source, release_data])[:16],
+                         defaults={'enabled': True, 'runner': runner, 'settings': release_data})
+        Variant.objects.create(name=name, enabled=True, runner_release=release,
+                               settings={key: data[key] for key in ('fastchess_variant', 'syzygy')})
 
 
-def read_legacy_config(directory):
+def read_directory(directory, kind):
+
     root = Path(directory).resolve()
-
-    def read(folder, name):
-        path = (root / folder / name).resolve()
-        if not path.is_relative_to(root / folder):
-            raise ValidationError('Configuration path escapes its directory')
-        with path.open(encoding='utf-8-sig') as stream:
-            return json.load(stream)
-
-    original = read('Config', 'config.json')
-    unknown = set(original) - set(DEFAULT_SITE) - {'books', 'engines', 'variants'}
-    if unknown:
-        raise ValidationError('Unknown site settings: %s' % ', '.join(sorted(unknown)))
-    site = DEFAULT_SITE | {key: value for key, value in original.items() if key in DEFAULT_SITE}
-    validate_settings('sitesettings', site)
-    result = {'site': site, 'engines': {}, 'books': {}, 'variants': {}}
-    variants = original.get('variants', {'standard': {}, 'fischerandom': {'syzygy': True}})
-    for name, definition in variants.items():
-        if not re.fullmatch(r'[a-z][a-z0-9_-]*', name):
-            raise ValidationError('Invalid variant identifier: %s' % name)
-        settings = {'fastchess_variant': definition.get('fastchess_variant', name), 'syzygy': definition.get('syzygy', name == 'standard')}
-        runner = definition.get('runner', {key: site['fastchess_' + key] for key in ('repo_url', 'repo_ref', 'min_version')})
-        validate_settings('variant', settings)
-        validate_settings('runner', {'source': runner['repo_url']})
-        release = {'ref': runner['repo_ref'], 'min_version': runner['min_version'], 'protocol': 'fastchess-ob'}
-        if re.fullmatch('[0-9a-f]{40}', runner['repo_ref']):
-            release['commit'] = runner['repo_ref']
-        validate_settings('runnerrelease', release)
-        result['variants'][name] = {'settings': settings, 'runner': runner['repo_url'], 'release': release}
-    for name in original['books']:
-        book = read('Books', name + '.json')
-        variant = book.pop('variant', 'fischerandom' if any(marker in name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard')
-        book.setdefault('format', name.rsplit('.', 1)[-1].lower())
-        validate_settings('openingbook', book)
-        if variant not in variants:
-            raise ValidationError('Unknown variant for book %s' % name)
-        result['books'][name] = {'settings': book, 'variant': variant}
-    for name in original['engines']:
-        engine = read('Engines', name + '.json')
-        supported = engine.pop('variants', ['standard', 'fischerandom'])
-        if not isinstance(supported, list) or not supported or any(variant not in variants for variant in supported):
-            raise ValidationError('Unknown or missing variants for engine %s' % name)
+    if not root.is_dir():
+        raise ValidationError('Directory does not exist: %s' % root)
+    entries = {}
+    for path in sorted(root.glob('*.json')):
+        if not path.resolve().is_relative_to(root):
+            raise ValidationError('Configuration path escapes its directory: %s' % path.name)
+        try:
+            with path.open(encoding='utf-8-sig') as stream:
+                data = json.load(stream)
+        except (OSError, ValueError) as error:
+            raise ValidationError('%s: %s' % (path.name, error)) from error
+        name = path.stem
+        if not name or len(name) > 128 or not isinstance(data, dict):
+            raise ValidationError('Invalid configuration: %s' % path.name)
         presets = {}
-        for field, kind in (('test_presets', 'TEST'), ('tune_presets', 'TUNE'), ('datagen_presets', 'DATAGEN')):
-            legacy = engine.pop(field, {'default': {}})
-            defaults = legacy.get('default', {})
-            presets[kind] = {}
-            for preset, settings in legacy.items():
-                resolved = defaults | settings
-                validate_preset(kind, resolved)
-                presets[kind][preset] = resolved
-        validate_settings('engineconfig', engine)
-        if engine['nps'] <= 0 or not engine['source'].startswith('https://'):
-            raise ValidationError('Engine %s is not ready to enable' % name)
-        result['engines'][name] = {'settings': engine, 'variants': supported, 'presets': presets}
-    return result
+        if kind == 'engines':
+            for field, workload in (('test_presets', 'TEST'), ('tune_presets', 'TUNE'), ('datagen_presets', 'DATAGEN')):
+                values = data.pop(field, {'default': {}})
+                if not isinstance(values, dict) or not isinstance(values.get('default', {}), dict):
+                    raise ValidationError('Invalid %s in %s' % (field, path.name))
+                presets[workload] = {}
+                for label, value in values.items():
+                    if not label.strip() or len(label) > 128 or not isinstance(value, dict):
+                        raise ValidationError('Invalid preset in %s' % path.name)
+                    resolved = values.get('default', {}) | value
+                    verify_preset(workload, resolved)
+                    presets[workload][label] = resolved
+            try:
+                verify_engine_config(data)
+            except ValidationError as error:
+                raise ValidationError('%s: %s' % (path.name, '; '.join(error.messages))) from error
+        else:
+            data.pop('format', None)
+            try:
+                verify_book_config(name, data)
+            except ValidationError as error:
+                raise ValidationError('%s: %s' % (path.name, '; '.join(error.messages))) from error
+        entries[name] = (data, presets)
+    if not entries:
+        raise ValidationError('No JSON configuration files found in %s' % root)
+    return entries
 
 
 @transaction.atomic
-def import_legacy_config(bundle, replace=False, actor=None):
-    from OpenBench.models import Runner, RunnerRelease, Variant, EngineConfig, OpeningBook, WorkloadPreset, ConfigurationRevision
-    site = lock_settings()
-    conflicts = list(EngineConfig.objects.filter(name__in=bundle['engines']).values_list('name', flat=True))
-    conflicts += list(OpeningBook.objects.filter(name__in=bundle['books']).values_list('name', flat=True))
-    latest = ConfigurationRevision.objects.order_by('-generation').first()
-    pristine = latest is None
-    if not pristine:
-        if site.settings != bundle['site']:
-            conflicts.append('site settings')
-        for variant in Variant.objects.filter(name__in=bundle['variants']).select_related('runner_release__runner'):
-            incoming = bundle['variants'][variant.name]
-            if (variant.settings, variant.runner_release.settings, variant.runner_release.runner.settings['source']) != (incoming['settings'], incoming['release'], incoming['runner']):
-                conflicts.append('variant ' + variant.name)
-    if conflicts and not replace:
-        raise ValidationError('Existing configuration requires --replace: %s' % ', '.join(conflicts))
+def import_directory(directory, kind, apply=False, replace=False, disable_missing=False):
 
-    def save(model, name, **fields):
-        instance = model.objects.filter(name=name).first() or model(name=name)
-        for key, value in fields.items():
-            setattr(instance, key, copy.deepcopy(value))
-        instance.full_clean()
-        instance.save()
-        return instance
-
-    site.settings = bundle['site']
-    site.full_clean()
-    variants = {}
-    from OpenBench.configuration import fingerprint
-    for name, data in bundle['variants'].items():
-        runner = save(Runner, 'import-' + fingerprint(data['runner'])[:16], enabled=True, settings={'source': data['runner']})
-        release = save(RunnerRelease, 'import-' + fingerprint([data['runner'], data['release']])[:16], enabled=True, runner=runner, settings=data['release'])
-        variants[name] = save(Variant, name, enabled=True, runner_release=release, settings=data['settings'])
-    for name, data in bundle['books'].items():
-        save(OpeningBook, name, enabled=True, variant=variants[data['variant']], settings=data['settings'])
-    for name, data in bundle['engines'].items():
-        engine = save(EngineConfig, name, enabled=True, settings=data['settings'])
-        engine.variants.set([variants[variant] for variant in data['variants']])
-        for kind, presets in data['presets'].items():
-            if replace:
-                engine.presets.filter(owner=None, workload_type=kind).exclude(name__in=presets).delete()
-            for position, (name, settings) in enumerate(presets.items()):
-                preset = WorkloadPreset.objects.filter(engine=engine, owner=None, workload_type=kind, name=name).first()
-                preset = preset or WorkloadPreset(engine=engine, workload_type=kind, name=name)
-                preset.settings, preset.position = settings, position
+    entries = read_directory(directory, kind)
+    model = EngineConfig if kind == 'engines' else OpeningBook
+    existing = set(model.objects.filter(name__in=entries).values_list('name', flat=True))
+    missing = model.objects.exclude(name__in=entries).filter(enabled=True)
+    result = {'new': len(entries) - len(existing), 'updated': len(existing) if replace else 0,
+              'skipped': 0 if replace else len(existing), 'disabled': missing.count() if disable_missing else 0}
+    if not apply:
+        return result
+    import_variant_defaults()
+    for name, (data, presets) in entries.items():
+        row = model.objects.select_for_update().filter(name=name).first()
+        if row and not replace:
+            continue
+        row = row or model(name=name)
+        row.settings, row.enabled = copy.deepcopy(data), True
+        if kind == 'engines':
+            names = data.get('variants', ['standard', 'fischerandom'])
+        else:
+            names = [data.get('variant', 'fischerandom' if any(marker in name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard')]
+        variants = list(Variant.objects.filter(name__in=names, enabled=True, runner_release__enabled=True, runner_release__runner__enabled=True))
+        if not names or len(variants) != len(set(names)):
+            raise ValidationError('Unknown or disabled variants for %s' % name)
+        if kind == 'books':
+            row.variant = variants[0]
+        row.full_clean()
+        row.save()
+        if kind == 'engines':
+            row.variants.set(variants)
+        for workload, values in presets.items():
+            row.presets.filter(owner=None, workload_type=workload).exclude(name__in=values).delete()
+            for position, (label, value) in enumerate(values.items()):
+                preset = WorkloadPreset.objects.filter(engine=row, owner=None, workload_type=workload, name=label).first()
+                preset = preset or WorkloadPreset(engine=row, workload_type=workload, name=label)
+                preset.settings, preset.position = value, position
                 preset.full_clean()
                 preset.save()
-    return publish(site, actor, 'Imported legacy configuration')
+    if disable_missing:
+        missing.update(enabled=False)
+    return result

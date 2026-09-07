@@ -9,8 +9,8 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 
-from OpenBench.configuration import authorize, can_manage_engine, lock_settings, publish
-from OpenBench.models import EngineConfig, Profile, SiteSettings, WorkloadPreset
+from OpenBench.config import fingerprint
+from OpenBench.models import EngineConfig, Profile, WorkloadPreset
 
 
 def preset_fields(kind):
@@ -18,15 +18,19 @@ def preset_fields(kind):
     return {'TEST': verify_engine_test_preset, 'TUNE': verify_engine_tune_preset, 'DATAGEN': verify_engine_datagen_preset}[kind]({})
 
 
-@transaction.atomic
+def preset_version(rows):
+    return fingerprint([[str(row.pk), row.name, row.settings, row.position] for row in rows])
+
+
 def preset_data(user, kind):
-    generation = SiteSettings.objects.select_for_update().filter(pk=1).values_list('generation', flat=True).first() or 0
-    engines = list(EngineConfig.objects.filter(enabled=True).prefetch_related('maintainers'))
+    engines = list(EngineConfig.objects.filter(enabled=True))
     rows = list(WorkloadPreset.objects.filter(engine__in=engines, workload_type=kind).filter(Q(owner=None) | Q(owner=user)).select_related('engine'))
     hidden = {row.engine_id for row in rows if row.owner_id is None and row.name != 'default'}
-    editable = {engine.name: can_manage_engine(user, engine) for engine in engines}
+    editable = {engine.name: user.is_active and user.is_superuser for engine in engines}
     return {
-        'generation': generation,
+        'versions': {engine.name: {scope: preset_version([row for row in rows if row.engine_id == engine.pk and
+                     (row.owner_id is None if scope == 'engine' else row.owner_id == user.pk)])
+                     for scope in ('engine', 'personal')} for engine in engines},
         'editable': editable, 'fields': preset_fields(kind),
         'presets': [{'id': str(row.pk), 'engine': row.engine.name, 'name': row.name, 'scope': 'personal' if row.owner_id else 'engine',
             'settings': row.settings, 'position': row.position, 'editable': row.owner_id == user.pk or editable[row.engine.name]}
@@ -36,13 +40,15 @@ def preset_data(user, kind):
 
 @transaction.atomic
 def change_preset(user, kind, data):
-    site = lock_settings(data.get('generation'))
-    engine = get_object_or_404(EngineConfig, name=data.get('engine'), enabled=True)
+    engine = get_object_or_404(EngineConfig.objects.select_for_update(), name=data.get('engine'), enabled=True)
     if data.get('scope') not in ('personal', 'engine'):
         raise ValidationError('Choose where to save the preset')
     owner = user if data['scope'] == 'personal' else None
-    authorize(WorkloadPreset(engine=engine, owner=owner), user)
+    if not user.is_active or (owner is None and not user.is_superuser):
+        raise PermissionDenied
     siblings = engine.presets.filter(owner=owner, workload_type=kind)
+    if data.get('version') != preset_version(siblings):
+        raise ValidationError('Presets changed; reload before saving')
     visible = siblings.exclude(name='default') if owner is None and siblings.exclude(name='default').exists() else siblings
     if data.get('action') == 'manage':
         entries = data.get('presets')
@@ -83,7 +89,6 @@ def change_preset(user, kind, data):
         row.save()
     else:
         raise ValidationError('Unknown preset action')
-    return publish(site, user, 'Updated %s %s presets for %s' % (data['scope'], kind, engine.name))
 
 
 @login_required(login_url='/login/')

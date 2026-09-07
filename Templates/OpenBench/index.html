@@ -19,7 +19,7 @@
                     {% if active %}
                         {% include "OpenBench/Blocks/index_tests.html" with groups=active label="Active tests" %}
                     {% else %}
-                        <div class="tests-empty"><strong>No active tests</strong><p>Create a new test to start comparing engine revisions.</p></div>
+                        <div class="tests-empty"><strong>No active tests</strong></div>
                     {% endif %}
                 </section>
             {% endif %}
@@ -29,7 +29,7 @@
             {% if completed %}
                 {% include "OpenBench/Blocks/index_tests.html" with tests=completed label="Finished tests" %}
             {% else %}
-                <div class="tests-empty"><strong>No finished tests</strong><p>Completed results will appear here.</p></div>
+                <div class="tests-empty"><strong>No finished tests</strong></div>
             {% endif %}
             {% if paging.prev != paging.next %}{% include "OpenBench/Blocks/pagebrowser.html" %}{% endif %}
         </section>

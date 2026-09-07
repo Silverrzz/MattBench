@@ -1,3 +1,89 @@
+.preset-bar, .preset-edit-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+#preset-slots {
+    flex: 1 1 100%;
+}
+.preset-slot-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 30px 30px;
+    min-width: 0;
+    box-sizing: border-box;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    background: var(--sidebar);
+    overflow: hidden;
+}
+.preset-slot-editor:focus-within {
+    border-color: var(--accent);
+}
+#content .preset-slot-editor input {
+    height: 100%;
+    min-height: 0;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    outline: none;
+}
+#content .preset-slot-editor input:focus-visible {
+    outline: none;
+}
+.preset-slot-editor input + button {
+    border-left: 0;
+}
+.preset-slot-editor button {
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+}
+.preset-slot-editor button:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+}
+.preset-slot-editor button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -3px;
+}
+.preset-group-buttons {
+    display: grid;
+    grid-template-columns: repeat(var(--preset-columns, 4), minmax(0, 1fr));
+    gap: 8px;
+    margin: 8px 0 16px;
+}
+#content .preset-group-buttons .anchorbutton {
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    margin: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+#content .preset-group-buttons .preset-target,
+#content .preset-group-buttons [aria-pressed="true"] {
+    border-color: var(--accent);
+}
+#content .preset-edit-row input {
+    flex: 1;
+    width: auto;
+}
+#preset-manager {
+    margin-bottom: 24px;
+}
+#preset-manager[hidden] {
+    display: none;
+}
+#preset-message {
+    margin-bottom: 16px;
+}
 #content form { min-width: 0; margin: 0; }
 .form { width: 100%; }
 .content-width { width: 100%; max-width: 1120px; }

@@ -250,7 +250,6 @@ hr { border: 0; border-top: 1px solid var(--line); }
 #content tr:has(+ .test-notes-row:not([hidden])) > td { border-bottom: 0; }
 #content .test-notes-row > td { padding: 0 12px 8px; }
 .test-notes { font-size: 12px; color: var(--muted); }
-.test-notes summary { width: fit-content; padding: 4px 0; color: var(--subtle); }
 .test-notes > div { padding: 8px 0; max-width: 100ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
 .empty-state strong { display: block; color: var(--text); font-size: 16px; font-weight: 500; margin-bottom: 6px; }

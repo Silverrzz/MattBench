@@ -11,13 +11,12 @@
 
     <script src="{% static 'create_workload.js' %}?{{ static_version }}"></script>
     <script src="{% static 'presets.js' %}?{{ static_version }}"></script>
-    <link rel="stylesheet" href="{% static 'presets.css' %}?{{ static_version }}">
     <script src="{% static 'default_text.js' %}?{{ static_version }}"></script>
 
     <script>
         document.addEventListener(
             'DOMContentLoaded', function () {
-                change_engine('{{ profile.engine }}', 'dev', '{{workload}}');
+                change_engine('{{ profile.engine|escapejs }}', 'dev', '{{workload}}');
                 enforce_default_text('dev_repo', 'https://github.com/');
                 enforce_default_text('base_repo', 'https://github.com/');
                 initialize_presets('{{workload}}');
@@ -33,9 +32,19 @@
 
         <div class="preset-bar">
             <div id="preset-slots" aria-label="Workload presets"></div>
-            <button type="button" id="preset-manage-open" class="preset-link">Edit presets</button>
+            <button type="button" id="preset-replace" class="button" aria-pressed="false">Replace preset</button>
+            <button type="button" id="preset-manage-open" class="button">Edit presets</button>
         </div>
         <div id="preset-message" role="status" aria-live="polite"></div>
+
+        <section id="preset-manager" class="form-stack form-medium" hidden>
+            <div class="field"><label for="preset-manage-scope">Edit presets</label><select id="preset-manage-scope"></select></div>
+            <div id="preset-editor"></div>
+            <div class="form-actions">
+                <button type="button" class="button" id="preset-manage-cancel">Cancel</button>
+                <button type="button" class="button button-primary" id="preset-manage-save">Save</button>
+            </div>
+        </section>
 
         <div class="form-columns">
             <div class="form-stack">
@@ -309,29 +318,8 @@
         </div>
 
         <div class="form-actions">
-            <button type="button" id="preset-save-open" class="anchorbutton">Save as preset</button>
             <input type="submit" class="anchorbutton btn-start" name="submit" value="{{submit_text}}">
         </div>
     </form>
-
-    <dialog id="preset-save-dialog" class="preset-dialog" aria-labelledby="preset-save-title">
-        <form id="preset-save-form" class="form-stack">
-            <h3 id="preset-save-title">Save preset</h3>
-            <div class="field"><label for="preset-save-scope">Save to</label><select id="preset-save-scope"></select></div>
-            <div class="field"><label for="preset-save-slot">Slot</label><select id="preset-save-slot"></select></div>
-            <div class="field"><label for="preset-save-name">Name</label><input id="preset-save-name" maxlength="128" required autocomplete="off"></div>
-            <div class="preset-error" role="alert"></div>
-            <footer class="form-actions"><button type="button" class="button" data-close-dialog>Cancel</button><button type="submit" class="button button-primary" id="preset-save-submit">Save preset</button></footer>
-        </form>
-    </dialog>
-    <dialog id="preset-manage-dialog" class="preset-dialog preset-manager" aria-labelledby="preset-manage-title">
-        <form id="preset-manage-form" class="form-stack">
-            <h3 id="preset-manage-title">Edit presets</h3>
-            <div class="field"><label for="preset-manage-scope">Presets for</label><select id="preset-manage-scope"></select></div>
-            <div id="preset-editor"></div>
-            <div class="preset-error" role="alert"></div>
-            <footer class="form-actions"><button type="button" class="button" data-close-dialog>Cancel</button><button type="submit" class="button button-primary">Save changes</button></footer>
-        </form>
-    </dialog>
 
 {% endblock %}

@@ -61,7 +61,7 @@ class OpenBenchConfig(django.apps.AppConfig):
     def ready(self):
 
         import sys
-        if any(command in sys.argv for command in ('migrate', 'makemigrations', 'check', 'import_config', 'shell', 'createsuperuser')):
+        if any(command in sys.argv for command in ('migrate', 'makemigrations', 'check', 'import_config', 'import_engines', 'sync_books', 'shell', 'createsuperuser')):
             return
 
         # Attempt to spawn the PGN Watcher, globally once

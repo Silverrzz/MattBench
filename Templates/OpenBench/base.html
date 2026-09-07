@@ -32,7 +32,7 @@
                     <span class="nav-label">Account</span>
                     {% if user.is_authenticated %}
                         <a data-nav="profile" href="/profile/"><i class="fa-solid fa-user fa-fw" aria-hidden="true"></i> Profile</a>
-                        {% if can_manage_configuration %}<a data-nav="manage" href="/manage/"><i class="fa-solid fa-gear fa-fw" aria-hidden="true"></i> Manage</a>{% endif %}
+                        {% if user.is_active and user.is_superuser %}<a data-nav="manage" href="/manage/"><i class="fa-solid fa-gear fa-fw" aria-hidden="true"></i> Manage</a>{% endif %}
                     {% else %}
                         <a data-nav="login" href="/login/"><i class="fa-solid fa-right-to-bracket fa-fw" aria-hidden="true"></i> Login</a>
                         <a data-nav="register" href="/register/"><i class="fa-solid fa-registered fa-fw" aria-hidden="true"></i> Register</a>

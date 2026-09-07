@@ -1,83 +1,144 @@
+import copy
+
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.paginator import Paginator
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_http_methods
 
-from OpenBench.configuration import authorize, save_configuration
-from OpenBench.configuration_forms import ConfigurationForm
-from OpenBench.configuration_schema import DEFAULT_SITE
-from OpenBench.models import ConfigurationRevision, EngineConfig, OpeningBook, Runner, RunnerRelease, SiteSettings, Variant
+from OpenBench.config import fingerprint, read_site_config
+from OpenBench.models import EngineConfig, OpeningBook, Runner, RunnerRelease, Variant
 from OpenBench.views import render
 
 
-SECTIONS = {'engines': ('Engines', EngineConfig), 'books': ('Books', OpeningBook), 'variants': ('Variants', Variant),
-    'runners': ('Runners', Runner), 'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', SiteSettings),
-    'history': ('Configuration history', ConfigurationRevision)}
+SECTIONS = {'engines': ('Engines', EngineConfig), 'books': ('Books', OpeningBook),
+            'variants': ('Variants', Variant), 'runners': ('Runners', Runner),
+            'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', None)}
+RELATIONS = {OpeningBook: ('variant', Variant), Variant: ('runner_release', RunnerRelease),
+             RunnerRelease: ('runner', Runner)}
+
+
+def entry_version(instance):
+    related = [str(getattr(instance, field + '_id')) for field in ('variant', 'runner_release', 'runner') if hasattr(instance, field + '_id')]
+    if isinstance(instance, EngineConfig) and not instance._state.adding:
+        related += sorted(str(pk) for pk in instance.variants.values_list('pk', flat=True))
+    return fingerprint([instance.name, instance.enabled, instance.settings, related])
 
 
 @login_required(login_url='/login/')
 @require_http_methods(['GET', 'POST'])
 def manage(request, section='engines', identifier=None):
+
     if section not in SECTIONS:
         raise Http404
-    if not request.user.is_active or (section != 'engines' and not request.user.is_superuser):
-        raise PermissionDenied
-    if not request.user.is_superuser and not EngineConfig.objects.filter(maintainers__user=request.user).exists():
+    if not request.user.is_active or not request.user.is_superuser:
         raise PermissionDenied
     title, model = SECTIONS[section]
-    generation = SiteSettings.objects.filter(pk=1).values_list('generation', flat=True).first() or 0
-    navigation = [(key, label) for key, (label, _) in SECTIONS.items() if key != 'releases' and (request.user.is_superuser or key == 'engines')]
-    context = {'title': title, 'section': section, 'navigation': navigation, 'generation': generation}
-    context['active_section'] = {'releases': 'runners'}.get(section, section)
-    context['singular'] = {'engines': 'engine', 'books': 'opening book', 'variants': 'variant', 'runners': 'runner', 'releases': 'release'}.get(section, title.lower())
-    context['query'] = request.GET.get('q', '').strip()
-    if section == 'history':
-        if request.method != 'GET':
+    context = {'title': title, 'page_title': 'Manage', 'section': section, 'admin': True,
+               'active_section': 'runners' if section == 'releases' else section,
+               'singular': {'engines': 'engine', 'books': 'book', 'variants': 'variant', 'runners': 'runner', 'releases': 'release'}.get(section),
+               'navigation': [(key, label) for key, (label, _) in SECTIONS.items() if key != 'releases']}
+    if section == 'site':
+        if request.method != 'GET' or identifier is not None:
             raise PermissionDenied
-        context['history'] = Paginator(ConfigurationRevision.objects.select_related('actor').order_by('-generation'), 30).get_page(request.GET.get('page'))
-    elif identifier is None and section != 'site':
+        context['site_settings'] = [(key, value) for key, value in read_site_config().items() if key != 'variants']
+        return render(request, 'configuration.html', context)
+    if identifier is None:
         if request.method != 'GET':
             raise PermissionDenied
         objects = model.objects.order_by('name')
-        if section == 'engines':
-            objects = objects.prefetch_related('maintainers__user', 'variants')
-        if not request.user.is_superuser:
-            objects = objects.filter(maintainers__user=request.user)
-        if section == 'books': objects = objects.select_related('variant')
-        if section == 'variants': objects = objects.select_related('runner_release__runner')
-        if section == 'runners': objects = objects.prefetch_related('releases')
-        if section == 'releases': objects = objects.select_related('runner')
-        if context['query']: objects = objects.filter(name__icontains=context['query'])
+        if model in RELATIONS:
+            objects = objects.select_related(RELATIONS[model][0])
+        if model is Runner:
+            objects = objects.prefetch_related('releases')
         context['objects'] = objects
-        context['count'] = objects.count()
-        context['can_add'] = request.user.is_superuser
-    else:
-        if section == 'site':
-            instance = SiteSettings.objects.filter(pk=1).first() or SiteSettings(settings=dict(DEFAULT_SITE))
-        elif identifier == 'new':
-            instance = model()
-        else:
-            instance = get_object_or_404(model, pk=identifier)
-        if identifier == 'new' and request.method == 'GET':
-            for field, related in {'runner': Runner, 'runner_release': RunnerRelease, 'variant': Variant}.items():
-                if hasattr(instance, field + '_id') and request.GET.get(field):
-                    try:
-                        setattr(instance, field, get_object_or_404(related, pk=request.GET[field]))
-                    except ValidationError:
-                        raise Http404
-        authorize(instance, request.user)
-        form = ConfigurationForm(instance, generation, request.user, request.POST if request.method == 'POST' else None)
-        if request.method == 'POST' and form.is_valid():
-            try:
-                save_configuration(form.populate(), request.user, form.cleaned_data['generation'],
-                    variants=form.cleaned_data.get('variants'), maintainers=form.cleaned_data.get('maintainers'))
-                request.session['status_message'] = '%s saved.' % title
-                return redirect('/manage/%s/' % section)
-            except (ValidationError, IntegrityError) as error:
-                form.add_error(None, '; '.join(error.messages) if isinstance(error, ValidationError) else 'This name or relationship already exists.')
-        context['is_new'] = instance._state.adding
-        context.update(form=form, instance=instance, immutable_release=isinstance(instance, RunnerRelease) and not instance._state.adding)
+        return render(request, 'configuration.html', context)
+
+    instance = model() if identifier == 'new' else get_object_or_404(model, pk=identifier)
+    original = entry_version(instance)
+    values = copy.deepcopy(instance.settings)
+    values.update(name=instance.name, enabled=instance.enabled)
+    relation = RELATIONS.get(model)
+    if relation:
+        field, related_model = relation
+        values[field] = str(getattr(instance, field + '_id') or request.GET.get(field, ''))
+        context.update(relation_name=field, relation_label=field.replace('_', ' ').title(),
+                       related_objects=related_model.objects.order_by('name'))
+    if section == 'engines':
+        build = values.pop('build', {})
+        values.update(path=build.get('path', ''), compilers='\n'.join(build.get('compilers', [])),
+                      systems='\n'.join(build.get('systems', [])), cpuflags='\n'.join(build.get('cpuflags', [])))
+        context['variants'] = Variant.objects.order_by('name')
+        context['selected_variants'] = [str(pk) for pk in instance.variants.values_list('pk', flat=True)] if identifier != 'new' else []
+    if request.method == 'POST':
+        values.update(request.POST.dict())
+        for field in ('enabled', 'private', 'syzygy'):
+            values[field] = request.POST.get(field) == 'on'
+        if section == 'engines':
+            context['selected_variants'] = request.POST.getlist('variants')
+        try:
+            with transaction.atomic():
+                if identifier != 'new':
+                    instance = get_object_or_404(model.objects.select_for_update(), pk=identifier)
+                    if request.POST.get('version') != entry_version(instance):
+                        raise ValidationError('This entry changed; reload before saving')
+                    if request.POST.get('name') != instance.name:
+                        raise ValidationError('Names cannot be changed')
+                else:
+                    instance.name = request.POST.get('name', '').strip()
+                instance.enabled = values['enabled']
+                data = copy.deepcopy(instance.settings)
+                if section in ('engines', 'books', 'runners'):
+                    data['source'] = request.POST.get('source', '').strip()
+                if relation and not (section == 'releases' and identifier != 'new'):
+                    field, related_model = relation
+                    related = get_object_or_404(related_model, pk=request.POST.get(field))
+                    setattr(instance, field, related)
+                if section == 'engines':
+                    data.update(private=values['private'], nps=int(request.POST.get('nps', '0')))
+                    data['build'] = {'path': request.POST.get('path', '').strip(),
+                                     **{field: list(dict.fromkeys(line.strip() for line in request.POST.get(field, '').splitlines() if line.strip()))
+                                        for field in ('compilers', 'systems', 'cpuflags')}}
+                    if data['build']['path'] == '""':
+                        data['build']['path'] = ''
+                    selected = list(Variant.objects.filter(pk__in=context['selected_variants']))
+                    if len(selected) != len(set(context['selected_variants'])):
+                        raise ValidationError('Unknown variant')
+                    if instance.enabled and (not selected or any(not variant.enabled for variant in selected)):
+                        raise ValidationError('Enabled engines require enabled variants')
+                    data['variants'] = sorted(variant.name for variant in selected)
+                elif section == 'books':
+                    data['sha'] = request.POST.get('sha', '').strip()
+                    data['variant'] = instance.variant.name
+                    data.pop('format', None)
+                    if instance.enabled and not instance.variant.enabled:
+                        raise ValidationError('Choose an enabled variant')
+                elif section == 'variants':
+                    data = {'fastchess_variant': request.POST.get('fastchess_variant', '').strip(), 'syzygy': values['syzygy']}
+                elif section == 'releases' and identifier == 'new':
+                    data = {'ref': request.POST.get('ref', '').strip(), 'min_version': request.POST.get('min_version', '').strip(), 'protocol': 'fastchess-ob'}
+                    if request.POST.get('commit', '').strip():
+                        data['commit'] = request.POST['commit'].strip()
+                if not instance.enabled and identifier != 'new':
+                    if section == 'runners' and instance.releases.filter(enabled=True).exists():
+                        raise ValidationError('Disable the runner releases first')
+                    if section == 'releases' and Variant.objects.filter(runner_release=instance, enabled=True).exists():
+                        raise ValidationError('Disable the variants using this release first')
+                    if section == 'variants' and (instance.engines.filter(enabled=True).exists() or OpeningBook.objects.filter(variant=instance, enabled=True).exists()):
+                        raise ValidationError('Disable or reassign the engines and books using this variant first')
+                instance.settings = data
+                instance.full_clean()
+                instance.save()
+                if section == 'engines':
+                    instance.variants.set(selected)
+            request.session['status_message'] = '%s saved.' % instance
+            return redirect('/manage/%s/' % ('runners' if section == 'releases' else section))
+        except (ValidationError, IntegrityError, ValueError) as error:
+            context['errors'] = error.messages if isinstance(error, ValidationError) else ['Invalid values or duplicate name.']
+    if relation:
+        context['selected_relation'] = values[relation[0]]
+    context.update(editing=True, is_new=identifier == 'new', values=values,
+                   version=request.POST.get('version', original), instance=instance,
+                   immutable_release=section == 'releases' and identifier != 'new')
     return render(request, 'configuration.html', context)

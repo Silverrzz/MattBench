@@ -291,4 +291,124 @@ class SPSAParameter(Model):
     c_value   = FloatField() # Constants pre-computed for speed
     a_value   = FloatField()
 
-from OpenBench.configuration_models import SiteSettings, Runner, RunnerRelease, Variant, EngineConfig, EngineMaintainer, OpeningBook, WorkloadPreset, ConfigurationRevision
+import uuid
+
+from django.db.models import UUIDField, PositiveIntegerField, ManyToManyField, Q
+from django.core.exceptions import ValidationError
+
+
+class Runner(Model):
+
+    id       = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name     = CharField(max_length=128, unique=True)
+    enabled  = BooleanField(default=False)
+    settings = JSONField(default=dict, blank=True)
+    updated  = DateTimeField(auto_now=True)
+
+    def clean(self):
+        from OpenBench.config import verify_runner_config
+        verify_runner_config(self.settings)
+
+    def __str__(self):
+        return self.settings.get('source', '').removeprefix('https://github.com/').rstrip('/') if self.name.startswith('import-') else self.name
+
+
+class RunnerRelease(Model):
+
+    id       = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name     = CharField(max_length=128, unique=True)
+    enabled  = BooleanField(default=False)
+    settings = JSONField(default=dict, blank=True)
+    updated  = DateTimeField(auto_now=True)
+    runner   = ForeignKey(Runner, on_delete=PROTECT, related_name='releases')
+
+    def clean(self):
+        from OpenBench.config import verify_release_config
+        verify_release_config(self.settings)
+        if self.enabled and not self.runner.enabled:
+            raise ValidationError('Enable the runner before enabling its release')
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            original = type(self).objects.get(pk=self.pk)
+            if (original.runner_id, original.settings) != (self.runner_id, self.settings):
+                raise ValidationError('Create a new release to change execution settings')
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return '%s / %s' % (self.runner, self.settings.get('ref', '')[:12]) if self.name.startswith('import-') else self.name
+
+
+class Variant(Model):
+
+    id             = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name           = CharField(max_length=128, unique=True)
+    enabled        = BooleanField(default=False)
+    settings       = JSONField(default=dict, blank=True)
+    updated        = DateTimeField(auto_now=True)
+    runner_release = ForeignKey(RunnerRelease, on_delete=PROTECT)
+
+    def clean(self):
+        from OpenBench.config import verify_variant_config
+        verify_variant_config(self.settings)
+        if self.enabled and not (self.runner_release.enabled and self.runner_release.runner.enabled):
+            raise ValidationError('Choose an enabled runner release')
+
+    def __str__(self):
+        return self.name
+
+
+class EngineConfig(Model):
+
+    id       = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name     = CharField(max_length=128, unique=True)
+    enabled  = BooleanField(default=False)
+    settings = JSONField(default=dict, blank=True)
+    updated  = DateTimeField(auto_now=True)
+    variants = ManyToManyField(Variant, related_name='engines', blank=True)
+
+    def clean(self):
+        from OpenBench.config import verify_engine_config
+        verify_engine_config(self.settings, self.enabled)
+
+    def __str__(self):
+        return self.name
+
+
+class OpeningBook(Model):
+
+    id       = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name     = CharField(max_length=128, unique=True)
+    enabled  = BooleanField(default=False)
+    settings = JSONField(default=dict, blank=True)
+    updated  = DateTimeField(auto_now=True)
+    variant  = ForeignKey(Variant, on_delete=PROTECT, null=True, blank=True)
+
+    def clean(self):
+        from OpenBench.config import verify_book_config
+        verify_book_config(self.name, self.settings)
+
+    def __str__(self):
+        return self.name
+
+
+class WorkloadPreset(Model):
+
+    id            = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    engine        = ForeignKey(EngineConfig, on_delete=PROTECT, related_name='presets')
+    owner         = ForeignKey(User, null=True, blank=True, on_delete=CASCADE)
+    name          = CharField(max_length=128)
+    workload_type = CharField(max_length=8, choices=[('TEST', 'Test'), ('TUNE', 'Tune'), ('DATAGEN', 'Datagen')])
+    position      = PositiveIntegerField(default=0)
+    settings      = JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['position', 'name', 'id']
+        constraints = [
+            UniqueConstraint(fields=['engine', 'workload_type', 'name'], condition=Q(owner__isnull=True), name='unique_shared_preset'),
+            UniqueConstraint(fields=['engine', 'owner', 'workload_type', 'name'], condition=Q(owner__isnull=False), name='unique_personal_preset'),
+        ]
+
+    def clean(self):
+        from OpenBench.config import verify_preset
+        verify_preset(self.workload_type, self.settings)

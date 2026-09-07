@@ -3,17 +3,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const notesToggles = document.querySelectorAll('[data-show-test-notes]');
     let showNotes = false;
     try { showNotes = localStorage.getItem('mattbench.showNotes') === 'true'; } catch {}
-    testNotes.forEach(details => {
-        let expanded = showNotes;
-        try {
-            const saved = JSON.parse(sessionStorage.getItem(`mattbench.notes.${details.dataset.testNotes}`));
-            if (saved && saved.preference === showNotes) expanded = saved.expanded;
-        } catch {}
-        details.closest('.test-notes-row').hidden = !showNotes;
-        details.open = expanded;
-        details.addEventListener('toggle', () => {
-            try { sessionStorage.setItem(`mattbench.notes.${details.dataset.testNotes}`, JSON.stringify({ expanded: details.open, preference: showNotes })); } catch {}
-        });
+    testNotes.forEach(notes => {
+        notes.closest('.test-notes-row').hidden = !showNotes;
     });
     notesToggles.forEach(toggle => {
         toggle.closest('label').hidden = testNotes.length === 0;
@@ -22,9 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
             showNotes = toggle.checked;
             try { localStorage.setItem('mattbench.showNotes', String(toggle.checked)); } catch {}
             notesToggles.forEach(control => { control.checked = toggle.checked; });
-            testNotes.forEach(details => {
-                details.closest('.test-notes-row').hidden = !showNotes;
-                details.open = showNotes;
+            testNotes.forEach(notes => {
+                notes.closest('.test-notes-row').hidden = !showNotes;
             });
         });
     });

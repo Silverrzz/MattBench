@@ -84,7 +84,7 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
         'register.html': 'Create an account',
         'create_workload.html': 'New workload',
         'workload.html': 'Workload',
-        'configuration.html': 'Manage',
+        'configuration.html': 'Engines',
     }
     title = page_titles.get(template, 'MattBench')
     if template == 'create_workload.html':
@@ -105,7 +105,6 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
     if request.user.is_authenticated:
 
         profile = Profile.objects.filter(user=request.user)
-        data['can_manage_configuration'] = request.user.is_active and (request.user.is_superuser or OpenBench.models.EngineMaintainer.objects.filter(user=request.user).exists())
         data.update({'profile' : profile.first()})
 
         if profile.first() and not profile.first().enabled:

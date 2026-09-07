@@ -3,6 +3,7 @@ let presetKind = 'TEST';
 let selectedPreset = null;
 let presetBusy = false;
 let presetDraft = [];
+let replacePreset = false;
 const editedFields = new Set();
 const presetColumns = 4;
 const presetGroups = [
@@ -135,35 +136,38 @@ function render_presets() {
         buttons.className = 'preset-group-buttons';
         buttons.style.setProperty('--preset-columns', presetColumns);
         for (const preset of presets) {
-            const button = preset_button(preset.name, () => select_preset(preset));
+            const button = preset_button(preset.name, () => {
+                if (replacePreset && preset.editable) edit_preset_slot(preset.scope, preset);
+                else select_preset(preset);
+            });
             button.className = 'anchorbutton btn-start';
             button.setAttribute('aria-pressed', String(selectedPreset?.id === preset.id));
+            button.classList.toggle('preset-target', replacePreset && preset.editable);
             button.title = (preset.scope === 'engine' ? get_dev_engine() : 'Personal') + (preset.id === rows[0].id ? ' - Default preset' : '');
             buttons.append(button);
         }
-        const slots = Math.max(presetColumns, Math.ceil(presets.length / presetColumns) * presetColumns);
-        for (let index = presets.length; index < slots; index++) {
-            const placeholder = preset_button('', () => open_preset_save(scope), 'Save a new ' + (scope === 'engine' ? 'shared' : 'personal') + ' preset');
+        if (editable) {
+            const placeholder = preset_button('+', () => edit_preset_slot(scope, null, presets.length), 'Save a new ' + (scope === 'engine' ? 'shared' : 'personal') + ' preset');
             placeholder.className = 'anchorbutton preset-placeholder';
-            if (!editable) {
-                placeholder.disabled = true;
-                placeholder.title = 'Empty preset slot';
-                placeholder.setAttribute('aria-label', 'Empty preset slot');
-            }
             buttons.append(placeholder);
         }
         group.append(label, buttons);
         root.append(group);
     }
     document.getElementById('preset-manage-open').hidden = !rows.some(p => p.editable);
-    document.getElementById('preset-save-open').disabled = !config.engines[get_dev_engine()];
+    const replace = document.getElementById('preset-replace');
+    replace.hidden = !rows.some(p => p.editable);
+    replace.textContent = replacePreset ? 'Cancel replace' : 'Replace preset';
+    replace.setAttribute('aria-pressed', String(replacePreset));
 }
 
 function change_engine(engine, target, kind) {
     document.getElementById('preset-message').replaceChildren();
     presetKind = kind;
+    replacePreset = false;
+    document.getElementById('preset-manager').hidden = true;
     if (!config.engines[engine]) engine = document.getElementById(target + '_engine')?.value;
-    if (!config.engines[engine]) return;
+    if (!config.engines[engine]) { render_presets(); return; }
     set_engine(engine, target);
     if (target === 'dev' && kind !== 'TUNE' && !editedFields.has('base_engine')) set_engine(engine, 'base');
     if (!editedFields.has('scale_nps')) set_option('scale_nps', config.engines[engine].nps);
@@ -174,6 +178,7 @@ function change_engine(engine, target, kind) {
             const field = 'base_' + key;
             if (!editedFields.has(field) && defaults[field] !== undefined) set_option(field, defaults[field]);
         }
+        render_presets();
         return;
     }
     selectedPreset = null;
@@ -191,103 +196,96 @@ function capture_preset() {
     return settings;
 }
 
-function preset_scopes(select) {
-    select.replaceChildren();
-    if (presetState.editable[get_dev_engine()]) select.add(new Option(get_dev_engine() + ' - Shared presets', 'engine'));
-    select.add(new Option('My presets', 'personal'));
-    select.disabled = false;
-}
-
-function save_slots() {
-    const scope = document.getElementById('preset-save-scope').value;
-    const select = document.getElementById('preset-save-slot');
-    select.replaceChildren(new Option('New preset', ''));
-    for (const row of engine_presets().filter(p => p.scope === scope && p.editable)) select.add(new Option(row.name, row.id));
-    select.value = '';
-    save_slot_name();
-}
-
-function save_slot_name() {
-    const row = engine_presets().find(p => p.id === document.getElementById('preset-save-slot').value);
-    document.getElementById('preset-save-name').value = row?.name || '';
-    document.getElementById('preset-save-submit').textContent = row ? 'Replace preset' : 'Save preset';
-}
-
-function open_preset_save(scope) {
-    const dialog = document.getElementById('preset-save-dialog');
-    const select = document.getElementById('preset-save-scope');
-    document.getElementById('preset-message').replaceChildren();
-    preset_scopes(select);
-    if (scope) select.value = scope;
-    save_slots();
-    dialog.querySelector('.preset-error').textContent = '';
-    dialog.showModal();
-    document.getElementById('preset-save-name').focus();
+function edit_preset_slot(scope, preset = null, index = null) {
+    if (presetBusy) return;
+    render_presets();
+    const group = document.getElementById('preset-label-' + scope).parentElement;
+    const rows = engine_presets().filter(row => row.scope === scope);
+    const target = group.querySelector('.preset-group-buttons').children[preset ? rows.findIndex(row => row.id === preset.id) : index];
+    const editor = document.createElement('div');
+    editor.className = 'preset-slot-editor';
+    editor.style.height = target.getBoundingClientRect().height + 'px';
+    const name = document.createElement('input');
+    name.value = preset?.name || '';
+    name.maxLength = 128;
+    name.placeholder = 'Preset name';
+    name.setAttribute('aria-label', 'Preset name');
+    const save = () => {
+        if (!name.value.trim()) { name.focus(); return; }
+        save_presets({action: 'save', scope, id: preset?.id, name: name.value.trim(), settings: capture_preset()});
+    };
+    name.onkeydown = event => {
+        if (event.key === 'Enter') { event.preventDefault(); save(); }
+        if (event.key === 'Escape') { event.preventDefault(); render_presets(); }
+    };
+    editor.append(name,
+        preset_button('\u2713', save, preset ? 'Replace preset (Enter)' : 'Save preset (Enter)'),
+        preset_button('\u00d7', render_presets, 'Cancel (Escape)'));
+    target.replaceWith(editor);
+    name.focus();
 }
 
 function render_preset_editor() {
     const root = document.getElementById('preset-editor');
     root.replaceChildren();
-    if (!presetDraft.length) {
-        const empty = document.createElement('p');
-        empty.textContent = 'No presets.';
-        root.append(empty);
-    }
     for (const [index, preset] of presetDraft.entries()) {
         const row = document.createElement('div');
         row.className = 'preset-edit-row';
-        const position = document.createElement('span');
-        position.textContent = index + 1;
         const input = document.createElement('input');
         input.value = preset.name;
         input.maxLength = 128;
-        input.required = true;
         input.setAttribute('aria-label', 'Preset ' + (index + 1) + ' name');
         input.oninput = () => { preset.name = input.value; document.getElementById('preset-manage-scope').disabled = true; };
-        row.append(position, input);
-        for (const [delta, text, label] of [[-1, '\u2191', 'Move up'], [1, '\u2193', 'Move down']]) {
+        input.onkeydown = event => { if (event.key === 'Enter') event.preventDefault(); };
+        row.append(input);
+        for (const [delta, text] of [[-1, 'Up'], [1, 'Down']]) {
             const button = preset_button(text, () => {
                 const target = index + delta;
                 [presetDraft[index], presetDraft[target]] = [presetDraft[target], presetDraft[index]];
                 document.getElementById('preset-manage-scope').disabled = true;
                 render_preset_editor();
-            }, label + ': ' + preset.name);
-            button.className = 'button';
+            }, text + ': ' + preset.name);
             button.disabled = index + delta < 0 || index + delta >= presetDraft.length;
             row.append(button);
         }
-        const remove = preset_button('\u00d7', () => {
+        row.append(preset_button('Delete', () => {
             presetDraft.splice(index, 1);
             document.getElementById('preset-manage-scope').disabled = true;
             render_preset_editor();
-        }, 'Delete: ' + preset.name);
-        remove.className = 'button';
-        row.append(remove);
+        }, 'Delete: ' + preset.name));
         root.append(row);
     }
 }
 
-async function save_presets(dialog, payload) {
+async function save_presets(payload) {
     if (presetBusy) return;
+    const engine = get_dev_engine();
+    const message = document.getElementById('preset-message');
+    message.replaceChildren();
+    const controls = document.querySelectorAll('#preset-slots button, #preset-slots input, #preset-manager button, #preset-manager input, #preset-manager select, .preset-bar > button, #dev_engine, #base_engine, #workload-form [type=submit]');
+    const disabled = Array.from(controls, control => control.disabled);
+    controls.forEach(control => { control.disabled = true; });
     presetBusy = true;
-    dialog.querySelector('.preset-error').textContent = '';
-    const submit = dialog.querySelector('[type=submit]');
-    submit.disabled = true;
     try {
         const response = await fetch('/presets/' + presetKind + '/', {method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value},
-            body: JSON.stringify({...payload, generation: presetState.generation, engine: get_dev_engine()})});
+            body: JSON.stringify({...payload, version: presetState.versions[engine][payload.scope], engine})});
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Unable to save presets.');
         presetState = data;
         selectedPreset = engine_presets().find(p => p.id === selectedPreset?.id) || null;
         if (payload.action === 'save') selectedPreset = engine_presets().find(p => p.scope === payload.scope && p.name === payload.name);
+        replacePreset = false;
+        document.getElementById('preset-manager').hidden = true;
         render_presets();
-        document.getElementById('preset-message').textContent = '';
-        dialog.close();
+        message.textContent = 'Presets saved.';
     } catch (error) {
-        dialog.querySelector('.preset-error').textContent = error instanceof SyntaxError ? 'Unable to save preset.' : error.message;
-    } finally { presetBusy = false; submit.disabled = false; }
+        if (payload.action === 'manage') document.getElementById('preset-manager').hidden = false;
+        message.textContent = error instanceof SyntaxError ? 'Unable to save presets.' : error.message;
+    } finally {
+        presetBusy = false;
+        controls.forEach((control, index) => { control.disabled = disabled[index]; });
+    }
 }
 
 function initialize_presets(kind) {
@@ -299,34 +297,32 @@ function initialize_presets(kind) {
         editedFields.add(e.target.name);
         for (const group of presetGroups) if (group.includes(e.target.name)) for (const field of group) editedFields.add(field);
     }, true);
-    const save = document.getElementById('preset-save-dialog');
-    const manage = document.getElementById('preset-manage-dialog');
-    document.getElementById('preset-save-open').onclick = () => open_preset_save();
-    document.getElementById('preset-save-scope').onchange = save_slots;
-    document.getElementById('preset-save-slot').onchange = save_slot_name;
-    document.getElementById('preset-save-form').onsubmit = e => {
-        e.preventDefault();
-        save_presets(save, {action: 'save', scope: document.getElementById('preset-save-scope').value,
-            id: document.getElementById('preset-save-slot').value, name: document.getElementById('preset-save-name').value.trim(), settings: capture_preset()});
+    document.getElementById('preset-replace').onclick = () => {
+        replacePreset = !replacePreset;
+        document.getElementById('preset-manager').hidden = true;
+        render_presets();
     };
-    const manageScope = document.getElementById('preset-manage-scope');
-    manageScope.onchange = () => {
-        presetDraft = engine_presets().filter(p => p.scope === manageScope.value && p.editable).map(p => ({id: p.id, name: p.name}));
+    const manager = document.getElementById('preset-manager');
+    const scope = document.getElementById('preset-manage-scope');
+    scope.onchange = () => {
+        presetDraft = engine_presets().filter(p => p.scope === scope.value && p.editable).map(p => ({id: p.id, name: p.name}));
         render_preset_editor();
     };
     document.getElementById('preset-manage-open').onclick = () => {
-        document.getElementById('preset-message').replaceChildren();
-        preset_scopes(manageScope);
-        manageScope.onchange();
-        manage.querySelector('.preset-error').textContent = '';
-        manage.showModal();
+        replacePreset = false;
+        render_presets();
+        scope.replaceChildren();
+        if (presetState.editable[get_dev_engine()]) scope.add(new Option(get_dev_engine() + ' presets', 'engine'));
+        scope.add(new Option('My presets', 'personal'));
+        scope.disabled = false;
+        scope.onchange();
+        manager.hidden = false;
+        scope.focus();
     };
-    document.getElementById('preset-manage-form').onsubmit = e => {
-        e.preventDefault();
-        save_presets(manage, {action: 'manage', scope: manageScope.value, presets: presetDraft});
+    document.getElementById('preset-manage-save').onclick = () => {
+        if (presetBusy) return;
+        manager.hidden = true;
+        save_presets({action: 'manage', scope: scope.value, presets: presetDraft});
     };
-    for (const dialog of [save, manage]) {
-        dialog.querySelector('[data-close-dialog]').onclick = () => { if (!presetBusy) dialog.close(); };
-        dialog.oncancel = e => { if (presetBusy) e.preventDefault(); };
-    }
+    document.getElementById('preset-manage-cancel').onclick = () => { manager.hidden = true; };
 }
