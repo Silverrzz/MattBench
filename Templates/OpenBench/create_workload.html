@@ -241,7 +241,7 @@
                     <label for="book_name"> Opening Book </label> <select id="book_name" name="book_name">
                     <option selected value="NONE"> None </option>
                     {% for name, data in config.books.items %}
-                        <option value="{{ name }}">{{ name }}</option>
+                        <option value="{{ name }}">{{ name }}{% if data.variant != 'standard' %} ({{ data.variant }}){% endif %}</option>
                     {% endfor %}
                     </select>
                 </div>

@@ -670,11 +670,8 @@ def client_version_ref(request):
 def client_match_runner_version_ref(request):
 
     # Enough information to build the right Fastchess version
-    return JsonResponse({
-        'fastchess_min_version' : OPENBENCH_CONFIG['fastchess_min_version'],
-        'fastchess_repo_url'    : OPENBENCH_CONFIG['fastchess_repo_url'],
-        'fastchess_repo_ref'    : OPENBENCH_CONFIG['fastchess_repo_ref'],
-    })
+    runner = OPENBENCH_CONFIG['variants']['standard']['runner']
+    return JsonResponse({'fastchess_' + key: value for key, value in runner.items()})
 
 @csrf_exempt
 def client_get_build_info(request):
