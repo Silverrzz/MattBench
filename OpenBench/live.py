@@ -78,7 +78,7 @@ class LiveUpdates(AsyncJsonWebsocketConsumer):
         server = self.scope.get('server') or ('localhost', 80)
         request.META['SERVER_NAME'] = server[0]
         request.META['SERVER_PORT'] = str(server[1])
-        request.META['wsgi.url_scheme'] = 'https' if self.scope['scheme'] == 'wss' else 'http'
+        request._get_scheme = lambda: urlsplit(dict(self.scope['headers'])[b'origin'].decode()).scheme
         session_store = import_module(settings.SESSION_ENGINE).SessionStore
         request.session = session_store(session_key=self.scope['session'].session_key)
         request.user = get_user(request)
@@ -108,4 +108,4 @@ class LiveUpdates(AsyncJsonWebsocketConsumer):
             raise
         except Exception:
             logger.exception('Live updates failed for %s', self.page.path)
-            await self.close(code=1011)
+            await self.close(code=4500)
