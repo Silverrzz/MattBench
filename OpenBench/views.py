@@ -649,7 +649,7 @@ def verify_worker(function):
 
         # Prompt the worker to soft-restart if its config is out of date
         if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != eligibility_fingerprint():
-            return JsonResponse({ 'error' : 'Bad Client Version: Server Configuration Changed' })
+            return JsonResponse({ 'error' : 'Server Configuration Changed: Reinitialise Worker' })
 
         # Use the secret token as our soft verification
         if machine.secret != args[0].POST['secret']:
