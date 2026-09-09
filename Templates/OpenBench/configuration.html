@@ -35,11 +35,13 @@
                     </select>
                 </div>
             {% endif %}
-            {% if section == 'engines' %}
+            {% if section == 'engines' or section == 'books' %}
                 <fieldset class="form-section">
                     <legend>Supported variants</legend>
                     {% for variant in variants %}<label class="choice"><input type="checkbox" name="variants" value="{{ variant.pk }}" {% if variant.pk|stringformat:'s' in selected_variants %}checked{% endif %}> {{ variant.name }}{% if not variant.enabled %} (disabled){% endif %}</label>{% endfor %}
                 </fieldset>
+            {% endif %}
+            {% if section == 'engines' %}
                 <label class="choice"><input type="checkbox" name="private" {% if values.private %}checked{% endif %}> Private engine</label>
                 <div class="field">
                     <label for="nps">Reference NPS</label>
@@ -97,7 +99,7 @@
             <thead><tr class="table-header">
                 <th scope="col">Name</th>
                 <th scope="col">{% if section == 'books' %}Download{% elif section == 'variants' %}Fastchess variant{% elif section == 'releases' %}Runner{% else %}Source{% endif %}</th>
-                <th scope="col">{% if section == 'engines' %}NPS{% elif section == 'books' %}Variant{% elif section == 'variants' %}Runner release{% elif section == 'runners' %}Releases{% else %}Reference{% endif %}</th>
+                <th scope="col">{% if section == 'engines' %}NPS{% elif section == 'books' %}Variants{% elif section == 'variants' %}Runner release{% elif section == 'runners' %}Releases{% else %}Reference{% endif %}</th>
                 {% if admin %}<th scope="col">Status</th><th scope="col">Actions</th>{% endif %}
             </tr></thead>
             <tbody>
@@ -107,7 +109,7 @@
                         <td>{% if section == 'variants' %}{{ entry.settings.fastchess_variant }}{% elif section == 'releases' %}<a href="/manage/runners/{{ entry.runner_id }}/">{{ entry.runner }}</a>{% else %}<a href="{{ entry.settings.source }}">{{ entry.settings.source }}</a>{% endif %}</td>
                         <td>
                             {% if section == 'engines' %}{{ entry.settings.nps }}
-                            {% elif section == 'books' %}{{ entry.variant }}
+                            {% elif section == 'books' %}{% for variant in entry.variants.all %}{{ variant.name }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}
                             {% elif section == 'variants' %}<a href="/manage/releases/{{ entry.runner_release_id }}/">{{ entry.runner_release }}</a>
                             {% elif section == 'runners' %}{% for release in entry.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release.settings.ref }}</a>{% if not forloop.last %}, {% endif %}{% endfor %} <a href="/manage/releases/new/?runner={{ entry.pk }}">Add release</a>
                             {% else %}{{ entry.settings.ref }}{% endif %}

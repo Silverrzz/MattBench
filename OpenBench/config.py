@@ -57,9 +57,13 @@ def load_config():
             'repo_ref': release.settings.get('commit') or release.settings['ref'],
             'min_version': release.settings['min_version'],
         })
-    config['books'] = {book.name: dict(book.settings, variant=book.variant.name, format=book.name.rsplit('.', 1)[-1].lower())
-                       for book in OpeningBook.objects.filter(enabled=True).select_related('variant').order_by('name')
-                       if book.variant and book.variant.name in config['variants']}
+    config['books'] = {}
+    for book in OpeningBook.objects.filter(enabled=True).prefetch_related('variants').order_by('name'):
+        variants = sorted(variant.name for variant in book.variants.all() if variant.name in config['variants'])
+        if variants:
+            data = dict(book.settings, variants=variants, format=book.name.rsplit('.', 1)[-1].lower())
+            data.pop('variant', None)
+            config['books'][book.name] = data
     config['engines'] = {}
     for engine in EngineConfig.objects.filter(enabled=True).order_by('name').prefetch_related('presets', 'variants'):
         data = copy.deepcopy(engine.settings)
@@ -119,9 +123,16 @@ def workload_execution(book_name, engines, variant_name=None):
     book = config['books'].get(book_name)
     if book is None and book_name != 'NONE':
         raise ValidationError('Choose an enabled opening book')
-    if book and variant_name and variant_name != book['variant']:
+    if book and variant_name and variant_name not in book['variants']:
         raise ValidationError('The opening book does not match the selected variant')
-    name = variant_name or (book['variant'] if book else 'standard')
+    if not variant_name and book:
+        supported = set(book['variants'])
+        for engine in engines:
+            supported.intersection_update(config['engines'].get(engine, {}).get('variants', []))
+        if len(supported) != 1:
+            raise ValidationError('Select a variant supported by the opening book and engines')
+        variant_name = supported.pop()
+    name = variant_name or 'standard'
     variant = config['variants'].get(name)
     if variant is None:
         raise ValidationError('Choose an enabled variant and runner release')
@@ -158,6 +169,9 @@ def verify_book_config(name, data):
         raise ValidationError('Book source must be an HTTPS URL')
     if not isinstance(data.get('sha'), str) or not re.fullmatch('[a-fA-F0-9]{64}', data['sha']):
         raise ValidationError('Book SHA-256 must contain 64 hexadecimal characters')
+    if 'variants' in data and (not isinstance(data['variants'], list) or not data['variants'] or
+                               any(not isinstance(variant, str) or not variant for variant in data['variants'])):
+        raise ValidationError('Book variants must be a nonempty list of variant names')
 
 
 def verify_preset(kind, data):
@@ -189,7 +203,7 @@ def verify_variant_config(data):
     if not re.fullmatch('[a-zA-Z0-9_-]+', data.get('fastchess_variant', '')) or type(data.get('syzygy')) is not bool:
         raise ValidationError('Provide a Fastchess variant name and Syzygy support flag')
 
-OPENBENCH_STATIC_VERSION = 'mattbench-red-4'
+OPENBENCH_STATIC_VERSION = 'mattbench-live-variants-1'
 OPENBENCH_CONFIG = ConfigMapping()
 OPENBENCH_CUSTOM_FOCUS = True
 

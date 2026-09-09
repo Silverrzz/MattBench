@@ -288,6 +288,13 @@ def test_is_fischer(test):
         return test.execution.get('fastchess_variant') == 'fischerandom'
     return 'FRC' in test.book_name.upper() or '960' in test.book_name.upper()
 
+@register.filter
+def test_variant_name(test):
+    variant = test.execution.get('variant') if test.execution else None
+    if not variant:
+        return 'FRC' if test_is_fischer(test) else ''
+    return 'FRC' if variant == 'fischerandom' else '' if variant == 'standard' else variant
+
 register.filter('book_download_link', book_download_link)
 register.filter('network_download_link', network_download_link)
 

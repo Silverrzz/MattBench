@@ -1,6 +1,6 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const testNotes = Array.from(document.querySelectorAll('[data-test-notes]'));
-    const notesToggles = document.querySelectorAll('[data-show-test-notes]');
+function format_live_content(root) {
+    const testNotes = Array.from(root.querySelectorAll('[data-test-notes]'));
+    const notesToggles = root.querySelectorAll('[data-show-test-notes]');
     let showNotes = false;
     try { showNotes = localStorage.getItem('mattbench.showNotes') === 'true'; } catch {}
     testNotes.forEach(notes => {
@@ -18,6 +18,50 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     });
+    for (const [selector, options] of [
+        ['.timestamp', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }],
+        ['.datestamp', { month: 'short', day: '2-digit' }]
+    ]) {
+        root.querySelectorAll(selector + ':not([data-formatted])').forEach(element => {
+            const date = new Date(Number(element.textContent.trim()) * 1000);
+            if (!Number.isFinite(date.getTime())) return;
+            element.textContent = date.toLocaleString(undefined, options);
+            element.title = date.toISOString();
+            element.dataset.formatted = 'true';
+        });
+    }
+
+    root.querySelectorAll('.engine-options:not([data-formatted])').forEach(cell => {
+        cell.dataset.formatted = 'true';
+        const value = cell.textContent.trim();
+        if (value.split(/\s+/).length <= 2) return;
+        const threads = value.match(/Threads=\d+/);
+        const hash = value.match(/Hash=\d+/);
+        if (!threads || !hash) return;
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        const options = document.createElement('div');
+        summary.textContent = `${threads[0]} ${hash[0]} · All options`;
+        options.className = 'engine-options-expanded';
+        options.textContent = value.replace(/\s+/g, '\n');
+        details.append(summary, options);
+        cell.replaceChildren(details);
+    });
+
+    root.querySelectorAll('table:not(.test-config)').forEach(table => {
+        if (table.closest('.table-scroll')) return;
+        const region = document.createElement('div');
+        region.className = 'table-scroll';
+        region.tabIndex = 0;
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', `${table.getAttribute('aria-label') || 'Data table'}; scroll horizontally for more columns`);
+        table.before(region);
+        region.append(table);
+    });
+
+}
+
+document.addEventListener('DOMContentLoaded', () => {
     const sidebar = document.getElementById('sidebar');
     const toggle = document.getElementById('sidebar-toggle');
     const close = document.getElementById('sidebar-close');
@@ -64,64 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const current = parts[1] === 'new' ? `new-${section}` : aliases[section] || section;
     sidebar.querySelector(`[data-nav="${current.replace(/[^a-z-]/g, '')}"]`)?.setAttribute('aria-current', 'page');
 
-    for (const [selector, options] of [
-        ['.timestamp', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }],
-        ['.datestamp', { month: 'short', day: '2-digit' }]
-    ]) {
-        document.querySelectorAll(selector).forEach(element => {
-            const date = new Date(Number(element.textContent.trim()) * 1000);
-            if (!Number.isFinite(date.getTime())) return;
-            element.textContent = date.toLocaleString(undefined, options);
-            element.title = date.toISOString();
-        });
-    }
-
-    document.querySelectorAll('.engine-options').forEach(cell => {
-        const value = cell.textContent.trim();
-        if (value.split(/\s+/).length <= 2) return;
-        const threads = value.match(/Threads=\d+/);
-        const hash = value.match(/Hash=\d+/);
-        if (!threads || !hash) return;
-        const details = document.createElement('details');
-        const summary = document.createElement('summary');
-        const options = document.createElement('div');
-        summary.textContent = `${threads[0]} ${hash[0]} · All options`;
-        options.className = 'engine-options-expanded';
-        options.textContent = value.replace(/\s+/g, '\n');
-        details.append(summary, options);
-        cell.replaceChildren(details);
-    });
-
-    document.querySelectorAll('#content table').forEach(table => {
-        if (table.closest('.table-scroll')) return;
-        const region = document.createElement('div');
-        region.className = 'table-scroll';
-        region.tabIndex = 0;
-        region.setAttribute('role', 'region');
-        region.setAttribute('aria-label', `${table.getAttribute('aria-label') || 'Data table'}; scroll horizontally for more columns`);
-        table.before(region);
-        region.append(table);
-    });
-
-    const refresh = document.querySelector('[data-refresh-seconds]');
-    if (refresh) {
-        let edited = false;
-        const delay = Number(refresh.dataset.refreshSeconds) * 1000;
-        const markEdited = event => {
-            if (event.target.closest('form')) edited = true;
-        };
-        document.addEventListener('input', markEdited);
-        document.addEventListener('change', markEdited);
-        function refreshPage() {
-            const interacting = document.activeElement?.matches('input, select, textarea, button, summary, a, [tabindex="0"]');
-            if (!edited && !document.hidden && !interacting && !document.body.classList.contains('sidebar-open')) {
-                window.location.reload();
-                return;
-            }
-            window.setTimeout(refreshPage, delay);
-        }
-        window.setTimeout(refreshPage, delay);
-    }
+    format_live_content(document);
 });
 
 document.addEventListener('submit', event => {

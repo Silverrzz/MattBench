@@ -133,6 +133,9 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
                 for field in ('info', 'priority', 'throughput', 'workload_size')
             }
             request.live_payload['summary'] = fetch_result_summaries(workload)
+            if workload.test_mode == 'SPRT':
+                from OpenBench.llr_history import workload_llr_history
+                request.live_payload['history'] = workload_llr_history(workload)
             if 'results' in request.live_subscriptions:
                 request.live_payload['results'] = fetch_results(workload)
             if 'digest' in request.live_subscriptions and data['type'] == 'TUNE':

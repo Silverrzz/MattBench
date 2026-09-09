@@ -1,5 +1,7 @@
 {% extends "OpenBench/base.html" %}
 
+{% load live %}
+
 {% block scripts %}
 
     <script>
@@ -139,6 +141,8 @@
 
     {% if tests %}<div class="search-results-spacer"></div>{% endif %}
 
+    <div id="live-tests" data-live>
+    {% live_region "live-tests" %}
     {% if tests %}
     <table class="test-list hoverable" aria-label="Search results">
         <thead><tr class="column-headings"><th scope="col">Date</th><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Identifier</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col"><div class="results-heading"><span>Results</span>{% include "OpenBench/Blocks/notes_toggle.html" %}</div></th></tr></thead>
@@ -155,4 +159,6 @@
     {% elif request.GET.go %}
         <div class="empty-state"><strong>No matching tests</strong></div>
     {% endif %}
+    {% endlive_region %}
+    </div>
 {% endblock %}

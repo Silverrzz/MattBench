@@ -1,11 +1,14 @@
 {% extends "OpenBench/base.html" %}
 
+{% load live %}
+
 {% block page_actions %}
     <a class="button button-primary" href="/test/new/"><span aria-hidden="true">+</span> New test</a>
 {% endblock %}
 
 {% block content %}
-    <div class="tests-page" data-refresh-seconds="30">
+    <div class="tests-page" id="live-tests" data-live>
+    {% live_region "live-tests" %}
         {% if paging.page == 1 %}
             {% if pending %}
                 <section class="tests-section" aria-labelledby="pending-heading">
@@ -33,5 +36,6 @@
             {% endif %}
             {% if paging.prev != paging.next %}{% include "OpenBench/Blocks/pagebrowser.html" %}{% endif %}
         </section>
+    {% endlive_region %}
     </div>
 {% endblock %}

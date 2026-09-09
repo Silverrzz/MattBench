@@ -75,6 +75,7 @@ function populate_results(results) {
 }
 
 async function fetch_results(workload_id) {
+    if (window.subscribe_live) { window.subscribe_live('results'); return; }
     const button = document.getElementById('fetch-results');
     const feedback = document.getElementById('results-feedback');
     if (button.disabled) return;
@@ -197,24 +198,7 @@ async function fetch_summary(workload_id) {
         const response = await fetch(`/api/workload/${workload_id}/summary/`);
         if (!response.ok) throw new Error('Request failed');
         const data = await response.json();
-        if (!data.summary.user.length) {
-            message.textContent = 'No worker results.';
-            return;
-        }
-        const heading = document.createElement('h2');
-        heading.textContent = 'Worker summary';
-        const region = document.createElement('div');
-        region.className = 'table-scroll';
-        region.tabIndex = 0;
-        region.setAttribute('role', 'region');
-        region.setAttribute('aria-label', 'Worker summary; scroll horizontally for more columns');
-        const table = document.createElement('table');
-        table.className = 'stripes wrappable summary-table';
-        append_summary_section(table, 'User', data.summary.user);
-        append_summary_section(table, 'CPU', data.summary.cpu_name, format_cpu_name);
-        append_summary_section(table, 'ISA', data.summary.isa_name);
-        region.append(table);
-        container.replaceChildren(heading, region);
+        populate_summary(data.summary);
     } catch {
         message.textContent = 'Could not load the worker summary.';
         const retry = document.createElement('button');
@@ -242,8 +226,13 @@ async function copy_spsa_outputs(workload_id) {
 }
 
 async function fetch_spsa_digest(workload_id) {
+    if (window.subscribe_live) { window.subscribe_live('digest'); return; }
     const resp  = await fetch(`/api/spsa/${workload_id}/digest/`)
     const text  = await resp.text()
+    populate_spsa_digest(text);
+}
+
+function populate_spsa_digest(text) {
     const lines = text.trim().split('\n')
 
     // Skip the header line (index 0) and process data rows
@@ -267,4 +256,26 @@ async function fetch_spsa_digest(workload_id) {
     tbody.style.display = ''
     const buttonContainer = document.getElementById('spsa-digest-button-container')
     buttonContainer.style.display = 'none'
+}
+
+function populate_summary(summary) {
+    const container = document.getElementById('summary-container');
+        if (!summary.user.length) {
+            container.textContent = 'No worker results.';
+            return;
+        }
+        const heading = document.createElement('h2');
+        heading.textContent = 'Worker summary';
+        const region = document.createElement('div');
+        region.className = 'table-scroll';
+        region.tabIndex = 0;
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', 'Worker summary; scroll horizontally for more columns');
+        const table = document.createElement('table');
+        table.className = 'stripes wrappable summary-table';
+        append_summary_section(table, 'User', summary.user);
+        append_summary_section(table, 'CPU', summary.cpu_name, format_cpu_name);
+        append_summary_section(table, 'ISA', summary.isa_name);
+        region.append(table);
+        container.replaceChildren(heading, region);
 }

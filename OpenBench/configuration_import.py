@@ -96,16 +96,16 @@ def import_directory(directory, kind, apply=False, replace=False, disable_missin
         if kind == 'engines':
             names = data.get('variants', ['standard', 'fischerandom'])
         else:
-            names = [data.get('variant', 'fischerandom' if any(marker in name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard')]
+            names = data.get('variants', [data.get('variant', 'fischerandom' if any(marker in name.upper() for marker in ('FRC', '960', 'FISCHER')) else 'standard')])
         variants = list(Variant.objects.filter(name__in=names, enabled=True, runner_release__enabled=True, runner_release__runner__enabled=True))
         if not names or len(variants) != len(set(names)):
             raise ValidationError('Unknown or disabled variants for %s' % name)
         if kind == 'books':
-            row.variant = variants[0]
+            row.settings.pop('variant', None)
+            row.settings['variants'] = sorted(variant.name for variant in variants)
         row.full_clean()
         row.save()
-        if kind == 'engines':
-            row.variants.set(variants)
+        row.variants.set(variants)
         for workload, values in presets.items():
             row.presets.filter(owner=None, workload_type=workload).exclude(name__in=values).delete()
             for position, (label, value) in enumerate(values.items()):

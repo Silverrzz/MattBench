@@ -62,6 +62,7 @@
             if (data.summary) populate_summary(data.summary);
             if (data.results) populate_results(data.results);
             if (data.digest !== undefined) populate_spsa_digest(data.digest);
+            if (data.history) window.dispatchEvent(new CustomEvent('live-history', {detail: data.history}));
             Object.entries(data.fields || {}).forEach(([id, value]) => {
                 const input = document.getElementById(id);
                 if (input && !input.dataset.liveDirty && input !== document.activeElement) {

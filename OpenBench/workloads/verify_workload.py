@@ -56,6 +56,9 @@ def verify_workload(request, workload_type):
         request.workload_execution = OpenBench.config.workload_execution(
             request.POST.get('book_name'), engines, request.POST.get('variant'))
         if not request.workload_execution['syzygy']:
+            for branch in ('dev',) if workload_type == 'TUNE' else ('dev', 'base'):
+                if re.search(r'\bSyzygy\w*\s*=', request.POST.get(branch + '_options', ''), re.IGNORECASE):
+                    errors.append('The selected variant does not support Syzygy engine options')
             for field in ('syzygy_wdl', 'syzygy_adj'):
                 if request.POST.get(field) not in ('DISABLED', 'OPTIONAL'):
                     errors.append('The selected variant does not support Syzygy')

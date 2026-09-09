@@ -14,6 +14,7 @@ from django.http import HttpRequest, QueryDict
 from django.urls import Resolver404, resolve
 
 from OpenBench import views
+from OpenBench.config import ConfigurationMiddleware
 
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,9 @@ class LiveUpdates(AsyncJsonWebsocketConsumer):
         request.user = get_user(request)
         request.live_regions = {}
         request.live_subscriptions = self.subscriptions.copy()
-        response = self.route.func(request, *self.route.args, **self.route.kwargs)
+        response = ConfigurationMiddleware(
+            lambda current: self.route.func(current, *self.route.args, **self.route.kwargs)
+        )(request)
         if response.status_code != 200:
             return None
         return request.live_payload

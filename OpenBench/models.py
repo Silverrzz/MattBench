@@ -383,7 +383,7 @@ class OpeningBook(Model):
     enabled  = BooleanField(default=False)
     settings = JSONField(default=dict, blank=True)
     updated  = DateTimeField(auto_now=True)
-    variant  = ForeignKey(Variant, on_delete=PROTECT, null=True, blank=True)
+    variants = ManyToManyField(Variant, related_name='books', blank=True)
 
     def clean(self):
         from OpenBench.config import verify_book_config

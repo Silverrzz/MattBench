@@ -134,6 +134,7 @@
 
     function schedule() {
         clearTimeout(timer);
+        if (window.subscribe_live) return;
         if (!data?.finished && !document.hidden) timer = setTimeout(refresh, 30000);
     }
 
@@ -159,6 +160,13 @@
             schedule();
         }
     }
+
+    window.addEventListener('live-history', event => {
+        if (!validate(event.detail)) return;
+        data = event.detail;
+        feedback.hidden = true;
+        draw();
+    });
 
     plot.addEventListener('pointermove', inspect);
     plot.addEventListener('pointerdown', inspect);

@@ -15,13 +15,13 @@ from OpenBench.views import render
 SECTIONS = {'engines': ('Engines', EngineConfig), 'books': ('Books', OpeningBook),
             'variants': ('Variants', Variant), 'runners': ('Runners', Runner),
             'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', None)}
-RELATIONS = {OpeningBook: ('variant', Variant), Variant: ('runner_release', RunnerRelease),
+RELATIONS = {Variant: ('runner_release', RunnerRelease),
              RunnerRelease: ('runner', Runner)}
 
 
 def entry_version(instance):
     related = [str(getattr(instance, field + '_id')) for field in ('variant', 'runner_release', 'runner') if hasattr(instance, field + '_id')]
-    if isinstance(instance, EngineConfig) and not instance._state.adding:
+    if isinstance(instance, (EngineConfig, OpeningBook)) and not instance._state.adding:
         related += sorted(str(pk) for pk in instance.variants.values_list('pk', flat=True))
     return fingerprint([instance.name, instance.enabled, instance.settings, related])
 
@@ -50,6 +50,8 @@ def manage(request, section='engines', identifier=None):
         objects = model.objects.order_by('name')
         if model in RELATIONS:
             objects = objects.select_related(RELATIONS[model][0])
+        if model in (EngineConfig, OpeningBook):
+            objects = objects.prefetch_related('variants')
         if model is Runner:
             objects = objects.prefetch_related('releases')
         context['objects'] = objects
@@ -65,6 +67,9 @@ def manage(request, section='engines', identifier=None):
         values[field] = str(getattr(instance, field + '_id') or request.GET.get(field, ''))
         context.update(relation_name=field, relation_label=field.replace('_', ' ').title(),
                        related_objects=related_model.objects.order_by('name'))
+    if section in ('engines', 'books'):
+        context['variants'] = Variant.objects.order_by('name')
+        context['selected_variants'] = [str(pk) for pk in instance.variants.values_list('pk', flat=True)] if identifier != 'new' else [request.GET.get('variant', '')]
     if section == 'engines':
         build = values.pop('build', {})
         values.update(path=build.get('path', ''), compilers='\n'.join(build.get('compilers', [])),
@@ -75,7 +80,7 @@ def manage(request, section='engines', identifier=None):
         values.update(request.POST.dict())
         for field in ('enabled', 'private', 'syzygy'):
             values[field] = request.POST.get(field) == 'on'
-        if section == 'engines':
+        if section in ('engines', 'books'):
             context['selected_variants'] = request.POST.getlist('variants')
         try:
             with transaction.atomic():
@@ -95,6 +100,13 @@ def manage(request, section='engines', identifier=None):
                     field, related_model = relation
                     related = get_object_or_404(related_model, pk=request.POST.get(field))
                     setattr(instance, field, related)
+                if section in ('engines', 'books'):
+                    selected = list(Variant.objects.filter(pk__in=context['selected_variants']))
+                    if len(selected) != len(set(context['selected_variants'])):
+                        raise ValidationError('Unknown variant')
+                    if instance.enabled and (not selected or any(not variant.enabled for variant in selected)):
+                        raise ValidationError('Enabled entries require enabled variants')
+                    data['variants'] = sorted(variant.name for variant in selected)
                 if section == 'engines':
                     data.update(private=values['private'], nps=int(request.POST.get('nps', '0')))
                     data['build'] = {'path': request.POST.get('path', '').strip(),
@@ -102,18 +114,10 @@ def manage(request, section='engines', identifier=None):
                                         for field in ('compilers', 'systems', 'cpuflags')}}
                     if data['build']['path'] == '""':
                         data['build']['path'] = ''
-                    selected = list(Variant.objects.filter(pk__in=context['selected_variants']))
-                    if len(selected) != len(set(context['selected_variants'])):
-                        raise ValidationError('Unknown variant')
-                    if instance.enabled and (not selected or any(not variant.enabled for variant in selected)):
-                        raise ValidationError('Enabled engines require enabled variants')
-                    data['variants'] = sorted(variant.name for variant in selected)
                 elif section == 'books':
                     data['sha'] = request.POST.get('sha', '').strip()
-                    data['variant'] = instance.variant.name
+                    data.pop('variant', None)
                     data.pop('format', None)
-                    if instance.enabled and not instance.variant.enabled:
-                        raise ValidationError('Choose an enabled variant')
                 elif section == 'variants':
                     data = {'fastchess_variant': request.POST.get('fastchess_variant', '').strip(), 'syzygy': values['syzygy']}
                 elif section == 'releases' and identifier == 'new':
@@ -125,12 +129,12 @@ def manage(request, section='engines', identifier=None):
                         raise ValidationError('Disable the runner releases first')
                     if section == 'releases' and Variant.objects.filter(runner_release=instance, enabled=True).exists():
                         raise ValidationError('Disable the variants using this release first')
-                    if section == 'variants' and (instance.engines.filter(enabled=True).exists() or OpeningBook.objects.filter(variant=instance, enabled=True).exists()):
+                    if section == 'variants' and (instance.engines.filter(enabled=True).exists() or OpeningBook.objects.filter(variants=instance, enabled=True).exists()):
                         raise ValidationError('Disable or reassign the engines and books using this variant first')
                 instance.settings = data
                 instance.full_clean()
                 instance.save()
-                if section == 'engines':
+                if section in ('engines', 'books'):
                     instance.variants.set(selected)
             request.session['status_message'] = '%s saved.' % instance
             return redirect('/manage/%s/' % ('runners' if section == 'releases' else section))

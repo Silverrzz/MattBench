@@ -7,7 +7,7 @@
         <span class="workload-id">#{{ test.id }}</span>
         {% include "OpenBench/Blocks/workloadstatus.html" %}
         {% if test.error %}<span class="test-error" title="A worker reported a crash or illegal move">Error</span>{% endif %}
-        {% if test|test_is_fischer %}<span class="test-flag" title="Fischer random chess">FRC</span>{% endif %}
+        {% if test|test_variant_name %}<span class="test-flag">{{ test|test_variant_name }}</span>{% endif %}
     </div>
 </td>
 <td class="test-comparison"><a href="{{ test|gitDiffLink }}" aria-label="Compare code for test {{ test.id }}">diff ↗</a></td>

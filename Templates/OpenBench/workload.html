@@ -2,7 +2,7 @@
 
 {% block title %}{{ workload }} · MattBench{% endblock %}
 
-{% load mytags %}
+{% load mytags live %}
 {% load static %}
 
 {% block page_heading %}{% endblock %}
@@ -15,28 +15,26 @@
         <script src="{% static 'llr_history.js' %}?{{ static_version }}" defer></script>
     {% endif %}
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            fetch_summary({{workload.id}});
-        });
-    </script>
+
 
 {% endblock %}
 
 {% block content %}
 
-    <div class="workload-container" data-refresh-seconds="30">
+    <div class="workload-container">
 
-    <div id="config" style="display: block; overflow-x: auto;">
+    <div id="config" data-live>
+        {% live_region "config" %}
         <h2>Configuration</h2>
-        <table class="test-config left-align wrappable" style="table-layout: auto; width: 100%;">
+        <table class="test-config left-align wrappable">
 
             <tr><td class="td-label">Author</td><td>{{workload.author|capfirst}}</td></tr>
+            <tr><td class="td-label">Variant</td><td>{{workload.execution.variant|default:'standard'}}</td></tr>
             <tr><td class="td-label">Creation</td><td class="timestamp">{{workload.creation|date:'U'}}</td></tr>
 
             <!-- All of the Dev Engine ( or Sole Engine ) information -->
             <tr><td class="td-label">{{dev_text}} Source</td><td><a href="{{workload.dev_repo}}">{{workload.dev_repo}}</a></td></tr>
-            <tr><td class="td-label">{{dev_text}} Sha</td><td>{{workload.dev.sha}}</td></tr>
+            <tr><td class="td-label">{{dev_text}} SHA</td><td>{{workload.dev.sha}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Branch</td><td class="branch_name">{{workload.dev.name|prettyName}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Bench</td><td>{{workload.dev.bench}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</a></td></tr>
@@ -46,7 +44,7 @@
             <!-- All of the Base Engine information, which only exists for TESTs -->
             {% if type == "TEST" or type == "DATAGEN" %}
                 <tr><td class="td-label">Base Source</td><td><a href="{{workload.base_repo}}">{{workload.base_repo}}</a></td></tr>
-                <tr><td class="td-label">Base Sha</td><td>{{workload.base.sha}}</td></tr>
+                <tr><td class="td-label">Base SHA</td><td>{{workload.base.sha}}</td></tr>
                 <tr><td class="td-label">Base Branch</td><td class="branch_name">{{workload.base.name|prettyName}}</td></tr>
                 <tr><td class="td-label">Base Bench</td><td>{{workload.base.bench}}</td></tr>
                 <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</a></td></tr>
@@ -80,6 +78,7 @@
             {% endif %}
 
         </table>
+        {% endlive_region %}
     </div>
 
     <div id="actions" class="ml-3">
@@ -87,7 +86,8 @@
         <!-- Dev vs Base [Git Diff Link] -->
         <h4><a href="{{workload|gitDiffLink}}">{{workload|git_diff_text}}</a></h4>
 
-        <div class="anchor-container">
+        <div class="anchor-container" id="live-actions" data-live>
+        {% live_region "live-actions" %}
 
             <!-- Approve Button: For Admins, or Cross-approvers -->
             {% if not workload.approved and profile.approver and profile.user.username != workload.author %}
@@ -130,6 +130,7 @@
                     <a class="anchorbutton btn-disabled">Delete</a>
                 {% endif %}
             {% endif %}
+        {% endlive_region %}
         </div>
 
         <!-- Copy Button: Copy the current results statblock -->
@@ -160,6 +161,8 @@
             </div>
         {% endif %}
 
+        <div id="live-statistics" data-live>
+        {% live_region "live-statistics" %}
         <p id="workload-feedback" class="field-note" role="status"></p>
         {% if type == "TEST" %}
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
@@ -168,6 +171,9 @@
         {% elif type == "DATAGEN" %}
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
         {% endif %}
+
+        {% endlive_region %}
+        </div>
 
         {% if workload.test_mode == 'SPRT' %}
             {% include 'OpenBench/Blocks/llr_history.html' %}
