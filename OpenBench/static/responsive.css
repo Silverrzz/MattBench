@@ -10,7 +10,7 @@
 #workload-form .form-stack > h3 { font-size: 15px; }
 #workload-form .form-stack > h3:not(:first-child) { margin-top: 4px; padding-top: 12px; }
 @media (min-width: 641px) and (pointer: fine) {
-    #workload-form .field { grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 8px; }
+    #workload-form .field:has(> label) { grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 8px; }
     #content #workload-form .field > :is(input, select, textarea) { min-height: 32px; padding: 6px 8px; font-size: 14px; line-height: 1.2; }
     #workload-form .field > label { font-size: 12px; }
 }
