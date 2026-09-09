@@ -1,5 +1,6 @@
 
 var Networks = JSON.parse(document.getElementById('json-networks').textContent);
+var network_sort_fields = ['default', 'engine', 'name'];
 
 function is_greater_than(a, b, attrs) {
 
@@ -25,6 +26,7 @@ function swap_networks(index1, index2) {
 }
 
 function sort_networks(fields) {
+    network_sort_fields = fields;
 
     for (let i = 0; i != Networks.length; i++)
         for (let j = i + 1; j != Networks.length; j++)

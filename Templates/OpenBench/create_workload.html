@@ -24,13 +24,13 @@
 
 {% block content %}
 
-    <form method="POST" action="{{submit_endpoint}}">
+    <form class="create-workload" method="POST" action="{{submit_endpoint}}">
         {% csrf_token %}
 
         <div class="form w-100">
             <div class="col">
 
-                <h3> Engines </h3>
+                <h3> Engines &amp; Branches </h3>
 
                 <div class="row">
                     <label for="dev_engine"> {{dev_text}} Engine </label>
@@ -39,6 +39,10 @@
                             <option value="{{ engine }}">{{ engine }}</option>
                         {% endfor %}
                     </select>
+                </div>
+
+                <div class="row">
+                    <label for="dev_branch"> {{dev_text}} Branch </label> <input id="dev_branch" name="dev_branch" autofocus>
                 </div>
 
                 <div class="row">
@@ -56,15 +60,16 @@
                     </div>
 
                     <div class="row">
+                        <label for="base_branch"> Base Branch </label> <input id="base_branch" name="base_branch">
+                    </div>
+
+                    <div class="row">
                         <label for="base_repo"> Base Source </label> <input id="base_repo" name="base_repo">
                     </div>
                 {% endif %}
 
                 <h3> {{dev_title_text}} Settings </h3>
 
-                <div class="row">
-                    <label for="dev_branch" > {{dev_text}} Branch </label> <input id="dev_branch" name="dev_branch" autofocus>
-                </div>
                 <div class="row">
                     <label for="dev_bench" > {{dev_text}} Bench </label> <input value="Autofill" id="dev_bench" name="dev_bench">
                 </div>
@@ -82,9 +87,6 @@
 
                     <h3> Base Settings </h3>
 
-                    <div class="row">
-                        <label for="base_branch"> Base Branch </label> <input id="base_branch" name="base_branch">
-                    </div>
                     <div class="row">
                         <label for="base_bench"> Base Bench </label> <input value="Autofill" id="base_bench" name="base_bench">
                     </div>
@@ -133,7 +135,7 @@
                     <h3> SPSA Input </h3>
 
                     <div class="row">
-                        <textarea style="margin-left:24px" id="spsa_inputs" name="spsa_inputs" rows=9></textarea>
+                        <textarea id="spsa_inputs" name="spsa_inputs" rows=9></textarea>
                     </div>
 
                 {% endif %}

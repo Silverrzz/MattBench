@@ -72,6 +72,10 @@ function populate_results(results) {
 }
 
 async function fetch_results(workload_id) {
+    if (window.subscribe_live) {
+        window.subscribe_live('results');
+        return;
+    }
     fetch(`/api/workload/${workload_id}/results/`)
         .then(r => r.json())
         .then(data => populate_results(data.results))
@@ -169,21 +173,19 @@ function append_summary_section(table, label, rows, key_formatter) {
 async function fetch_summary(workload_id) {
     fetch(`/api/workload/${workload_id}/summary/`)
         .then(r => r.json())
-        .then(data => {
-            const container = document.getElementById('summary-container');
-            container.innerHTML = ''; // Rebuild the whole table each fetch
-
-            const table = document.createElement('table');
-            table.className = 'stripes wrappable summary-table';
-
-            append_summary_section(table, 'User', data.summary.user);
-            append_summary_section(table, 'CPU',  data.summary.cpu_name, format_cpu_name);
-            append_summary_section(table, 'ISA',  data.summary.isa_name);
-
-            container.appendChild(table);
-        })
+        .then(data => populate_summary(data.summary))
 }
 
+function populate_summary(summary) {
+    const container = document.getElementById('summary-container');
+    const table = document.createElement('table');
+    table.className = 'stripes wrappable summary-table';
+    append_summary_section(table, 'User', summary.user);
+    append_summary_section(table, 'CPU', summary.cpu_name, format_cpu_name);
+    append_summary_section(table, 'ISA', summary.isa_name);
+    container.replaceChildren(table);
+    prepare_responsive_tables(container);
+}
 
 async function copy_spsa_inputs(workload_id) {
     const resp = await fetch(`/api/spsa/${workload_id}/inputs/`)
@@ -198,8 +200,16 @@ async function copy_spsa_outputs(workload_id) {
 }
 
 async function fetch_spsa_digest(workload_id) {
+    if (window.subscribe_live) {
+        window.subscribe_live('digest');
+        return;
+    }
     const resp  = await fetch(`/api/spsa/${workload_id}/digest/`)
     const text  = await resp.text()
+    populate_spsa_digest(text)
+}
+
+function populate_spsa_digest(text) {
     const lines = text.trim().split('\n')
 
     // Skip the header line (index 0) and process data rows

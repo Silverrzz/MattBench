@@ -1,10 +1,10 @@
 {% extends "OpenBench/base.html" %}
 
-{% load mytags %}
+{% load mytags live %}
 
 {% block content %}
 
-    <meta http-equiv="refresh" content="30">
+
 {% block scripts %}
 <style>
     #content {
@@ -13,6 +13,8 @@
 </style>
 {% endblock %}
 
+    <div id="live-tests" data-live>
+    {% live_region "live-tests" %}
     <table class="test-list stripes hoverable">
 
         <!-- Only show Pending tests for the front page of the Index -->
@@ -56,5 +58,7 @@
     </table>
 
     {% include "OpenBench/Blocks/pagebrowser.html" %}
+    {% endlive_region %}
+    </div>
 
 {% endblock %}

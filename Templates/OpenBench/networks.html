@@ -1,6 +1,6 @@
 {% extends "OpenBench/base.html" %}
 
-{% load static %}
+{% load static live %}
 
 {% block scripts %}
 
@@ -19,6 +19,8 @@
 {% endblock %}
 
 {% block content %}
+    <div id="live-networks" data-live>
+    {% live_region "live-networks" %}
 
     <table id="network-table" class="hoverable">
 
@@ -71,4 +73,6 @@
 
     </table>
 
+    {% endlive_region %}
+    </div>
 {% endblock %}

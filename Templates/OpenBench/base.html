@@ -20,14 +20,20 @@
 
         <title>{% block title %}MattBench{% endblock %}</title>
 
+        <script src="{% static 'responsive.js' %}?{{ static_version }}" defer></script>
+        <script src="{% static 'live.js' %}?{{ static_version }}" defer></script>
+
         {% block scripts %}
         {% endblock %}
 
+        <link rel="stylesheet" href="{% static 'responsive.css' %}?{{ static_version }}">
+
         <script>
-            document.addEventListener('DOMContentLoaded', function() {
+            function format_live_content(root) {
+                prepare_responsive_tables(root);
 
                 {
-                    var timestamps = document.getElementsByClassName('timestamp');
+                    var timestamps = root.querySelectorAll('.timestamp:not([data-formatted])');
 
                     var options = {
                         year   : 'numeric', month  : '2-digit',
@@ -39,11 +45,12 @@
                     for (var i = 0; i < timestamps.length; i++) {
                         var date = new Date(1000 * timestamps[i].textContent);
                         timestamps[i].textContent = date.toLocaleString(undefined, options);
+                        timestamps[i].dataset.formatted = 'true';
                     }
                 }
 
                 {
-                    var datestamps = document.getElementsByClassName('datestamp');
+                    var datestamps = root.querySelectorAll('.datestamp:not([data-formatted])');
 
                     var options = {
                         month  : 'short',
@@ -53,21 +60,24 @@
                     for (var i = 0; i < datestamps.length; i++) {
                         var date = new Date(1000 * datestamps[i].textContent);
                         datestamps[i].textContent = date.toLocaleString(undefined, options);
+                        datestamps[i].dataset.formatted = 'true';
                     }
                 }
 
                 {
-                    const cells = document.querySelectorAll('.engine-options');
+                    const cells = root.querySelectorAll('.engine-options:not([data-formatted])');
 
                     cells.forEach(cell => {
+                        cell.dataset.formatted = 'true';
 
                         // Only have Threads= and Hash= settings
                         if (cell.textContent.split(/\s+/).length <= 2)
                             return;
 
                         // Only display Threads=X Hash=X ...
-                        const re_threads = cell.textContent.match(/Threads=\d+/)[0];
-                        const re_hash    = cell.textContent.match(/Hash=\d+/)[0];
+                        const re_threads = cell.textContent.match(/Threads=\d+/)?.[0];
+                        const re_hash    = cell.textContent.match(/Hash=\d+/)?.[0];
+                        if (!re_threads || !re_hash) return;
                         const new_text   = re_threads + ' ' + re_hash + ' ...'
 
                         // Add all options into the popup text
@@ -81,7 +91,9 @@
                     });
                 }
 
-            }, false);
+            }
+
+            document.addEventListener('DOMContentLoaded', () => format_live_content(document));
 
             document.addEventListener('submit', event => {
 
@@ -95,15 +107,12 @@
                 form.dataset.submitting = true;
             }, true);
 
-            function toggle_sidebar() {
-                document.body.classList.toggle('sidebar-open')
-            }
         </script>
     </head>
 
     <body>
 
-        <div id="sidebar">
+        <nav id="sidebar" aria-label="Main navigation">
 
             <ul>
                 <li class="header">Admin</li>
@@ -165,19 +174,21 @@
 
             <hr>
 
-        </div>
+        </nav>
+        <div id="sidebar-backdrop" aria-hidden="true"></div>
 
         <div id="content-parent">
             <div id="content" class="pb-5">
                 <div id="content-header">
-                    <button id="sidebar-toggle" onclick="toggle_sidebar()">
+                    <button id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
                         <i class="fa-solid fa-bars fa-fw"></i>
                     </button>
                     <h2>
-                        <a class="site-title" href="/">MattBench&nbsp;Testing&nbsp;Framework</a>
+                        <a class="site-title" href="/">MattBench Testing Framework</a>
                     </h2>
                 </div>
 
+                <main id="content-body">
                 {% if request.session.error_message %}
                     <div class="error-message">
                         <pre>{{request.session.error_message}}</pre>
@@ -198,6 +209,7 @@
 
                 {% block content %}
                 {% endblock %}
+                </main>
             </div>
         </div>
     </body>

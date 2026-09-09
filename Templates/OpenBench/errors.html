@@ -1,8 +1,10 @@
 {% extends "OpenBench/base.html" %}
 
-{% load mytags %}
+{% load mytags live %}
 
 {% block content %}
+    <div id="live-page" data-live>
+    {% live_region "live-page" %}
 
     <table class="hoverable">
 
@@ -30,4 +32,6 @@
 
     {% include "OpenBench/Blocks/pagebrowser.html" %}
 
+    {% endlive_region %}
+    </div>
 {% endblock %}

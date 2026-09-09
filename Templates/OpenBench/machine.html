@@ -1,16 +1,18 @@
 {% extends "OpenBench/base.html" %}
 
-{% load mytags %}
+{% load mytags live %}
 
 {% block style %}
 {% load static %}
 {% endblock %}
 
 {% block content %}
+    <div id="live-page" data-live>
+    {% live_region "live-page" %}
 
-    <div id="config" style="display: block; overflow-x: auto;">
+    <div id="config">
 
-        <table class="test-config left-align wrappable" style="table-layout: auto; width: 100%;">
+        <table class="test-config left-align wrappable">
 
             <tr><td class="td-label">User</td><td>{{machine.user.username}}</td></tr>
             <tr><td class="td-label">Machine Name</td><td>{{machine.info.machine_name}}</td></tr>
@@ -44,6 +46,8 @@
 
         </table>
 
+    </div>
+    {% endlive_region %}
     </div>
 
 {% endblock %}

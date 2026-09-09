@@ -5,6 +5,7 @@
     {% load static %}
 
     <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="{% static 'ethereal.css' %}?{{ static_version }}">
         <link rel="icon" type="image/svg+xml" href="{% static 'logo.svg' %}?{{ static_version }}">
 
@@ -18,7 +19,8 @@
 
             body {
                 background: #202026;
-                transform: scale(1.05);
+                margin: 0;
+                padding: 0 16px 24px;
             }
 
             #content {
@@ -33,7 +35,7 @@
             }
 
             #content h1 {
-                font-size: 48px;
+                font-size: clamp(28px, 5vw, 48px);
                 font-family: Montserrat;
                 margin-top: 48px;
                 margin-bottom: 0px;
@@ -42,24 +44,24 @@
 
             #content p {
                 font-size: 16px;
-                margin: 16px 100px;
+                margin: 16px clamp(0px, 6vw, 100px);
                 text-align: justify;
                 max-width: 1250px;
             }
 
             #content ul {
                 font-size: 16px;
-                margin: 16px 100px;
+                margin: 16px clamp(0px, 6vw, 100px);
                 text-align: justify
             }
 
             #content hr {
                 font-size: 16px;
-                margin: 16px 100px;
+                margin: 16px clamp(0px, 6vw, 100px);
             }
 
             #content #buyethereal {
-                font-size: 32px;
+                font-size: clamp(20px, 4vw, 32px);
                 font-family: Montserrat;
                 font-weight: bold;
                 display: block;
@@ -68,9 +70,10 @@
                 background: #408F00;
                 text-align: center;
                 margin-top: 20px;
-                line-height: 64px;
+                line-height: 1.4;
+                padding: 16px;
                 border-color: black;
-                margin: 0px 100px;
+                margin: 0 clamp(0px, 6vw, 100px);
             }
 
         </style>

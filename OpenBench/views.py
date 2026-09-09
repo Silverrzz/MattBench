@@ -96,6 +96,22 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
 
     response = django.shortcuts.render(request, 'OpenBench/{0}'.format(template), data)
 
+    if hasattr(request, 'live_regions'):
+        request.live_payload = {'regions': request.live_regions}
+        if template == 'workload.html':
+            workload = data['workload']
+            request.live_payload['fields'] = {
+                field: str(getattr(workload, field))
+                for field in ('info', 'priority', 'throughput', 'workload_size')
+            }
+            request.live_payload['summary'] = fetch_result_summaries(workload)
+            if 'results' in request.live_subscriptions:
+                request.live_payload['results'] = fetch_results(workload)
+            if 'digest' in request.live_subscriptions and data['type'] == 'TUNE':
+                request.live_payload['digest'] = OpenBench.spsa_utils.spsa_param_digest(workload)
+        if template == 'networks.html':
+            request.live_payload['networks'] = data['networks']
+
     for key in ['status_message', 'warning_message', 'error_message']:
         if key in request.session: del request.session[key]
 
@@ -549,7 +565,7 @@ def networks(request, engine=None, action=None, name=None, client=False):
         return actions[action.upper()](request, engine, network)
 
     # Otherwise we could not find the Network, and cannot do anything
-    return redirect(request, '/networks/', error='No network found with matching Sha')
+    return redirect(request, '/networks/', error='No network found with matching SHA')
 
 def network_form(request):
 
@@ -785,7 +801,6 @@ def client_heartbeat(request, machine):
 
     return JsonResponse([{}, { 'stop' : True }][bool(finished)])
 
-"""
 @csrf_exempt
 @verify_worker
 def client_submit_nps_stats(request, _):

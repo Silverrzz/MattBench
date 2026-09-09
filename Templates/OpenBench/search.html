@@ -1,4 +1,5 @@
 {% extends "OpenBench/base.html" %}
+{% load mytags live %}
 
 {% block scripts %}
 
@@ -211,6 +212,8 @@
 
     {% if tests %}<div class="search-results-spacer"></div>{% endif %}
 
+    <div id="live-tests" data-live>
+    {% live_region "live-tests" %}
     <table class="test-list stripes hoverable">
         {% for test in tests %}
             <tr>
@@ -219,4 +222,6 @@
             </tr>
         {% endfor %}
     </table>
+    {% endlive_region %}
+    </div>
 {% endblock %}

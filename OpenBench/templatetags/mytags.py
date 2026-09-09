@@ -110,7 +110,11 @@ def longStatBlock(test):
         lines.append('LLR   | %0.2f (%0.2f, %0.2f) [%0.2f, %0.2f]' % (
             test.currentllr, test.lowerllr, test.upperllr, test.elolower, test.eloupper))
 
-    lines.append('Games | N: %d W: %d L: %d D: %d' % test.as_nwld())
+    if test.test_mode in ('GAMES', 'DATAGEN'):
+        lines.append('Games | N: %d / %d W: %d L: %d D: %d' % (
+            test.games, test.max_games, test.wins, test.losses, test.draws))
+    else:
+        lines.append('Games | N: %d W: %d L: %d D: %d' % test.as_nwld())
 
     if test.use_penta:
         lines.append('Penta | [%d, %d, %d, %d, %d]' % test.as_penta())
