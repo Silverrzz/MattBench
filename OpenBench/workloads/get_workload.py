@@ -103,6 +103,8 @@ def filter_valid_workloads(request, machine):
     # the query carries two IN() clauses instead of one NOT for every engine
     supported = set(machine.info['supported']).intersection(OPENBENCH_CONFIG['engines'])
     workloads = workloads.filter(dev_engine__in=supported, base_engine__in=supported)
+    if only := machine_info_list(machine.info, 'only'):
+        workloads = workloads.filter(dev_engine__in=only)
     workloads = workloads.filter(book_name__in=['NONE', *OPENBENCH_CONFIG['books']])
 
     # Skip workloads that are blacklisted on the machine
@@ -137,7 +139,7 @@ def filter_valid_workloads(request, machine):
     candidates = [x for x in options if x.priority == max(priorities)]
 
     # Refine to workloads that match our focus, if applicable
-    focuses    = machine_info_list(machine.info, 'focus')
+    focuses    = machine_info_list(machine.info, 'focus') + machine_info_list(machine.info, 'only')
     has_focus  = any(x.dev_engine in focuses for x in candidates)
 
     if has_focus:
@@ -203,7 +205,7 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
         .filter(workload__in=list(worker_dist.keys())).exclude(id=machine.id)
 
     for x in others:
-        preferences = machine_info_list(x.info, 'focus') + machine_info_list(x.info, 'force')
+        preferences = machine_info_list(x.info, 'focus') + machine_info_list(x.info, 'force') + machine_info_list(x.info, 'only')
         if OPENBENCH_CUSTOM_FOCUS or has_engine_preference or worker_dist[x.workload]['engine'] not in preferences:
             worker_dist[x.workload]['threads'] += x.info['concurrency']
 

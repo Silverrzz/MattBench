@@ -117,6 +117,7 @@ class Configuration:
         self.fleet       = args.fleet    if args.fleet    else False
         self.noisy       = args.noisy    if args.noisy    else False
         self.focus       = args.focus    if args.focus    else []
+        self.only        = args.only     if args.only     else []
         self.force       = args.force    if args.force    else []
         self.cli_options = args.cli_options
 
@@ -1022,6 +1023,7 @@ def server_configure_worker(config):
         'noisy'          : config.noisy,          # Whether our results are unstable for time-based workloads
         'focus'          : config.focus,          # List of engines we have a preference to help
         'force'          : config.force,          # List of engines we prefer over workload priority
+        'only'           : config.only,
         'cli_options'    : config.cli_options,    # Command line options except for credentials and server
         'cxx_comp'       : config.cxx_comp,       # C++ Compiler used to build Fastchess binaries
         'fastchess_ver'  : config.fastchess_ver,  # Fastchess Version, set during server_configure_fastchess()
@@ -1342,6 +1344,7 @@ def parse_arguments(client_args):
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')
     p.add_argument(      '--noisy'   , help='Reject time-based workloads' , action='store_true')
     p.add_argument(      '--focus'   , help='Prefer certain engine(s)'    , nargs='+'          )
+    p.add_argument(      '--only'    , help='Only help certain engine(s)' , nargs='+'          )
     p.add_argument(      '--force'   , help='Prefer engine(s) over priority', nargs='+'         )
 
     # Ignore unknown arguments ( from client )
