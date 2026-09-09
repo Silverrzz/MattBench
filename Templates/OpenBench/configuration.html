@@ -1,0 +1,123 @@
+{% extends "OpenBench/base.html" %}
+
+{% block heading %}{% if editing %}{% if is_new %}Add {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}Manage{% endif %}{% endblock %}
+{% block page_actions %}
+    {% if editing %}<a class="button" href="/manage/{{ section }}/">Back to {{ title|lower }}</a>
+    {% elif section != 'site' %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+    <nav class="tabs" aria-label="Manage sections">
+        {% for key, label in navigation %}<a href="/manage/{{ key }}/" {% if key == active_section %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+    </nav>
+    {% if editing %}
+        <form method="post" class="form form-stack form-medium">
+            {% csrf_token %}
+            <input type="hidden" name="version" value="{{ version }}">
+            {% if errors %}<ul class="errorlist" role="alert">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+            <div class="field">
+                <label for="name">Name</label>
+                <input id="name" name="name" value="{{ values.name }}" maxlength="128" required {% if not is_new %}readonly{% endif %}>
+            </div>
+            <label class="choice"><input type="checkbox" name="enabled" {% if values.enabled %}checked{% endif %}> Enabled</label>
+            {% if section == 'engines' or section == 'books' or section == 'runners' %}
+            <div class="field">
+                <label for="source">{% if section == 'books' %}Download URL{% else %}Repository URL{% endif %}</label>
+                <input type="url" id="source" name="source" value="{{ values.source }}" placeholder="https://">
+            </div>
+            {% endif %}
+            {% if relation_name %}
+                <div class="field">
+                    <label for="{{ relation_name }}">{{ relation_label }}</label>
+                    <select id="{{ relation_name }}" name="{{ relation_name }}" required {% if immutable_release %}disabled{% endif %}>
+                        <option value="">Select {{ relation_label|lower }}</option>
+                        {% for entry in related_objects %}<option value="{{ entry.pk }}" {% if entry.pk|stringformat:'s' == selected_relation %}selected{% endif %}>{{ entry }}{% if not entry.enabled %} (disabled){% endif %}</option>{% endfor %}
+                    </select>
+                </div>
+            {% endif %}
+            {% if section == 'engines' %}
+                <fieldset class="form-section">
+                    <legend>Supported variants</legend>
+                    {% for variant in variants %}<label class="choice"><input type="checkbox" name="variants" value="{{ variant.pk }}" {% if variant.pk|stringformat:'s' in selected_variants %}checked{% endif %}> {{ variant.name }}{% if not variant.enabled %} (disabled){% endif %}</label>{% endfor %}
+                </fieldset>
+                <label class="choice"><input type="checkbox" name="private" {% if values.private %}checked{% endif %}> Private engine</label>
+                <div class="field">
+                    <label for="nps">Reference NPS</label>
+                    <input type="number" id="nps" name="nps" value="{{ values.nps|default:0 }}" min="0" required>
+                </div>
+                <div class="field">
+                    <label for="path">Build path</label>
+                    <input id="path" name="path" value="{{ values.path }}" placeholder='"" (repository root)'>
+                </div>
+                <div class="field">
+                    <label for="compilers">Compilers (one per line)</label>
+                    <textarea id="compilers" name="compilers" rows="2">{{ values.compilers }}</textarea>
+                </div>
+                <div class="field">
+                    <label for="systems">Operating systems (one per line)</label>
+                    <textarea id="systems" name="systems" rows="2">{{ values.systems }}</textarea>
+                </div>
+                <div class="field">
+                    <label for="cpuflags">Required CPU features (one per line)</label>
+                    <textarea id="cpuflags" name="cpuflags" rows="2">{{ values.cpuflags }}</textarea>
+                </div>
+            {% elif section == 'books' %}
+                <div class="field">
+                    <label for="sha">SHA-256</label>
+                    <input id="sha" name="sha" value="{{ values.sha }}" minlength="64" maxlength="64" required>
+                </div>
+            {% elif section == 'variants' %}
+                <div class="field"><label for="fastchess_variant">Fastchess variant name</label><input id="fastchess_variant" name="fastchess_variant" value="{{ values.fastchess_variant }}" required></div>
+                <label class="choice"><input type="checkbox" name="syzygy" {% if values.syzygy %}checked{% endif %}> Supports Syzygy</label>
+            {% elif section == 'releases' %}
+                <div class="field"><label for="ref">Branch or tag</label><input id="ref" name="ref" value="{{ values.ref }}" required {% if immutable_release %}readonly{% endif %}></div>
+                <div class="field"><label for="commit">Pinned commit</label><input id="commit" name="commit" value="{{ values.commit }}" maxlength="40" {% if immutable_release %}readonly{% endif %}></div>
+                <div class="field"><label for="min_version">Minimum version</label><input id="min_version" name="min_version" value="{{ values.min_version }}" placeholder="1.8.1" required {% if immutable_release %}readonly{% endif %}></div>
+                {% if immutable_release %}<a href="/manage/releases/new/?runner={{ instance.runner_id }}">Add release</a>{% endif %}
+            {% endif %}
+            {% if section == 'runners' and not is_new %}
+                <section class="form-section">
+                    <h2>Releases</h2>
+                    {% for release in instance.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release }}</a>{% empty %}<span>No releases</span>{% endfor %}
+                    <a href="/manage/releases/new/?runner={{ instance.pk }}">Add release</a>
+                </section>
+            {% endif %}
+            <div class="form-actions">
+                <a class="button" href="/manage/{{ section }}/">Cancel</a>
+                <button type="submit" class="button button-primary">Save changes</button>
+            </div>
+        </form>
+    {% elif section == 'site' %}
+        <table class="stripes data-table">
+            <thead><tr><th scope="col">Setting</th><th scope="col">Value</th></tr></thead>
+            <tbody>{% for key, value in site_settings %}<tr><td>{{ key }}</td><td>{{ value }}</td></tr>{% endfor %}</tbody>
+        </table>
+    {% else %}
+        <table class="stripes hoverable data-table">
+            <thead><tr class="table-header">
+                <th scope="col">Name</th>
+                <th scope="col">{% if section == 'books' %}Download{% elif section == 'variants' %}Fastchess variant{% elif section == 'releases' %}Runner{% else %}Source{% endif %}</th>
+                <th scope="col">{% if section == 'engines' %}NPS{% elif section == 'books' %}Variant{% elif section == 'variants' %}Runner release{% elif section == 'runners' %}Releases{% else %}Reference{% endif %}</th>
+                {% if admin %}<th scope="col">Status</th><th scope="col">Actions</th>{% endif %}
+            </tr></thead>
+            <tbody>
+                {% for entry in objects %}
+                    <tr>
+                        <td>{{ entry }}</td>
+                        <td>{% if section == 'variants' %}{{ entry.settings.fastchess_variant }}{% elif section == 'releases' %}<a href="/manage/runners/{{ entry.runner_id }}/">{{ entry.runner }}</a>{% else %}<a href="{{ entry.settings.source }}">{{ entry.settings.source }}</a>{% endif %}</td>
+                        <td>
+                            {% if section == 'engines' %}{{ entry.settings.nps }}
+                            {% elif section == 'books' %}{{ entry.variant }}
+                            {% elif section == 'variants' %}<a href="/manage/releases/{{ entry.runner_release_id }}/">{{ entry.runner_release }}</a>
+                            {% elif section == 'runners' %}{% for release in entry.releases.all %}<a href="/manage/releases/{{ release.pk }}/">{{ release.settings.ref }}</a>{% if not forloop.last %}, {% endif %}{% endfor %} <a href="/manage/releases/new/?runner={{ entry.pk }}">Add release</a>
+                            {% else %}{{ entry.settings.ref }}{% endif %}
+                        </td>
+                        {% if admin %}<td>{{ entry.enabled|yesno:"Enabled,Disabled" }}</td><td><a href="/manage/{{ section }}/{{ entry.pk }}/">Edit</a></td>{% endif %}
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="{% if admin %}5{% else %}3{% endif %}" class="empty-state">No {{ title|lower }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endblock %}

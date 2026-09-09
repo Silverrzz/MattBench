@@ -1,7 +1,7 @@
-<!DOCTYPE html>
+{% extends "OpenBench/base.html" %}
 
-<html lang="en">
-    <body>
-        <pre>{{content}}</pre>
-    </body>
-</html>
+{% block page_actions %}<a class="button" href="/errors/">Back to errors</a>{% endblock %}
+
+{% block content %}
+    <pre class="event-log" tabindex="0" aria-label="Event log">{{ content }}</pre>
+{% endblock %}

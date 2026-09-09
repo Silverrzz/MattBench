@@ -18,133 +18,181 @@
 #                                                                             #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-import hashlib
-import json
-import os
-import sys
-import traceback
+import copy, hashlib, json, re
 
-from OpenSite.settings import PROJECT_PATH
+from collections.abc import Mapping
+from contextvars import ContextVar
+from pathlib import Path
+from django.conf import settings
+from django.core.exceptions import ValidationError
 
-OPENBENCH_STATIC_VERSION = 'v22'
 
-OPENBENCH_CONFIG          = None # Initialized by OpenBench/apps.py
-OPENBENCH_CONFIG_CHECKSUM = None # Initialized by OpenBench/apps.py
+_request_config = ContextVar('openbench_config', default=None)
 
+
+def read_site_config():
+
+    with (Path(settings.BASE_DIR) / 'Config' / 'config.json').open(encoding='utf-8-sig') as stream:
+        config = json.load(stream)
+    config.pop('engines', None)
+    config.pop('books', None)
+    config.setdefault('variants', {'standard': {}, 'fischerandom': {'syzygy': True}})
+    for name, variant in config['variants'].items():
+        variant.setdefault('fastchess_variant', name)
+        variant.setdefault('syzygy', name in ('standard', 'fischerandom'))
+        variant.setdefault('runner', {key: config['fastchess_' + key] for key in ('repo_url', 'repo_ref', 'min_version')})
+    return config
+
+
+def load_config():
+
+    from OpenBench.models import EngineConfig, OpeningBook, Variant
+
+    config = read_site_config()
+    config['variants'] = {}
+    for variant in Variant.objects.filter(enabled=True, runner_release__enabled=True, runner_release__runner__enabled=True).select_related('runner_release__runner'):
+        release = variant.runner_release
+        config['variants'][variant.name] = dict(variant.settings, runner={
+            'repo_url': release.runner.settings['source'],
+            'repo_ref': release.settings.get('commit') or release.settings['ref'],
+            'min_version': release.settings['min_version'],
+        })
+    config['books'] = {book.name: dict(book.settings, variant=book.variant.name, format=book.name.rsplit('.', 1)[-1].lower())
+                       for book in OpeningBook.objects.filter(enabled=True).select_related('variant').order_by('name')
+                       if book.variant and book.variant.name in config['variants']}
+    config['engines'] = {}
+    for engine in EngineConfig.objects.filter(enabled=True).order_by('name').prefetch_related('presets', 'variants'):
+        data = copy.deepcopy(engine.settings)
+        data['variants'] = sorted(variant.name for variant in engine.variants.all() if variant.name in config['variants'])
+        if not data['variants']:
+            continue
+        for kind in ('test_presets', 'tune_presets', 'datagen_presets'):
+            data[kind] = {'default': {}}
+        for preset in engine.presets.all():
+            if preset.owner_id is None:
+                kind = {'TEST': 'test_presets', 'TUNE': 'tune_presets', 'DATAGEN': 'datagen_presets'}[preset.workload_type]
+                data[kind][preset.name] = preset.settings
+        config['engines'][engine.name] = data
+    return config
+
+
+class ConfigMapping(Mapping):
+
+    def current(self):
+        config = _request_config.get()
+        return config if config is not None else load_config()
+
+    def __getitem__(self, key):
+        return self.current()[key]
+
+    def __iter__(self):
+        return iter(self.current())
+
+    def __len__(self):
+        return len(self.current())
+
+
+class ConfigurationMiddleware:
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        token = _request_config.set(load_config())
+        try:
+            return self.get_response(request)
+        finally:
+            _request_config.reset(token)
+
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def eligibility_fingerprint():
+    return fingerprint({name: {key: data[key] for key in ('build', 'private', 'source', 'variants')}
+                        for name, data in OPENBENCH_CONFIG['engines'].items()})
+
+
+def workload_execution(book_name, engines, variant_name=None):
+    config = OPENBENCH_CONFIG
+    book = config['books'].get(book_name)
+    if book is None and book_name != 'NONE':
+        raise ValidationError('Choose an enabled opening book')
+    if book and variant_name and variant_name != book['variant']:
+        raise ValidationError('The opening book does not match the selected variant')
+    name = variant_name or (book['variant'] if book else 'standard')
+    variant = config['variants'].get(name)
+    if variant is None:
+        raise ValidationError('Choose an enabled variant and runner release')
+    for engine in engines:
+        if name not in config['engines'].get(engine, {}).get('variants', []):
+            raise ValidationError('%s does not support %s' % (engine, name))
+    return dict(copy.deepcopy(variant), variant=name)
+
+
+def verify_engine_config(data, enabled=True):
+
+    if not isinstance(data, dict) or not isinstance(data.get('build'), dict):
+        raise ValidationError('Engine configuration requires build settings')
+    build = data['build']
+    if type(data.get('private')) is not bool or type(data.get('nps')) is not int or data['nps'] < 0:
+        raise ValidationError('Provide an engine privacy flag and nonnegative reference NPS')
+    if not isinstance(data.get('source'), str) or (data['source'] and not re.fullmatch(r'https://[^\s]+', data['source'])):
+        raise ValidationError('Engine source must be an HTTPS URL')
+    if not isinstance(build.get('path'), str):
+        raise ValidationError('Build path must be text; use an empty string for the repository root')
+    for field in ('systems', 'compilers', 'cpuflags'):
+        values = build.get(field)
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            raise ValidationError('Build %s must be a list of strings' % field)
+    if enabled and (not data['nps'] or not data['source'] or not build['systems'] or (not data['private'] and not build['compilers'])):
+        raise ValidationError('Enabled engines need a source, positive NPS, operating systems and compilers for public builds')
+
+
+def verify_book_config(name, data):
+
+    if name.rsplit('.', 1)[-1].lower() not in ('epd', 'pgn'):
+        raise ValidationError('Book names must end in .epd or .pgn')
+    if not isinstance(data, dict) or not isinstance(data.get('source'), str) or not re.fullmatch(r'https://[^\s]+', data['source']):
+        raise ValidationError('Book source must be an HTTPS URL')
+    if not isinstance(data.get('sha'), str) or not re.fullmatch('[a-fA-F0-9]{64}', data['sha']):
+        raise ValidationError('Book SHA-256 must contain 64 hexadecimal characters')
+
+
+def verify_preset(kind, data):
+
+    validators = {'TEST': verify_engine_test_preset, 'TUNE': verify_engine_tune_preset, 'DATAGEN': verify_engine_datagen_preset}
+    if kind not in validators or not isinstance(data, dict) or any(type(value) not in (str, int, float, bool) for value in data.values()):
+        raise ValidationError('Invalid preset settings')
+    try:
+        validators[kind](data)
+    except Exception as error:
+        raise ValidationError(str(error)) from error
+
+
+def verify_runner_config(data):
+    if not isinstance(data.get('source'), str) or not re.fullmatch(r'https://[^\s]+', data['source']):
+        raise ValidationError('Runner source must be an HTTPS URL')
+
+
+def verify_release_config(data):
+    if not data.get('ref') or not re.fullmatch(r'\d+\.\d+(\.\d+)?', data.get('min_version', '')):
+        raise ValidationError('Provide a reference and minimum version, such as 1.8.1')
+    if data.get('commit') and not re.fullmatch('[a-fA-F0-9]{40}', data['commit']):
+        raise ValidationError('Pinned commit must be a full 40-character SHA')
+    if data.get('protocol') != 'fastchess-ob':
+        raise ValidationError('Unsupported runner protocol')
+
+
+def verify_variant_config(data):
+    if not re.fullmatch('[a-zA-Z0-9_-]+', data.get('fastchess_variant', '')) or type(data.get('syzygy')) is not bool:
+        raise ValidationError('Provide a Fastchess variant name and Syzygy support flag')
+
+OPENBENCH_STATIC_VERSION = 'mattbench-red-4'
+OPENBENCH_CONFIG = ConfigMapping()
 OPENBENCH_CUSTOM_FOCUS = True
 
-def create_openbench_config():
-
-    with open(os.path.join(PROJECT_PATH, 'Config', 'config.json')) as fin:
-        config_dict = json.load(fin)
-        verify_general_config(config_dict)
-
-    config_dict['books'] = {
-        book : load_book_config(book) for book in config_dict['books']
-    }
-
-    config_dict['engines'] = {
-        engine : load_engine_config(engine) for engine in config_dict['engines']
-    }
-
-    # Rolling sha256sum of the engine's build configs
-    checksum = hashlib.sha256(b'').digest()
-    for engine, engine_config in config_dict['engines'].items():
-        serialized  = json.dumps(engine_config['build'], sort_keys=True)
-        partial_sum = hashlib.sha256(serialized.encode('utf-8')).digest()
-        checksum    = bytes(a ^ b for a, b in zip(checksum, partial_sum))
-
-    return config_dict, checksum.hex()
-
-def load_book_config(book_name):
-
-    with open(os.path.join(PROJECT_PATH, 'Books', '%s.json' % (book_name))) as fin:
-        conf = json.load(fin)
-
-    assert type(conf.get('sha')) == str
-    assert type(conf.get('source')) == str
-
-    return conf
-
-def load_engine_config(engine_name):
-
-    try:
-        with open(os.path.join(PROJECT_PATH, 'Engines', '%s.json' % (engine_name))) as fin:
-            conf = json.load(fin)
-
-        verify_engine_basics(conf)
-        verify_engine_build(engine_name, conf)
-
-        for preset_type in ['test_presets', 'tune_presets', 'datagen_presets']:
-            if preset_type not in conf.keys() or 'default' not in conf[preset_type].keys():
-                conf[preset_type] = { 'default' : {} }
-
-        assert 'default' in conf['test_presets'].keys()
-        assert 'default' in conf['tune_presets'].keys()
-        assert 'default' in conf['datagen_presets'].keys()
-
-        for key, test_preset in conf['test_presets'].items():
-            verify_engine_test_preset(test_preset)
-
-        for key, tune_preset in conf['tune_presets'].items():
-            verify_engine_tune_preset(tune_preset)
-
-        for key, datagen_preset in conf['datagen_presets'].items():
-          verify_engine_datagen_preset(datagen_preset)
-
-    except Exception as error:
-        traceback.print_exc()
-        print ('%s has errors on the configuration json' % (engine_name))
-        sys.exit()
-
-    return conf
-
-
-def verify_general_config(conf):
-
-    assert type(conf.get('client_version'  ) == int)
-    assert type(conf.get('client_repo_url' ) == str)
-    assert type(conf.get('client_repo_ref' ) == str)
-
-    assert type(conf.get('fastchess_min_version') == str)
-    assert type(conf.get('fastchess_repo_url') == str)
-    assert type(conf.get('fastchess_repo_ref') == str)
-
-    assert type(conf.get('use_cross_approval'         ) == bool)
-    assert type(conf.get('require_login_to_view'      ) == bool)
-    assert type(conf.get('require_manual_registration') == bool)
-    assert type(conf.get('balance_engine_throughputs' ) == bool)
-
-    # Serving of Networks and PGNs may be handed off to an nginx reverse proxy.
-    # The root must match an "internal" nginx location, aliased to Media/. ie:
-    #     location /x-accel-media/ { internal; alias /path/to/OpenBench/Media/; }
-
-    assert type(conf.get('use_x_accel_redirect' )) == bool
-    assert type(conf.get('x_accel_redirect_root')) == str
-    assert conf['x_accel_redirect_root'].startswith('/')
-
-def verify_engine_basics(conf):
-
-    assert type(conf.get('private')) == bool
-    assert type(conf.get('nps')) == int and conf['nps'] > 0
-    assert type(conf.get('source')) == str
-    assert type(conf.get('build')) == dict
-
-def verify_engine_build(engine_name, conf):
-
-    assert type(conf['build'].get('cpuflags')) == list
-    assert all(type(x) == str for x in conf['build']['cpuflags'])
-
-    assert type(conf['build'].get('systems')) == list
-    assert all(type(x) == str for x in conf['build']['systems'])
-
-    assert type(conf['build'].get('path')) == str
-    assert type(conf['build'].get('compilers')) == list
-    assert all(type(x) == str for x in conf['build']['compilers'])
-
-    if conf['private']: # Private engines require a PAT
-        fname = 'credentials.%s' % (engine_name.replace(' ', '').lower())
-        assert os.path.exists(os.path.join(PROJECT_PATH, 'Config', fname))
 
 def verify_engine_test_preset(test_preset):
 
@@ -184,9 +232,12 @@ def verify_engine_test_preset(test_preset):
         'draw_adj',
     ]
 
+    valid_keys += ['test_mode', 'dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info', 'variant']
+
     for key in test_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys
 
 def verify_engine_tune_preset(tune_preset):
 
@@ -223,9 +274,12 @@ def verify_engine_tune_preset(tune_preset):
         'draw_adj',
     ]
 
+    valid_keys += ['dev_repo', 'scale_method', 'scale_nps', 'spsa_inputs', 'info', 'variant']
+
     for key in tune_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys
 
 def verify_engine_datagen_preset(datagen_preset):
 
@@ -265,6 +319,9 @@ def verify_engine_datagen_preset(datagen_preset):
         'datagen_max_games',
     ]
 
+    valid_keys += ['dev_repo', 'base_repo', 'base_engine', 'scale_method', 'scale_nps', 'info', 'variant']
+
     for key in datagen_preset.keys():
         if key not in valid_keys:
             raise Exception('Contains invalid key: %s' % (key))
+    return valid_keys

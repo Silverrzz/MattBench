@@ -1,113 +1,112 @@
 {% extends "OpenBench/base.html" %}
-
 {% load static %}
 {% load mytags %}
 
 {% block scripts %}
-<script src="{% static 'default_text.js' %}?{{ static_version }}"></script>
+    <script src="{% static 'profile.js' %}?{{ static_version }}" defer></script>
+{% endblock %}
 
-<script>
-    enforce_default_text('new-engine-repo', 'https://github.com/');
-</script>
+{% block page_actions %}
+    <div class="profile-actions">
+        <a class="button" href="/user/{{ profile.user.username }}/">Your tests <span aria-hidden="true">↗</span></a>
+        <form method="POST" action="/logout/">
+            {% csrf_token %}
+            <button class="button" type="submit">Log out</button>
+        </form>
+    </div>
 {% endblock %}
 
 {% block content %}
+<div class="content-width">
+    <div class="profile-overview">
+        <span class="profile-monogram" aria-hidden="true">{{ profile.user.username|first|upper }}</span>
+        <div class="profile-identity">
+            <h2>{{ profile.user.username }}</h2>
+            <span>Joined {{ profile.user.date_joined|date:"F Y" }}{% if profile.approver %} · Approver{% endif %}</span>
+        </div>
+        <dl class="contribution-stats">
+            <div><dt>Games</dt><dd>{{ profile.games|insertCommas }}</dd></div>
+            <div><dt>Tests</dt><dd>{{ profile.tests|insertCommas }}</dd></div>
+        </dl>
+    </div>
 
-    <form method="POST" action="/profile/">
+    <form class="form form-section" method="POST" action="/profile/" aria-labelledby="account-heading">
         {% csrf_token %}
-        <div class="form">
-            <div class="col">
-                <div class="row">
+        <h2 id="account-heading">Account</h2>
+        <div class="form-stack">
+            <div class="field-grid">
+                <div class="field">
                     <label for="username">Username</label>
-                    <input id="username" readonly value="{{ profile.user.username }}">
+                    <input id="username" autocomplete="username" readonly value="{{ profile.user.username }}">
                 </div>
-                <div class="row">
+                <div class="field">
                     <label for="email">Email</label>
-                    <input id="email" value="{{ profile.user.email }}" name="email">
+                    <input id="email" type="email" autocomplete="email" value="{{ profile.user.email }}" name="email">
                 </div>
-
-                <div class="row">
-                    <label for="password1">New Password</label>
-                    <input id="password1" type="password" name="password1">
+                <div class="field">
+                    <label for="password1">New password</label>
+                    <input id="password1" type="password" name="password1" autocomplete="new-password">
                 </div>
-                <div class="row">
-                    <label for="password2">New Password</label>
-                    <input id="password2" type="password" name="password2">
+                <div class="field">
+                    <label for="password2">Confirm password</label>
+                    <input id="password2" type="password" name="password2" autocomplete="new-password">
                 </div>
-                <input class="anchorbutton btn-blue w-100" type="submit" value="Update Profile">
+            </div>
+            <div class="form-actions">
+                <button class="button button-primary" type="submit">Save account</button>
             </div>
         </div>
     </form>
 
-    <br>
-
-    <form method="POST" action="/profileConfig/">
+    <form class="form form-section" method="POST" action="/profileConfig/" id="repository-form" aria-labelledby="repositories-heading">
         {% csrf_token %}
-        <div class="form">
-            <div class="col" id="engines-container">
-
-                <!-- Display engines which have repos already defined -->
+        <h2 id="repositories-heading">Engine repositories</h2>
+        <div class="form-stack" id="engines-container">
+            <div class="repository-list">
+                {% if profile.repos %}
+                    <div class="repo-headings" aria-hidden="true"><span>Engine</span><span>GitHub repository</span><span>Default</span><span></span></div>
+                {% endif %}
                 {% for engine, repo in profile.repos.items %}
-                <div class="row" id="engine-row-{{ engine }}">
-                    <label for="engine-repo-{{engine}}">{{ engine }}</label>
-                    <input id="engine-repo-{{engine}}" type="text" name="engine-repo-{{engine}}" value="{{ repo|removePrefix:'https://github.com/' }}">
-
-                    <span>
-                        <input id="radio-{{engine}}" type="radio" name="default-status" value="{{engine}}"
-                            {% if profile.engine == engine %}checked{% endif %}>
-                    </span>
-
-                    <span onclick="deleteRow(event)">
-                        <i class="fa-solid fa-trash-can" style="color: #A00000;" data-engine="{{engine}}" ></i>
-                    </span>
-                </div>
+                    <div class="repo-row" id="engine-row-{{ engine }}" data-engine="{{ engine }}">
+                        <label for="engine-repo-{{ engine }}">{{ engine }}</label>
+                        <div class="input-prefix">
+                            <span aria-hidden="true">github.com/</span>
+                            <input id="engine-repo-{{ engine }}" type="text" name="engine-repo-{{ engine }}" value="{{ repo|removePrefix:'https://github.com/' }}" aria-label="{{ engine }} GitHub repository" spellcheck="false" autocomplete="off">
+                        </div>
+                        <label class="choice default-choice">
+                            <input id="radio-{{ engine }}" type="radio" name="default-status" value="{{ engine }}" aria-label="{{ engine }} default" {% if profile.engine == engine %}checked{% endif %}>
+                            <span class="sr-only">Default</span>
+                        </label>
+                        <button class="icon-button remove-repo" type="button" data-engine="{{ engine }}" aria-label="Remove {{ engine }} repository" title="Remove repository" {% if profile.engine == engine %}disabled{% endif %}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>
+                        </button>
+                    </div>
                 {% endfor %}
-
-                <div class="row">
-                    <label> <!-- CSS Hack -->
+            </div>
+            <div class="form-section">
+                {% if profile.repos %}<h3>Add repository</h3>{% endif %}
+                <div class="field-grid">
+                    <div class="field">
+                        <label for="new-engine-name">Engine</label>
                         <select name="new-engine-name" id="new-engine-name">
-                            <option selected disabled hidden>New Engine</option>
+                            <option value="None">—</option>
                             {% for engine in config.engines.keys %}
-                                {% if engine not in profile.repos %}
-                                    <option value="{{ engine }}">{{ engine }}</option>
-                                {% endif %}
+                                {% if engine not in profile.repos %}<option value="{{ engine }}">{{ engine }}</option>{% endif %}
                             {% endfor %}
                         </select>
-                    </label>
-                    <input id="new-engine-repo" name="new-engine-repo" value="https://github.com/">
+                    </div>
+                    <div class="field">
+                        <label for="new-engine-repo">GitHub URL</label>
+                        <input id="new-engine-repo" name="new-engine-repo" type="url" spellcheck="false" autocomplete="off">
+                    </div>
                 </div>
-
-                <input type="hidden" name="deleted-repos" id="deleted-repos" value="[]">
-                <input class="anchorbutton btn-blue w-100" type="submit" name="add-engine" value="Save Configuration">
+            </div>
+            <input type="hidden" name="deleted-repos" id="deleted-repos" value="[]">
+            <div class="form-actions">
+                <span id="repo-feedback" class="form-feedback" role="status" hidden></span>
+                <button class="button button-primary" type="submit" name="add-engine" value="Save Configuration">Save repositories</button>
             </div>
         </div>
     </form>
-
-    <script>
-        function deleteRow(event) {
-
-            const button = event.currentTarget.querySelector('i');
-            const engine = button.getAttribute('data-engine');
-            const radio = document.getElementById('radio-' + engine);
-
-            if (engine && radio && radio.checked)
-                return;
-
-            if (engine) {
-
-                // Remove the corresponding row from the DOM
-                const row = button.parentNode.parentNode;
-                row.parentNode.removeChild(row);
-
-                // Update the deleted-repos hidden input field with the deleted engine
-                const deletedReposInput = document.getElementById('deleted-repos');
-                let deletedRepos = JSON.parse(deletedReposInput.value);
-
-                deletedRepos.push(engine);
-                deletedReposInput.value = JSON.stringify(deletedRepos);
-            }
-        }
-    </script>
-
-
+</div>
 {% endblock %}

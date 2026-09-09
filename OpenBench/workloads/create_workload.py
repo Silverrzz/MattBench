@@ -55,7 +55,8 @@ def create_workload(request, workload_type):
 
     if request.method == 'GET':
 
-        data = { 'networks' : list(Network.objects.all().values()) }
+        from OpenBench.presets import preset_data
+        data = {'networks': list(Network.objects.all().values()), 'preset_data': preset_data(request.user, workload_type)}
 
         if workload_type == 'TEST':
             data['workload']        = workload_type
@@ -115,6 +116,7 @@ def create_new_test(request):
         return None, errors
 
     test                   = Test()
+    test.execution         = request.workload_execution
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']
@@ -182,6 +184,7 @@ def create_new_tune(request):
         return None, errors
 
     test                  = Test()
+    test.execution        = request.workload_execution
     test.author           = request.user.username
     test.book_name        = request.POST['book_name']
     test.upload_pgns      = request.POST['upload_pgns']
@@ -231,6 +234,7 @@ def create_new_datagen(request):
         return None, errors
 
     test                   = Test()
+    test.execution         = request.workload_execution
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']

@@ -35,7 +35,7 @@ from OpenBench.workloads.modify_workload import modify_workload
 from OpenBench.workloads.verify_workload import verify_workload
 from OpenBench.workloads.view_workload import view_workload, fetch_results, fetch_result_summaries
 
-from OpenBench.config import OPENBENCH_CONFIG, OPENBENCH_CONFIG_CHECKSUM, OPENBENCH_STATIC_VERSION
+from OpenBench.config import OPENBENCH_CONFIG, eligibility_fingerprint, OPENBENCH_STATIC_VERSION
 from OpenSite.settings import PROJECT_PATH
 
 from OpenBench.models import *
@@ -67,8 +67,36 @@ class UnableToAuthenticate(Exception):
 def render(request, template, content={}, always_allow=False, error=None, warning=None, status=None):
 
     data = content.copy()
-    data.update({ 'config' : OPENBENCH_CONFIG })
-    data.update({ 'static_version' : OPENBENCH_STATIC_VERSION })
+    page_titles = {
+        'index.html': 'Tests',
+        'profile.html': 'Profile',
+        'search.html': 'Search tests',
+        'users.html': 'Contributors',
+        'machines.html': 'Machines',
+        'machine.html': 'Machine details',
+        'networks.html': 'Networks',
+        'network.html': 'Network details',
+        'uploadnet.html': 'Upload network',
+        'events.html': 'Events',
+        'event.html': 'Event details',
+        'errors.html': 'Errors',
+        'login.html': 'Log in',
+        'register.html': 'Create an account',
+        'create_workload.html': 'New workload',
+        'workload.html': 'Workload',
+        'configuration.html': 'Engines',
+    }
+    title = page_titles.get(template, 'MattBench')
+    if template == 'create_workload.html':
+        title = {'TEST': 'New test', 'TUNE': 'New tune', 'DATAGEN': 'New datagen'}.get(data.get('workload'), title)
+    if template == 'configuration.html':
+        title = data.get('title', title)
+    data.setdefault('page_title', title)
+    data.update({ 'config' : dict(OPENBENCH_CONFIG) })
+    static_directory = os.path.join(os.path.dirname(__file__), 'static')
+    with os.scandir(static_directory) as static_files:
+        static_revision = max((asset.stat().st_mtime_ns for asset in static_files if asset.is_file()), default=0)
+    data.update({ 'static_version' : '%s-%s' % (OPENBENCH_STATIC_VERSION, static_revision) })
 
     if OPENBENCH_CONFIG['require_login_to_view']:
         if not request.user.is_authenticated and not always_allow:
@@ -304,6 +332,7 @@ def user(request, username, page=1):
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'user/%s' % (username))
 
     data = {
+        'page_title': '%s\u2019s tests' % username,
         'pending'   : pending,
         'active'    : OpenBench.utils.group_active_tests_by_priority(active),
         'completed' : completed[start:end],
@@ -318,7 +347,7 @@ def greens(request, page=1):
     completed = OpenBench.utils.get_completed_tests().filter(passed=True)
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'greens')
 
-    data = { 'completed' : completed[start:end], 'paging' : paging }
+    data = { 'completed' : completed[start:end], 'paging' : paging, 'page_title' : 'Passed tests' }
     return render(request, 'index.html', data)
 
 def search(request):
@@ -616,7 +645,7 @@ def verify_worker(function):
             return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
         # Prompt the worker to soft-restart if its config is out of date
-        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != OPENBENCH_CONFIG_CHECKSUM:
+        if machine.info.get('OPENBENCH_CONFIG_CHECKSUM') != eligibility_fingerprint():
             return JsonResponse({ 'error' : 'Bad Client Version: Server Configuration Changed' })
 
         # Use the secret token as our soft verification
@@ -682,7 +711,7 @@ def client_worker_info(request):
     machine.secret = secrets.token_hex(32)
 
     # Note the Config checksum at the time of init, in case it changes
-    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = OPENBENCH_CONFIG_CHECKSUM
+    machine.info['OPENBENCH_CONFIG_CHECKSUM'] = eligibility_fingerprint()
 
     # Tag engines that the Machine can build and/or run with binaries
     machine.info['supported'] = []
@@ -1071,7 +1100,15 @@ def api_workload(request, workload_id, query):
     if query == 'summary':
         return api_response({ 'summary' : fetch_result_summaries(workload) })
 
-    valid_endpoints = [ 'results', 'info', 'summary' ]
+    if query == 'llr':
+        if workload.test_mode != 'SPRT':
+            return JsonResponse({'error': 'LLR history is only available for SPRT tests'}, status=400)
+        from OpenBench.llr_history import workload_llr_history
+        response = JsonResponse(workload_llr_history(workload))
+        response['Cache-Control'] = 'no-store'
+        return response
+
+    valid_endpoints = [ 'results', 'info', 'summary', 'llr' ]
     return api_response({ 'error' : 'Valid /query/ endpoints are: [ %s ]' % (', '.join(valid_endpoints)) })
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #

@@ -19,8 +19,17 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import django.urls, OpenBench.views
+import OpenBench.configuration_views
+import OpenBench.presets
 
 urlpatterns = [
+
+    django.urls.path('presets/<str:kind>/', OpenBench.presets.presets),
+
+    django.urls.path('manage/', OpenBench.configuration_views.manage),
+    django.urls.path('manage/<str:section>/', OpenBench.configuration_views.manage),
+    django.urls.path('manage/<str:section>/new/', OpenBench.configuration_views.manage, {'identifier': 'new'}),
+    django.urls.path('manage/<str:section>/<uuid:identifier>/', OpenBench.configuration_views.manage),
 
     # Links for account management
     django.urls.path(r'register/', OpenBench.views.register),
@@ -81,7 +90,7 @@ urlpatterns = [
     django.urls.path(r'api/buildinfo/', OpenBench.views.api_build_info),
     django.urls.path(r'api/pgns/<int:pgn_id>/', OpenBench.views.api_pgns),
     django.urls.path(r'api/spsa/<int:workload_id>/<str:query>/', OpenBench.views.api_spsa),
-    django.urls.path(r'api/workload/<int:workload_id>/<str:query>/', OpenBench.views.api_workload),
+    django.urls.path(r'api/workload/<int:workload_id>/<str:query>/', OpenBench.views.api_workload, name='api_workload'),
 
     # Redirect anything else to the Index
     django.urls.path(r'', OpenBench.views.index),

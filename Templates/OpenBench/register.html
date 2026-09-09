@@ -2,21 +2,21 @@
 
 {% block content %}
 
-    <form id="registerForm" method="POST" action="/register/">
+    <form class="form form-narrow" id="registerForm" method="POST" action="/register/">
         {% csrf_token %}
         <div class="form">
-            <div class="col">
-                <div class="row">
-                    <label>Username</label><input name="username">
+            <div class="form-stack">
+                <div class="field">
+                    <label for="register-username">Username</label><input id="register-username" name="username" autocomplete="username" required>
                 </div>
-                <div class="row">
-                    <label>Password</label><input type="password" name="password1">
+                <div class="field">
+                    <label for="register-password">Password</label><input id="register-password" type="password" name="password1" autocomplete="new-password" required>
                 </div>
-                <div class="row">
-                    <label>Password</label><input type="password" name="password2">
+                <div class="field">
+                    <label for="register-confirmation">Confirm password</label><input id="register-confirmation" type="password" name="password2" autocomplete="new-password" required>
                 </div>
-                <div class="row">
-                    <label>Email</label><input name="email">
+                <div class="field">
+                    <label for="register-email">Email address</label><input id="register-email" type="email" name="email" autocomplete="email">
                 </div>
                 <input class="anchorbutton btn-blue w-100" type="submit" name="submit" value="Create User">
             </div>

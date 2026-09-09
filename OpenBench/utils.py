@@ -42,6 +42,7 @@ from OpenSite.settings import MEDIA_ROOT, PROJECT_PATH
 from OpenBench.config import OPENBENCH_CONFIG
 from OpenBench.models import *
 from OpenBench.stats import TrinomialSPRT, PentanomialSPRT
+from OpenBench.llr_history import record_llr_history
 
 import OpenBench.views
 import OpenBench.model_utils
@@ -163,7 +164,8 @@ def read_git_credentials(engine):
     fpath = os.path.join(PROJECT_PATH, 'Config', fname)
     if os.path.exists(fpath):
         with open(fpath) as fin:
-            return { 'Authorization' : 'token %s' % fin.readlines()[0].rstrip() }
+            return {'Authorization': 'token %s' % fin.readlines()[0].rstrip()}
+
 
 def extract_option(options, option):
 
@@ -405,6 +407,8 @@ def update_test(request, machine):
         if test.finished or test.deleted:
             return { 'stop' : True }
 
+        previous_games, previous_llr = test.games, test.currentllr
+
         test.losses += losses # Trinomial
         test.draws  += draws
         test.wins   += wins
@@ -458,6 +462,8 @@ def update_test(request, machine):
 
             # Finished, and always passing, for a completed DATAGEN Workload
             test.passed = test.finished = test.games >= test.max_games
+
+        record_llr_history(test, previous_games, previous_llr)
 
         test.save()
 

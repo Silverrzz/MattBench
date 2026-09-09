@@ -1,64 +1,37 @@
 {% extends "OpenBench/base.html" %}
 
-{% load mytags live %}
-
-{% block content %}
-
-
-{% block scripts %}
-<style>
-    #content {
-        max-width: 100%;
-    }
-</style>
+{% block page_actions %}
+    <a class="button button-primary" href="/test/new/"><span aria-hidden="true">+</span> New test</a>
 {% endblock %}
 
-    <div id="live-tests" data-live>
-    {% live_region "live-tests" %}
-    <table class="test-list stripes hoverable">
-
-        <!-- Only show Pending tests for the front page of the Index -->
+{% block content %}
+    <div class="tests-page" data-refresh-seconds="30">
         {% if paging.page == 1 %}
-
-            <!-- Currently Pending tests (Waiting to be approved) -->
             {% if pending %}
-                <tr class="table-header"><th colspan='7'>Pending</th></tr>
-                {% for test in pending %}
-                    <tr>
-                        {% include "OpenBench/Blocks/testsummary.html" %}
-                    </tr>
-                {% endfor %}
-                <tr class="table-spacer"><th colspan='7'></th></tr>
+                <section class="tests-section" aria-labelledby="pending-heading">
+                    <h2 id="pending-heading">Awaiting approval <span class="section-count">{{ pending|length }}</span></h2>
+                    {% include "OpenBench/Blocks/index_tests.html" with tests=pending label="Tests awaiting approval" %}
+                </section>
             {% endif %}
-
-            <!-- Currently Running tests (Waiting to be completed) -->
-            {% if active %}
-                <tr class="table-header"><th colspan='7'>Active {{status}}</th></tr>
-                {% for group in active %}
-                    <tr class="table-small-header"><th colspan='7'>Priority {{group.priority}}</th></tr>
-                    {% for test in group.tests %}
-                        <tr>
-                            {% include "OpenBench/Blocks/testsummary.html" %}
-                        </tr>
-                    {% endfor %}
-                {% endfor %}
-                <tr class="table-spacer"><th colspan='7'></th></tr>
+            {% if status %}
+                <section class="tests-section" aria-labelledby="active-heading">
+                    <h2 id="active-heading">Active <span class="tests-compute">{{ status|cut:": " }}</span></h2>
+                    {% if active %}
+                        {% include "OpenBench/Blocks/index_tests.html" with groups=active label="Active tests" %}
+                    {% else %}
+                        <div class="tests-empty"><strong>No active tests</strong></div>
+                    {% endif %}
+                </section>
             {% endif %}
-
         {% endif %}
-
-        <!-- Tests which have already finished -->
-        <tr class="table-header"><th colspan='7'>Finished</th></tr>
-        {% for test in completed %}
-            <tr>
-                {% include "OpenBench/Blocks/testsummary.html" %}
-            </tr>
-        {% endfor %}
-
-    </table>
-
-    {% include "OpenBench/Blocks/pagebrowser.html" %}
-    {% endlive_region %}
+        <section class="tests-section" aria-labelledby="finished-heading">
+            <h2 id="finished-heading">Finished <span class="section-count">{{ completed|length }} shown</span></h2>
+            {% if completed %}
+                {% include "OpenBench/Blocks/index_tests.html" with tests=completed label="Finished tests" %}
+            {% else %}
+                <div class="tests-empty"><strong>No finished tests</strong></div>
+            {% endif %}
+            {% if paging.prev != paging.next %}{% include "OpenBench/Blocks/pagebrowser.html" %}{% endif %}
+        </section>
     </div>
-
 {% endblock %}

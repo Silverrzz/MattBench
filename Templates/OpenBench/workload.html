@@ -1,47 +1,55 @@
 {% extends "OpenBench/base.html" %}
 
-{% block title %}{{ workload }}{% endblock %}
+{% block title %}{{ workload }} · MattBench{% endblock %}
 
-{% load mytags live %}
+{% load mytags %}
 {% load static %}
+
+{% block page_heading %}{% endblock %}
 
 {% block scripts %}
 
     <script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script>
+    {% if workload.test_mode == 'SPRT' %}
+        <link rel="stylesheet" href="{% static 'llr_history.css' %}?{{ static_version }}">
+        <script src="{% static 'llr_history.js' %}?{{ static_version }}" defer></script>
+    {% endif %}
 
-
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            fetch_summary({{workload.id}});
+        });
+    </script>
 
 {% endblock %}
 
 {% block content %}
 
+    <div class="workload-container" data-refresh-seconds="30">
 
-
-    <div class="workload-container">
-
-    <div id="config" data-live>
-        {% live_region "config" %}
-        <table class="test-config left-align wrappable">
+    <div id="config" style="display: block; overflow-x: auto;">
+        <h2>Configuration</h2>
+        <table class="test-config left-align wrappable" style="table-layout: auto; width: 100%;">
 
             <tr><td class="td-label">Author</td><td>{{workload.author|capfirst}}</td></tr>
             <tr><td class="td-label">Creation</td><td class="timestamp">{{workload.creation|date:'U'}}</td></tr>
 
             <!-- All of the Dev Engine ( or Sole Engine ) information -->
             <tr><td class="td-label">{{dev_text}} Source</td><td><a href="{{workload.dev_repo}}">{{workload.dev_repo}}</a></td></tr>
-            <tr><td class="td-label">{{dev_text}} SHA</td><td>{{workload.dev.sha}}</td></tr>
+            <tr><td class="td-label">{{dev_text}} Sha</td><td>{{workload.dev.sha}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Branch</td><td class="branch_name">{{workload.dev.name|prettyName}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Bench</td><td>{{workload.dev.bench}}</td></tr>
-            <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</td></tr>
+            <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</a></td></tr>
             <tr><td class="td-label">{{dev_text}} Options</td><td class="engine-options">{{workload.dev_options}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Time</td><td>{{workload.dev_time_control}}</td></tr>
 
             <!-- All of the Base Engine information, which only exists for TESTs -->
             {% if type == "TEST" or type == "DATAGEN" %}
                 <tr><td class="td-label">Base Source</td><td><a href="{{workload.base_repo}}">{{workload.base_repo}}</a></td></tr>
-                <tr><td class="td-label">Base SHA</td><td>{{workload.base.sha}}</td></tr>
+                <tr><td class="td-label">Base Sha</td><td>{{workload.base.sha}}</td></tr>
                 <tr><td class="td-label">Base Branch</td><td class="branch_name">{{workload.base.name|prettyName}}</td></tr>
                 <tr><td class="td-label">Base Bench</td><td>{{workload.base.bench}}</td></tr>
-                <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</td></tr>
+                <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</a></td></tr>
                 <tr><td class="td-label">Base Options</td><td class="engine-options">{{workload.base_options}}</td></tr>
                 <tr><td class="td-label">Base Time</td><td>{{workload.base_time_control}}</td></tr>
             {% endif %}
@@ -72,7 +80,6 @@
             {% endif %}
 
         </table>
-        {% endlive_region %}
     </div>
 
     <div id="actions" class="ml-3">
@@ -80,8 +87,7 @@
         <!-- Dev vs Base [Git Diff Link] -->
         <h4><a href="{{workload|gitDiffLink}}">{{workload|git_diff_text}}</a></h4>
 
-        <div class="anchor-container" id="live-actions" data-live>
-            {% live_region "live-actions" %}
+        <div class="anchor-container">
 
             <!-- Approve Button: For Admins, or Cross-approvers -->
             {% if not workload.approved and profile.approver and profile.user.username != workload.author %}
@@ -124,40 +130,37 @@
                     <a class="anchorbutton btn-disabled">Delete</a>
                 {% endif %}
             {% endif %}
-            {% endlive_region %}
         </div>
 
         <!-- Copy Button: Copy the current results statblock -->
         {% if type == "TEST" or type == "DATAGEN" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_text_codeblock('long-statblock', true)">Copy Stat Block</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button>
             </div>
         {% endif %}
 
         <!-- PGN Download Button -->
         {% if workload.upload_pgns != "FALSE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" href="/api/pgns/{{workload.id}}/">Download PGN Archive</a>
+                <a class="mt-1 anchorbutton" href="/api/pgns/{{workload.id}}/">Download PGN archive</a>
             </div>
         {% endif %}
 
         <!-- Copies Raw SPSA Input from /api/spsa/{{workload.id}}/inputs/ -->
         {% if type == "TUNE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_spsa_inputs({{workload.id}})">Copy SPSA Inputs</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_spsa_inputs({{workload.id}})">Copy SPSA inputs</button>
             </div>
         {% endif %}
 
         <!-- Copies Optimal Values from /api/spsa/{{workload.id}}/outputs/ -->
         {% if type == "TUNE" %}
             <div class="anchor-container">
-                <a class="mt-1 anchorbutton btn-blue" onclick="copy_spsa_outputs({{workload.id}})">Copy SPSA Outputs</a>
+                <button class="mt-1 anchorbutton" type="button" onclick="copy_spsa_outputs({{workload.id}})">Copy SPSA outputs</button>
             </div>
         {% endif %}
 
-        <div id="live-statistics" data-live>
-        {% live_region "live-statistics" %}
-        <!-- Elo, (SPRT/LRR if SPRT, otherwise CONF), Games -->
+        <p id="workload-feedback" class="field-note" role="status"></p>
         {% if type == "TEST" %}
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
         {% elif type == "TUNE" %}
@@ -166,44 +169,41 @@
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
         {% endif %}
 
-        {% endlive_region %}
-        </div>
+        {% if workload.test_mode == 'SPRT' %}
+            {% include 'OpenBench/Blocks/llr_history.html' %}
+        {% endif %}
 
         <!-- Forum to modify the Priority, Throughput, or (Tests only) Workload Size -->
-        <form method="POST" action="/{{type|lower}}/{{workload.id}}/MODIFY/">
+        <form class="form" method="POST" action="/{{type|lower}}/{{workload.id}}/MODIFY/">
             {% csrf_token %}
-            <div class="form">
-                <div class="col-full">
-
-                    <div class="row workflow-edit">
-                        <label for="info">Info</label>
-                        <textarea id="info" name="info" rows="4">{{workload.info}}</textarea>
-                    </div>
-
-                    <div class="row workflow-edit">
+            <div class="form-stack">
+                <div class="field">
+                    <label for="info">Info</label>
+                    <textarea id="info" name="info" rows="4">{{workload.info}}</textarea>
+                </div>
+                <div class="field-grid{% if type == 'TEST' or type == 'DATAGEN' %} field-grid-thirds{% endif %}">
+                    <div class="field">
                         <label for="priority">Priority</label>
-                        <input value="{{workload.priority}}" id="priority" name="priority">
+                        <input type="number" value="{{workload.priority}}" id="priority" name="priority">
                     </div>
-
-                    <div class="row workflow-edit">
+                    <div class="field">
                         <label for="throughput">Throughput</label>
-                        <input value="{{workload.throughput}}" id="throughput" name="throughput">
+                        <input type="number" value="{{workload.throughput}}" id="throughput" name="throughput">
                     </div>
-
                     {% if type == "TEST" or type == "DATAGEN" %}
-                        <div class="row workflow-edit">
-                            <label for="workload_size">Workload Size</label>
-                            <input value="{{workload.workload_size}}" id="workload_size" name="workload_size">
+                        <div class="field">
+                            <label for="workload_size">Workload size</label>
+                            <input type="number" value="{{workload.workload_size}}" id="workload_size" name="workload_size">
                         </div>
                     {% endif %}
-
-                    <!-- Edit Button: For Approvers or Test Authors -->
-                    {% if profile.approver or profile.user.username == workload.author %}
-                        <input class="anchorbutton btn-blue w-100" type="submit" name="submit" value="Modify">
-                    {% else %}
-                        <input class="anchorbutton btn-disabled w-100" type="submit" name="submit" value="Modify">
-                    {% endif %}
                 </div>
+            </div>
+            <div class="form-actions">
+                {% if profile.approver or profile.user.username == workload.author %}
+                    <input class="anchorbutton btn-blue" type="submit" name="submit" value="Modify">
+                {% else %}
+                    <input class="anchorbutton btn-disabled" type="submit" name="submit" value="Modify" disabled>
+                {% endif %}
             </div>
         </form>
     </div>
@@ -248,7 +248,14 @@
                 <th>#</th>
                 <th>User</th>
                 <th style="width: 45px">Games</th>
-                <th>Penta</th>
+                <th class="numeric">Wins</th>
+                <th class="numeric">Draws</th>
+                <th class="numeric">Losses</th>
+                <th class="numeric" title="Two losses">LL</th>
+                <th class="numeric" title="Loss and draw">LD</th>
+                <th class="numeric" title="Two draws or a win and a loss">DD / WL</th>
+                <th class="numeric" title="Draw and win">DW</th>
+                <th class="numeric" title="Two wins">WW</th>
                 <th style="width: 45px">Pairs</th>
                 <th style="width: 45px">Time</th>
                 <th style="width: 45px">Crash</th>
@@ -260,7 +267,8 @@
         </table>
 
         <!-- Individual per-machine results are only ever fetched on demand -->
-        <button class="w-100 mt-1 anchorbutton btn-blue" type="submit" onclick="fetch_results({{workload.id}})">Fetch Individual Results</button>
+        <button id="fetch-results" class="w-100 mt-1 anchorbutton" type="button" onclick="fetch_results({{workload.id}})">Fetch individual results</button>
+        <p id="results-feedback" class="field-note" role="status"></p>
     </div>
 
     </div>
