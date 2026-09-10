@@ -992,7 +992,7 @@ def build_fastchess_in_dir(config, runner_dir):
     print ('> Using C++ compiler %s...' % config.cxx_comp)
 
     # Execute the build, using our C++ compiler, and record any output
-    make_cmd    = ['make', '-j', 'CXX=%s' % config.cxx_comp]
+    make_cmd    = ['make', '-j', str(min(config.threads, 2)), 'CXX=%s' % config.cxx_comp]
     process     = subprocess.Popen(make_cmd, cwd=runner_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     comp_output = process.communicate()[0].decode('utf-8')
 

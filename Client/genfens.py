@@ -28,15 +28,15 @@
 # and there are 16 threads, then each thread will generate 64 openings.
 #
 # create_genfens_opening_book() may raise utils.OpenBenchFailedGenfensException.
-# This occurs when longer than 15 seconds has elapsed since getting an opening.
-# This should only occur if one or more of the engine processes has stalled.
 
+import collections
+import concurrent.futures
 import math
 import os
 import queue
 import subprocess
 import time
-import multiprocessing
+import threading
 
 ## Local imports must only use "import x", never "from x import ..."
 
@@ -67,19 +67,50 @@ def genfens_command_builder(args, index):
 
     return command
 
-def genfens_single_threaded(command, queue):
+def genfens_single_threaded(command, output, index, expected, active, lock, stop):
+
+    process = None
+    count = 0
+    logs = collections.deque(maxlen=8)
 
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        with lock:
+            if stop.is_set():
+                return
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            active[index] = [process, time.monotonic()]
 
-        for line in iter(process.stdout.readline, b''):
-            if line.decode('utf-8').startswith('info string genfens '):
-                queue.put(line.decode('utf-8').split('genfens ')[1].rstrip())
+        for raw_line in iter(process.stdout.readline, b''):
+            line = raw_line.decode('utf-8', errors='replace').rstrip()
+            if line.startswith('info string genfens '):
+                count += 1
+                if count > expected:
+                    raise ValueError('Generated more than %d openings' % expected)
+                with lock:
+                    active[index][1] = time.monotonic()
+                output.put(('fen', index, line.split('genfens ', 1)[1]))
+            else:
+                logs.append(line[-1000:])
 
-        process.wait()
+        returncode = process.wait()
+        if not stop.is_set():
+            if returncode or count != expected:
+                raise RuntimeError('Exit code %d; generated %d/%d openings; output: %s'
+                                   % (returncode, count, expected, ' | '.join(logs)))
+            output.put(('done', index, None))
 
-    except:
-        raise
+    except Exception as error:
+        if not stop.is_set():
+            output.put(('error', index, str(error)))
+
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+        with lock:
+            active.pop(index, None)
 
 def genfens_progress_bar(curr, total):
 
@@ -103,35 +134,65 @@ def create_genfens_opening_book(args):
 
     N          = args['N']
     threads    = args['threads']
-    start_time = time.time()
-    output     = multiprocessing.Queue()
+    start_time = time.monotonic()
+    output     = queue.Queue()
+    active     = {}
+    lock       = threading.Lock()
+    stop       = threading.Event()
+    executor   = None
 
-    print ('\nGenerating %d Openings using %d Threads...' % (N * threads, threads))
+    try:
+        concurrency = min(threads, int(os.environ.get('OPENBENCH_GENFENS_CONCURRENCY', '32')))
+        timeout = float(os.environ.get('OPENBENCH_GENFENS_TIMEOUT', '120'))
+        if N < 1 or concurrency < 1 or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError('Opening count, concurrency and timeout must be positive')
+        if len(args['seeds']) < threads:
+            raise ValueError('Not enough genfens seeds for %d tasks' % threads)
 
-    # Split the work over many threads. Ensure the seed varies by the thread,
-    # number in accordance with how many openings each thread will generate
+        print('\nGenerating %d Openings using %d Concurrent Engines (%d Seed Tasks)...'
+              % (N * threads, concurrency, threads))
 
-    processes = [
-        multiprocessing.Process(
-            target=genfens_single_threaded,
-            args=(genfens_command_builder(args, index), output))
-        for index in range(threads)
-    ]
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
+        for index in range(threads):
+            executor.submit(genfens_single_threaded, genfens_command_builder(args, index),
+                            output, index, N, active, lock, stop)
 
-    for process in processes:
-        process.start()
+        completed = generated = 0
+        while completed < threads:
+            try:
+                kind, index, value = output.get(timeout=1)
+            except queue.Empty:
+                kind = None
 
-    try: # Each process will deposit exactly N results into the Queue
-        for iteration in range(N * threads):
-            args['output'].write(convert_fen_to_epd(output.get(timeout=15)) + '\n')
-            genfens_progress_bar(iteration+1, N * threads)
+            if kind == 'error':
+                raise RuntimeError('Seed task %d (seed %s): %s' % (index, args['seeds'][index], value))
+            if kind == 'done':
+                completed += 1
+            if kind == 'fen':
+                args['output'].write(convert_fen_to_epd(value) + '\n')
+                generated += 1
+                genfens_progress_bar(generated, N * threads)
 
-    except queue.Empty: # Force kill the engine, thus causing the processes to finish
-        utils.kill_process_by_name(args['engine'])
-        raise utils.OpenBenchFailedGenfensException('[%s] Stalled during genfens' % (args['engine']))
+            with lock:
+                stalled = [(index, process.pid) for index, (process, last_output) in active.items()
+                           if time.monotonic() - last_output > timeout]
+            if stalled:
+                raise RuntimeError('No opening or exit for %.1fs from seed task/PID %s; generated %d/%d'
+                                   % (timeout, stalled[:8], generated, N * threads))
 
-    finally: # Join everything to avoid zombie processes
-        for process in processes:
-            process.join()
+        if generated != N * threads:
+            raise RuntimeError('Generated %d/%d openings' % (generated, N * threads))
 
-    print('\nFinished Building Opening Book in %.3f seconds' % (time.time() - start_time))
+    except Exception as error:
+        raise utils.OpenBenchFailedGenfensException('[%s] Genfens failed: %s' % (args['engine'], error)) from error
+
+    finally:
+        stop.set()
+        with lock:
+            for process, last_output in active.values():
+                if process.poll() is None:
+                    process.kill()
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    print('\nFinished Building Opening Book in %.3f seconds' % (time.monotonic() - start_time))
