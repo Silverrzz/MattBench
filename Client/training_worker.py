@@ -777,10 +777,10 @@ def execute(connection, job, root, pawnocchio):
         reporter.stage('TRAINING')
         reporter.checkpoints = CheckpointUploader(connection, job, directory, reporter)
         command(snapshot['settings']['run'], repository, environment, reporter)
+        reporter.stage('SAVING')
         reporter.checkpoints.finish()
         for index in range(len(stage_data)):
             remove_work_directory(directory / ('stage-%d' % index), directory)
-        reporter.stage('SAVING')
         save_outputs(connection, job, directory, reporter)
         reporter.stage('COMPLETED')
     except Exception as error:

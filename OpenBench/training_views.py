@@ -48,12 +48,11 @@ def error_text(error):
     return 'Invalid input. Check the fields and try again.'
 
 
-@login_required(login_url='/login/')
 @require_http_methods(['GET'])
 def training_index(request, page=1):
     from OpenBench.utils import getPaging
     from OpenBench.views import render
-    runs = visible_runs(request.user).filter(deleted=False).select_related(None).select_related('owner', 'engine', 'worker', 'requested_worker').defer('snapshot', 'dataset', 'parameters', 'history', 'log_tail').annotate(backend=F('snapshot__settings__backend'), min_vram_gb=F('snapshot__settings__min_vram_gb'), demo=F('snapshot__demo'))
+    runs = TrainingRun.objects.filter(deleted=False).select_related('owner', 'engine', 'worker', 'requested_worker').defer('snapshot', 'dataset', 'parameters', 'history', 'log_tail').annotate(backend=F('snapshot__settings__backend'), min_vram_gb=F('snapshot__settings__min_vram_gb'), demo=F('snapshot__demo'))
     finished = runs.filter(state__in=TRAINING_TERMINAL).order_by('-finished', '-pk')
     page = max(1, int(page))
     start, end, paging = getPaging(finished, page, 'training/page')
@@ -329,12 +328,11 @@ def new_training(request):
     return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'checkpoint_options': checkpoint_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists()})
 
 
-@login_required(login_url='/login/')
 @require_http_methods(['GET', 'POST'])
 @transaction.atomic
 def training_detail(request, pk):
     from OpenBench.views import redirect, render
-    run = get_object_or_404(visible_runs(request.user), pk=pk)
+    run = get_object_or_404(TrainingRun.objects.select_related('owner', 'engine', 'worker'), pk=pk)
     manage = may_manage(request.user, run)
     if request.method == 'POST':
         enabled(request.user)
@@ -525,9 +523,8 @@ def lifecycle_events(request):
     return JsonResponse({'events': events, 'next': events[-1]['id'] if events else after})
 
 
-@login_required(login_url='/login/')
 def checkpoint_list(request, pk):
-    run = get_object_or_404(visible_runs(request.user), pk=pk)
+    run = get_object_or_404(TrainingRun, pk=pk)
     try:
         before = int(request.GET.get('before', 10000001))
     except ValueError:

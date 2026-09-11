@@ -314,6 +314,10 @@ def report(request, pk):
         changes['error'] = error
     if state in TRAINING_TERMINAL:
         changes['finished'] = now
+    if state == 'COMPLETED':
+        from OpenBench.training_checkpoints import prune_checkpoints
+        with storage_lock():
+            prune_checkpoints(run)
     with transaction.atomic():
         changed = TrainingRun.objects.filter(pk=pk, report_sequence=run.report_sequence, state=run.state, cancel_requested=run.cancel_requested, deleted=run.deleted).update(**changes)
         if changed and state != run.state:

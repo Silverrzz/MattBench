@@ -56,7 +56,7 @@ def prune_checkpoints(run, newest_id=None):
     paths = []
     with transaction.atomic():
         TrainingRun.objects.select_for_update().get(pk=run.pk)
-        candidates = list(run.checkpoints.select_for_update().select_related('archive').order_by('-superbatch')[keep:])
+        candidates = list(run.checkpoints.select_for_update().select_related('archive', 'network').order_by('-superbatch')[keep:])
         protected = set(checkpoint_users(candidates).values_list('resume_from_id', flat=True))
         from OpenBench.training_telemetry import training_stages
         boundaries = {stage['end'] for stage in training_stages(run.snapshot, run.dataset)}
@@ -68,13 +68,17 @@ def prune_checkpoints(run, newest_id=None):
                 continue
             TrainingRun.objects.filter(resume_from=checkpoint, state__in=TRAINING_TERMINAL).update(resume_from=None)
             archive = checkpoint.archive
+            network = checkpoint.network
             removed.append(checkpoint.superbatch)
             checkpoint.delete()
             paths.append(Path(settings.TRAINING_ROOT) / archive.path)
             archive.delete()
+            if not network.network_id:
+                paths.append(Path(settings.TRAINING_ROOT) / network.path)
+                network.delete()
         if not removed:
             return
-        record_event('training.checkpoints.pruned', run, run.owner_id, {'superbatches': removed, 'keep_latest': keep, 'network_exports_preserved': True}, key='training.prune:%s:%s' % (run.pk, max(removed)))
+        record_event('training.checkpoints.pruned', run, run.owner_id, {'superbatches': removed, 'keep_latest': keep, 'imported_networks_preserved': True}, key='training.prune:%s:%s' % (run.pk, max(removed)))
         def remove_files():
             root = Path(settings.TRAINING_ROOT).resolve()
             for path in paths:

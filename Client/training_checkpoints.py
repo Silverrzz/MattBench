@@ -49,9 +49,11 @@ class CheckpointUploader:
         self.saved = 0
         self.records = []
         self.error = None
+        self.lock = threading.Lock()
         self.closed = threading.Event()
-        self.thread = threading.Thread(target=self.loop, daemon=True)
-        self.thread.start()
+        self.threads = [threading.Thread(target=self.loop, daemon=True) for _ in range(2)]
+        for thread in self.threads:
+            thread.start()
 
     def observe(self, line):
         descriptor = None
@@ -101,6 +103,7 @@ class CheckpointUploader:
             raise RuntimeError('The checkpoint network has an unexpected size.')
         before = [(file, file.stat().st_size, file.stat().st_mtime_ns) for file in files]
         step = descriptor['superbatch']
+        self.reporter.write('Checkpoint SB %d: preparing and uploading network and resume checkpoint.\n' % step)
         archive = self.directory / ('checkpoint-%d.tar.zst' % step)
         with archive.open('wb') as output:
             with zstandard.ZstdCompressor(level=3).stream_writer(output) as compressed:
@@ -124,10 +127,12 @@ class CheckpointUploader:
                     raise
                 self.reporter.stop.wait(min(30, 2 ** attempt))
                 self.reporter.check()
-        self.saved += 1
-        self.records.append({**payload, 'id': result['checkpoint'], 'archive_sha256': saved_archive['sha256'], 'network_sha256': saved_network['sha256']})
-        self.uploaded_networks.add(network.resolve())
-        self.reporter.update(checkpoints_saved=self.saved, last_checkpoint_superbatch=step)
+        with self.lock:
+            self.saved += 1
+            self.records.append({**payload, 'id': result['checkpoint'], 'archive_sha256': saved_archive['sha256'], 'network_sha256': saved_network['sha256']})
+            self.records.sort(key=lambda record: record['superbatch'])
+            self.uploaded_networks.add(network.resolve())
+            self.reporter.update(checkpoints_saved=self.saved, last_checkpoint_superbatch=self.records[-1]['superbatch'])
         self.reporter.write('Checkpoint SB %d stored and verified by MattBench.\n' % step)
         archive.unlink()
         if limits.get('delete_uploaded_checkpoints', True) and result.get('replicated'):
@@ -163,13 +168,16 @@ class CheckpointUploader:
             self.reporter.check()
             time.sleep(0.2)
         self.closed.set()
-        self.thread.join(timeout=10)
+        for thread in self.threads:
+            thread.join(timeout=10)
         if self.error:
             raise RuntimeError(self.error)
 
     def close(self):
         self.closed.set()
-        self.thread.join(timeout=320)
+        deadline = time.monotonic() + 320
+        for thread in self.threads:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
 
 
 def download_checkpoint(connection, job, directory, reporter):
