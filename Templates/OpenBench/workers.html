@@ -1,24 +1,27 @@
 {% extends 'OpenBench/base.html' %}
 {% load static live %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><script src="{% static 'workspace.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
 {% block content %}
-<div data-filter-scope>
-    <div class="workspace-toolbar"><input data-search type="search" placeholder="Search workers" aria-label="Search workers"><select data-filter-select="state" aria-label="Filter worker status"><option value="">All workers</option><option value="busy">Busy</option><option value="available">Available</option><option value="offline">Offline</option><option value="disconnected">Disconnected</option></select></div>
+<div>
     <div id="live-workers" data-live>{% live_region 'live-workers' %}
         <dl class="workspace-stats"><div><dt>Connected</dt><dd>{{ online_count }}</dd></div><div><dt>Busy</dt><dd>{{ busy_count }}</dd></div><div><dt>CPU threads</dt><dd>{{ thread_count }}</dd></div></dl>
+        {% for group in worker_groups %}
+        <section aria-labelledby="workers-{{ group.id }}">
+        <h2 id="workers-{{ group.id }}">{{ group.title }}</h2>
         <div class="worker-list">
             <div class="worker-row worker-header"><span>Worker</span><span>Hardware</span><span class="worker-capacity">Capacity</span><span>Current job</span><span>Status</span></div>
-            {% for worker in workers %}
-            <article class="worker-row" data-search-row="{{ worker.name }} {{ worker.hardware }} {{ worker.owner.username }} {{ worker.job }} {{ worker.capabilities|join:' ' }}" data-state="{{ worker.state|lower }}">
+            {% for worker in group.workers %}
+            <article class="worker-row">
                 <div><a href="{{ worker.url }}"><strong>{{ worker.name }}</strong></a><small>{{ worker.owner.username }}{% if worker.demo %} · Demo{% endif %}</small></div>
                 <div class="worker-hardware"><span>{{ worker.hardware }}</span><small>{{ worker.platform }}{% if worker.gpu_memory %} · {{ worker.gpu_memory|floatformat:0 }} GB VRAM{% endif %}</small></div>
                 <div class="worker-capacity"><span>{{ worker.threads }} threads</span>{% if worker.memory %}<small>{{ worker.memory }} GB RAM</small>{% endif %}</div>
                 <div class="worker-job">{% if worker.job %}<a href="{{ worker.job_url }}">{{ worker.job }}</a><small>{{ worker.rate }}</small>{% else %}<small>{{ worker.capabilities|join:' · ' }}</small>{% endif %}</div>
                 <div><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span><small>{{ worker.updated|timesince }} ago</small></div>
             </article>
-            {% empty %}<div class="empty-block">No workers connected</div>{% endfor %}
+            {% empty %}<div class="empty-block">{{ group.empty }}</div>{% endfor %}
         </div>
+        </section>
+        {% endfor %}
     {% endlive_region %}</div>
-    <div class="empty-block" data-search-empty hidden>No matching workers</div>
 </div>
 {% endblock %}

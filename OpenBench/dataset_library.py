@@ -2,9 +2,11 @@ import logging
 import re
 
 from django import forms
-from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ValidationError
+from django.contrib.auth.views import redirect_to_login
+from django.core.cache import cache
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -58,16 +60,42 @@ def refresh_metadata(dataset):
     dataset.checked = timezone.now()
 
 
-@login_required(login_url='/login/')
+def public_repository(repo):
+    from huggingface_hub import HfApi
+    key = 'dataset-public:' + repo
+    public = cache.get(key)
+    if public is None:
+        try:
+            info = HfApi(token=False).dataset_info(repo, timeout=5)
+            public = info.private is False
+        except Exception:
+            public = False
+        cache.set(key, public, 60)
+    return public
+
+
 @require_http_methods(['GET', 'POST'])
 def library(request, dataset_id=None, create=False):
     from OpenBench.training_views import enabled
     from OpenBench.views import render, redirect
-    enabled(request.user)
-    rows = TrainingDataset.objects.filter(owner=request.user)
+    if create or request.method == 'POST':
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path(), login_url='/login/')
+        enabled(request.user)
+    rows = TrainingDataset.objects.select_related('owner')
     selected = get_object_or_404(rows, pk=dataset_id) if dataset_id else None
+    editable = create or bool(selected and request.user.is_authenticated and selected.owner_id == request.user.pk)
+    if selected and not editable and not public_repository(selected.repo):
+        raise Http404
+    if request.method == 'POST' and not editable:
+        raise PermissionDenied
+    if not selected and not create:
+        rows = [row for row in rows if request.user.is_authenticated and row.owner_id == request.user.pk or public_repository(row.repo)]
     initial = {'name': request.GET.get('name', ''), 'repo': request.GET.get('repo', ''), 'revision': request.GET.get('revision', 'main'), 'patterns': request.GET.get('files', '*')}
     form = DatasetForm(request.POST if request.method == 'POST' else None, instance=selected, initial=initial if create else None) if selected or create else None
+    if form and not editable:
+        for field in form.fields.values():
+            field.disabled = True
     feedback = ''
     refresh_error = ''
     if request.method == 'POST':
@@ -107,5 +135,5 @@ def library(request, dataset_id=None, create=False):
                 form.add_error(None, 'Could not verify and save this dataset. Please retry; no changes were saved.')
     return render(request, 'dataset_library.html', {
         'page_title': selected.name if selected else 'Register dataset' if create else 'Datasets',
-        'training_tab': 'datasets', 'datasets': rows, 'selected': selected, 'form': form, 'feedback': feedback, 'refresh_error': refresh_error,
-    })
+        'training_tab': 'datasets', 'datasets': rows, 'selected': selected, 'form': form, 'editable': editable, 'feedback': feedback, 'refresh_error': refresh_error,
+    }, always_allow=True)

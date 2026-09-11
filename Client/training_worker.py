@@ -803,7 +803,7 @@ def main(argv=None, worker_config=None):
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--register-only', action='store_true', help='Persist worker credentials, then exit without claiming a run.')
     parser.add_argument('--high-performance-transfers', '--high-performance-downloads', dest='high_performance_downloads', action='store_true', help='Enable Xet high-performance uploads and downloads; intended for high bandwidth and at least 64 GB RAM.')
-    parser.add_argument('--execution-image', default='', help='Linux execution image pinned as repository@sha256:digest; required for remote servers. Include Rust, GPU libraries and cached Cargo dependencies.')
+    parser.add_argument('--execution-image', default='', help='Optional Linux execution image pinned as repository@sha256:digest. Omit to run natively. Include Rust, GPU libraries and cached Cargo dependencies.')
     parser.add_argument('--memory-gb', type=int, default=max(1, int(psutil.virtual_memory().total / 1024 ** 3 * 0.8)))
     args = parser.parse_args(argv)
     parsed = urlsplit(args.server)
@@ -821,8 +821,6 @@ def main(argv=None, worker_config=None):
         if os.getuid() == 0:
             parser.error('Run the worker as a dedicated non-root account.')
         subprocess.run(['docker', 'image', 'inspect', args.execution_image], check=True, stdout=subprocess.DEVNULL, timeout=30)
-    elif parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
-        parser.error('Remote workers require --execution-image for isolated schedule execution.')
     if args.memory_gb < 1:
         parser.error('Memory limit must be positive.')
     for tool in (('git',) if args.execution_image else ('git', 'cargo', 'rustc')):
@@ -870,6 +868,13 @@ def main(argv=None, worker_config=None):
         response = requests.post(args.server.rstrip('/') + '/api/training/register/', data=payload, timeout=30)
         payload.clear()
         response.request.body = None
+        if response.status_code >= 400:
+            try:
+                details = response.json()
+            except ValueError:
+                details = {}
+            message = details.get('error') if isinstance(details, dict) else None
+            raise RuntimeError('Training registration rejected by %s (HTTP %d): %s' % (args.server, response.status_code, message or 'Server returned no error details.'))
         response.raise_for_status()
         registration.update(registered=True, username=username, info=info)
         write_json(identity_path, registration)

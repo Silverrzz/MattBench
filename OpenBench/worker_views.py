@@ -97,9 +97,15 @@ def worker_rows(user, identifier=None):
 def index(request):
     from OpenBench.views import render
     rows = worker_rows(request.user)
+    connected = [row for row in rows if row['state'] in ('Busy', 'Available')]
+    old = [row for row in rows if row['state'] not in ('Busy', 'Available')]
     return render(request, 'workers.html', {
-        'page_title': 'Workers', 'workers': rows,
-        'online_count': sum(row['state'] in ('Busy', 'Available') for row in rows),
+        'page_title': 'Workers',
+        'worker_groups': [
+            {'id': 'connected', 'title': 'Connected workers', 'workers': connected, 'empty': 'No workers connected'},
+            {'id': 'old', 'title': 'Old workers', 'workers': old, 'empty': 'No old workers'},
+        ],
+        'online_count': len(connected),
         'busy_count': sum(row['state'] == 'Busy' for row in rows),
         'thread_count': sum(row['threads'] for row in rows if row['state'] in ('Busy', 'Available')),
     })

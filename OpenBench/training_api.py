@@ -100,7 +100,8 @@ def register(request):
             raise ValueError
         if not isinstance(info.get('runtime'), dict) or not info['runtime'].get('worker_sha256'):
             raise ValueError
-        if not settings.DEBUG and not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', info.get('execution_image', '')):
+        execution_image = info.get('execution_image', '')
+        if not isinstance(execution_image, str) or execution_image and not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', execution_image):
             raise ValueError
     except (ValueError, TypeError):
         return JsonResponse({'error': 'Invalid persistent worker identity.'}, status=400)

@@ -222,6 +222,7 @@ body.editor-expanded { overflow: hidden; }
 .dataset-save { display: grid; gap: 14px; padding-top: 4px; }
 .dataset-save .button { width: 100%; }
 .dataset-management { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12px; }
+.dataset-management form { display: flex; flex-wrap: wrap; gap: 10px; }
 .dataset-management .button { background: transparent; font-size: 12px; min-height: 36px; padding: 7px 10px; color: var(--muted); }
 .dataset-workspace .dataset-contents { margin-top: 0; }
 .dataset-file-list { border: 1px solid var(--line); border-radius: 3px; scrollbar-width: thin; scrollbar-color: var(--line-strong) var(--canvas); }

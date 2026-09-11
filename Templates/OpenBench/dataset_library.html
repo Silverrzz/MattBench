@@ -3,7 +3,7 @@
 {% block scripts %}<script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}">{% endblock %}
 {% block description %}{% if selected %}<p>{{ selected.repo }}</p>{% endif %}{% endblock %}
 {% block page_actions %}
-{% if form %}<a class="button" href="/training/datasets/">Back to datasets</a>{% if selected and not selected.archived and selected.checked %}<a class="button button-primary" href="/training/new/?dataset={{ selected.pk }}">Use in training</a>{% endif %}
+{% if form %}<a class="button" href="/training/datasets/">Back to datasets</a>{% if request.user.is_authenticated and selected and not selected.archived and selected.checked %}<a class="button button-primary" href="/training/new/?dataset={{ selected.pk }}">Use in training</a>{% endif %}
 {% else %}<a class="button button-primary" href="/training/datasets/new/">Register dataset</a>{% endif %}
 {% endblock %}
 {% block content %}
@@ -16,18 +16,19 @@
     <form method="post" class="form form-stack dataset-library-form">
         {% csrf_token %}{{ form.non_field_errors }}
         {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<span class="field-note">{{ field.help_text }}</span>{% endif %}</div>{% endfor %}
-        <div class="dataset-save"><button class="button button-primary" name="action" value="save">Save dataset</button></div>
+        {% if editable %}<div class="dataset-save"><button class="button button-primary" name="action" value="save">Save dataset</button></div>{% endif %}
     </form>
-    {% if selected %}<div class="dataset-management"><a href="https://huggingface.co/datasets/{{ selected.repo }}" target="_blank" rel="noopener">View repository &nearr;</a><form method="post">{% csrf_token %}{% if selected.archived %}<button class="button" name="action" value="restore">Restore dataset</button>{% else %}<button class="button" name="action" value="archive">Archive dataset</button>{% endif %}<button class="button" name="action" value="delete" onclick="return confirm('Permanently delete this dataset from your library? Existing training runs and files on Hugging Face will be kept.')">Delete dataset</button></form></div>{% endif %}
+    {% if selected %}<div class="dataset-management"><a href="https://huggingface.co/datasets/{{ selected.repo }}" target="_blank" rel="noopener">View repository &nearr;</a>{% if editable %}<form method="post">{% csrf_token %}{% if selected.archived %}<button class="button" name="action" value="restore">Restore dataset</button>{% else %}<button class="button" name="action" value="archive">Archive dataset</button>{% endif %}<button class="button" name="action" value="delete" onclick="return confirm('Permanently delete this dataset from your library? Existing training runs and files on Hugging Face will be kept.')">Delete dataset</button></form>{% endif %}</div>{% endif %}
 </section>
 {% if selected %}
 <section class="dataset-contents" aria-labelledby="dataset-contents-heading">
-    <div class="dataset-library-heading"><h2 id="dataset-contents-heading">Dataset information</h2><form method="post">{% csrf_token %}<button class="button" name="action" value="refresh">Refresh contents</button></form></div>
+    <div class="dataset-library-heading"><h2 id="dataset-contents-heading">Dataset information</h2>{% if editable %}<form method="post">{% csrf_token %}<button class="button" name="action" value="refresh">Refresh contents</button></form>{% endif %}</div>
     {% if feedback %}<p class="training-notice" role="status">{{ feedback }}</p>{% endif %}
     {% if refresh_error %}<p class="training-error" role="alert">{{ refresh_error }}</p>{% endif %}
     <div class="anchor-container"><button class="anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button></div>
     <p id="workload-feedback" class="field-note" role="status"></p>
     <pre class="long-statblock dataset-statblock{% if selected.archived %} dataset-statblock-archived{% elif not selected.checked %} dataset-statblock-pending{% endif %}" id="long-statblock">{{ selected.name }}
+Registered by: {{ selected.owner.username }}
 Repository: {{ selected.repo }}
 Revision:   {{ selected.revision }}
 {% if selected.checked %}Files:      {{ selected.metadata.file_count }}
@@ -43,9 +44,9 @@ Commit:     {{ selected.metadata.commit }}{% else %}Contents have not been check
 {% endif %}
 </div>
 {% else %}
-<div class="dataset-file-list dataset-library-table" tabindex="0" role="region" aria-label="Dataset library"><table><thead><tr><th scope="col">Dataset</th><th scope="col">Contents</th><th scope="col">Status</th><th scope="col"><span class="dataset-action-label">Action</span></th></tr></thead><tbody>
-{% for dataset in datasets %}<tr><td><a class="table-title" href="/training/datasets/{{ dataset.pk }}/">{{ dataset.name }}</a><span class="dataset-repo">{{ dataset.repo }}</span></td><td>{% if dataset.checked %}{{ dataset.metadata.file_count }} files<span class="dataset-repo">{{ dataset.metadata.size|filesizeformat }}</span>{% else %}Not refreshed{% endif %}</td><td><span class="training-badge{% if dataset.checked and not dataset.archived %} state-completed{% endif %}">{% if dataset.archived %}Archived{% elif dataset.checked %}Available{% else %}Needs verification{% endif %}</span></td><td><a href="/training/datasets/{{ dataset.pk }}/" aria-label="Manage {{ dataset.name }}">Manage &rarr;</a></td></tr>
-{% empty %}<tr><td colspan="4" class="dataset-empty">No datasets registered. <a href="/training/datasets/new/">Register dataset</a></td></tr>{% endfor %}
+<div class="dataset-file-list dataset-library-table" tabindex="0" role="region" aria-label="Dataset library"><table><thead><tr><th scope="col">Dataset</th><th scope="col">Registered by</th><th scope="col">Contents</th><th scope="col">Status</th><th scope="col"><span class="dataset-action-label">Action</span></th></tr></thead><tbody>
+{% for dataset in datasets %}<tr><td><a class="table-title" href="/training/datasets/{{ dataset.pk }}/">{{ dataset.name }}</a><span class="dataset-repo">{{ dataset.repo }}</span></td><td>{{ dataset.owner.username }}</td><td>{% if dataset.checked %}{{ dataset.metadata.file_count }} files<span class="dataset-repo">{{ dataset.metadata.size|filesizeformat }}</span>{% else %}Not refreshed{% endif %}</td><td><span class="training-badge{% if dataset.checked and not dataset.archived %} state-completed{% endif %}">{% if dataset.archived %}Archived{% elif dataset.checked %}Available{% else %}Needs verification{% endif %}</span></td><td><a href="/training/datasets/{{ dataset.pk }}/" aria-label="View {{ dataset.name }}">{% if dataset.owner_id == request.user.pk %}Manage{% else %}View{% endif %} &rarr;</a></td></tr>
+{% empty %}<tr><td colspan="5" class="dataset-empty">No datasets registered. <a href="/training/datasets/new/">Register dataset</a></td></tr>{% endfor %}
 </tbody></table></div>
 {% endif %}
 {% endblock %}
