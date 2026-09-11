@@ -69,6 +69,18 @@ def remove_work_directory(path, root):
         raise RuntimeError('Could not clean up %s: %s' % (path, error)) from error
 
 
+def cleanup_runs(root):
+    for record in root.glob('.process-*.json'):
+        match = re.fullmatch(r'\.process-([0-9]+)(?:-[a-f0-9]+)?\.json', record.name)
+        if match:
+            stop_previous(root / match[1])
+    for directory in root.iterdir():
+        if re.fullmatch(r'[0-9]+', directory.name):
+            stop_previous(directory)
+            remove_work_directory(directory, root)
+    remove_work_directory(root / 'transfer-cache', root)
+
+
 class Connection:
     def __init__(self, server, worker, token):
         self.server = server.rstrip('/')
@@ -179,7 +191,7 @@ class Reporter:
             if result.get('stop') and not (result.get('state') == payload['state'] and payload['state'] in ('COMPLETED', 'FAILED', 'CANCELLED')):
                 self.stop.set()
                 if result.get('state') == 'FAILED':
-                    self.abort_reason = 'The server marked this run failed; local files were preserved.'
+                    self.abort_reason = 'The server marked this run failed.'
                 raise Stopped('The server stopped this run.')
             if result.get('sequence', payload['sequence']) < payload['sequence']:
                 raise RuntimeError('Report changed concurrently; retrying the same sequence.')
@@ -218,7 +230,7 @@ class Reporter:
                     if result.get('state') == self.state and self.state in ('COMPLETED', 'FAILED', 'CANCELLED'):
                         return
                     if result.get('state') == 'FAILED':
-                        self.abort_reason = 'The server marked this run failed; local files were preserved.'
+                        self.abort_reason = 'The server marked this run failed.'
                     self.stop.set()
                     if self.state in ('DOWNLOADING', 'CONVERTING'):
                         from huggingface_hub.utils._xet import abort_xet_session
@@ -254,8 +266,8 @@ class Reporter:
 
     def close(self):
         self.done.set()
-        self.control_thread.join(timeout=5)
-        self.thread.join(timeout=65)
+        self.control_thread.join()
+        self.thread.join()
         with self.lock:
             self.log_file.close()
 
@@ -628,57 +640,26 @@ def save_outputs(connection, job, directory, reporter):
                 break
             except (requests.RequestException, RuntimeError):
                 if attempt == 4:
-                    raise RuntimeError('Artifact upload failed. Outputs are preserved in %s.' % directory) from None
+                    raise RuntimeError('Artifact upload failed.') from None
                 reporter.stop.wait(min(30, 2 ** attempt))
                 reporter.check()
         reporter.update(progress=100 * (index + 1) / len(artifacts))
 
 
-def finalize_saved(connection, job, directory):
-    manifest_path = directory / 'manifest.json'
-    if job['state'] != 'SAVING' or not manifest_path.is_file() or job['cancel_requested']:
-        return False
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    if manifest['id'] != job['id']:
-        raise RuntimeError('Saved manifest belongs to another run.')
-    reporter = Reporter(connection, job, directory)
-    try:
-        final_log = directory / 'final-log.txt'
-        if not final_log.is_file():
-            shutil.copyfile(directory / 'worker.log', final_log)
-        artifacts = manifest['artifacts'] + [{'path': str(manifest_path), 'name': 'manifest.json', 'kind': 'manifest'}, {'path': str(final_log), 'name': 'worker.log', 'kind': 'log'}]
-        for item in artifacts:
-            path = Path(item['path']).resolve()
-            if not path.is_relative_to(directory.resolve()) or not path.is_file():
-                raise RuntimeError('Saved output is missing or outside the run directory.')
-            digest = sha256_file(path)
-            if item.get('sha256', digest) != digest:
-                raise RuntimeError('Saved output checksum changed.')
-            reporter.check()
-            with path.open('rb') as source:
-                result = connection.request('POST', '%d/artifacts/' % job['id'], params={'name': item['name'], 'kind': item['kind'], 'sha256': digest}, data=source, timeout=(15, 300)).json()
-            if result['sha256'] != digest or result['size'] != path.stat().st_size:
-                raise RuntimeError('Recovered artifact acknowledgement does not match.')
-        reporter.stage('COMPLETED')
-        return True
-    finally:
-        reporter.close()
-        if reporter.ack_state == 'COMPLETED':
-            remove_work_directory(directory, directory.parent)
-
-
 def execute(connection, job, root, pawnocchio):
     directory = root / str(job['id'])
     directory.mkdir(exist_ok=False)
-    reporter = Reporter(connection, job, directory)
+    reporter = None
     previous_handlers = {}
     interrupted = threading.Event()
     def interrupt(*args):
         interrupted.set()
-        reporter.stop.set()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        previous_handlers[signum] = signal.signal(signum, interrupt)
+        if reporter:
+            reporter.stop.set()
     try:
+        reporter = Reporter(connection, job, directory)
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, interrupt)
         environment = child_environment(directory, job)
         if environment.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'):
             reporter.write('Using Microsoft linker: %s\n' % environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'])
@@ -724,7 +705,7 @@ def execute(connection, job, root, pawnocchio):
         reporter.stage('COMPILING')
         repository = directory / 'bullet'
         snapshot = job['snapshot']
-        command(['git', 'init', str(repository)], directory, environment, reporter, trusted=True)
+        command(['git', '-c', 'init.defaultBranch=main', 'init', str(repository)], directory, environment, reporter, trusted=True)
         command(['git', '-C', str(repository), 'remote', 'add', 'origin', snapshot['settings']['bullet_repo']], directory, environment, reporter, trusted=True)
         command(['git', '-C', str(repository), 'fetch', '--depth', '1', 'origin', snapshot['bullet_commit']], directory, environment, reporter, trusted=True)
         command(['git', '-C', str(repository), 'checkout', '--detach', 'FETCH_HEAD'], directory, environment, reporter, trusted=True)
@@ -791,6 +772,8 @@ def execute(connection, job, root, pawnocchio):
         save_outputs(connection, job, directory, reporter)
         reporter.stage('COMPLETED')
     except Exception as error:
+        if reporter is None:
+            raise
         recoverable = interrupted.is_set() or isinstance(error, requests.RequestException) or str(error).startswith('Server unavailable') or (reporter.abort_reason or '').startswith(('Server unavailable', 'The server marked this run failed'))
         if interrupted.is_set():
             error = RuntimeError('Worker interrupted. Training will recover automatically when the worker reconnects.')
@@ -798,7 +781,7 @@ def execute(connection, job, root, pawnocchio):
             error = RuntimeError(reporter.abort_reason)
         elif reporter.stop.is_set():
             error = Stopped('Training stopped by the server or its owner.')
-        message = str(error) if isinstance(error, (RuntimeError, Stopped)) else '%s during %s. Local files are preserved in %s.' % (type(error).__name__, reporter.state.lower(), directory)
+        message = str(error) if isinstance(error, (RuntimeError, Stopped)) else '%s during %s.' % (type(error).__name__, reporter.state.lower())
         reporter.write('\n' + message + '\n')
         with reporter.lock:
             reporter.error = message[:2048]
@@ -814,14 +797,22 @@ def execute(connection, job, root, pawnocchio):
         except Exception:
             print('Could not report the failure. MattBench will mark the run failed after its heartbeat timeout.')
     finally:
-        if reporter.checkpoints:
-            reporter.stop.set()
-            reporter.checkpoints.close()
-        reporter.close()
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-        if reporter.ack_state in ('COMPLETED', 'CANCELLED') and not job.get('recovery_pending'):
+        try:
+            if reporter:
+                try:
+                    if reporter.checkpoints:
+                        reporter.stop.set()
+                        reporter.checkpoints.close()
+                finally:
+                    reporter.close()
+        finally:
+            from huggingface_hub.utils._xet import abort_xet_session
+            abort_xet_session()
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+            stop_previous(directory)
             remove_work_directory(directory, root)
+            remove_work_directory(root / 'transfer-cache', root)
     return interrupted.is_set()
 
 
@@ -837,20 +828,14 @@ class WorkerSession:
         self.directory_lock.close()
 
     def poll(self, completed_workload=0):
+        cleanup_runs(self.args.directory)
         result = self.connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(self.args.directory).free / 1024 ** 3, 'claim_id': self.registration['claim_id'], 'machine_idle': self.args.unified, 'completed_workload': completed_workload}).json()
         if not result['run']:
             return False
         job = result['run']
-        directory = self.args.directory / str(job['id'])
         interrupted = False
         executed = False
-        if directory.exists():
-            stop_previous(directory)
-            if job['state'] in ('COMPLETED', 'CANCELLED'):
-                remove_work_directory(directory, self.args.directory)
-            elif not finalize_saved(self.connection, job, directory):
-                self.connection.request('POST', '%d/recover/' % job['id'], json={})
-        elif job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+        if job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
             executed = True
             interrupted = execute(self.connection, job, self.args.directory, self.args.pawnocchio)
         elif job['state'] not in ('COMPLETED', 'CANCELLED'):
@@ -898,6 +883,11 @@ def main(argv=None, worker_config=None, gpu_info=None):
     args.directory.mkdir(parents=True, exist_ok=True)
     directory_lock = worker_lock(args.directory)
     identity_path, registration = identity(args.directory, args.server)
+    cleanup_runs(args.directory)
+    os.environ['HF_HOME'] = str(args.directory / 'transfer-cache')
+    os.environ['HF_XET_CACHE'] = str(args.directory / 'transfer-cache' / 'xet')
+    os.environ['HF_XET_LOG_DEST'] = os.devnull
+    os.environ['HF_XET_CHUNK_CACHE_SIZE_BYTES'] = '0'
     if args.execution_image:
         if os.name == 'nt' or not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', args.execution_image) or not shutil.which('docker'):
             parser.error('Isolated execution requires Linux, Docker and an image pinned by SHA256 digest.')
@@ -981,19 +971,13 @@ def main(argv=None, worker_config=None, gpu_info=None):
     print('Connected %s (%s, %.1f GB). Waiting for training assigned to %s.' % (args.name, gpu_name, vram, username))
     while True:
         try:
+            cleanup_runs(args.directory)
             result = connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'claim_id': registration['claim_id']}).json()
             if result['run']:
                 job = result['run']
-                directory = args.directory / str(job['id'])
                 interrupted = False
                 executed = False
-                if directory.exists():
-                    stop_previous(directory)
-                    if job['state'] in ('COMPLETED', 'CANCELLED'):
-                        remove_work_directory(directory, args.directory)
-                    elif not finalize_saved(connection, job, directory):
-                        connection.request('POST', '%d/recover/' % job['id'], json={})
-                elif job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+                if job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
                     executed = True
                     interrupted = execute(connection, job, args.directory, args.pawnocchio)
                 elif job['state'] not in ('COMPLETED', 'CANCELLED'):

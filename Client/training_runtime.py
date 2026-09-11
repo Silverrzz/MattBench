@@ -178,7 +178,9 @@ def stop_process_record(path):
                 except psutil.NoSuchProcess:
                     pass
             process.kill()
-            psutil.wait_procs(children + [process], timeout=10)
+            _, alive = psutil.wait_procs(children + [process], timeout=10)
+            if alive:
+                raise RuntimeError('Previous training processes have not stopped; cleanup will retry before accepting work.')
     except psutil.NoSuchProcess:
         pass
     path.unlink()

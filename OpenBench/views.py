@@ -741,6 +741,9 @@ def client_worker_info(request):
     # Save the machine's latest information and Secret Token for this session
     if machine.info.get('custom_name'):
         info.update(custom_name=machine.info['custom_name'], machine_name=machine.info['custom_name'])
+    if 'worker_settings' in machine.info:
+        info['worker_settings'] = machine.info['worker_settings']
+        info.update(info['worker_settings'])
     machine.info   = info
     machine.secret = secrets.token_hex(32)
 
@@ -794,15 +797,16 @@ def client_get_workload(request, machine):
     machine = Machine.objects.select_for_update().get(pk=machine.pk)
     machine.updated = timezone.now()
     machine.save(update_fields=['updated'])
+    settings = {'settings': machine.info.get('worker_settings', {})}
     if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():
-        return JsonResponse({})
+        return JsonResponse(settings)
     if machine.mode not in ('automatic', 'testing-only'):
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
-        return JsonResponse({})
+        return JsonResponse(settings)
     result = get_workload(request, machine)
     if not result:
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
-    return JsonResponse(result)
+    return JsonResponse({**result, **settings})
 
 @csrf_exempt
 @verify_worker

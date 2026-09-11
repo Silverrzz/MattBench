@@ -9,6 +9,8 @@ from django.views.decorators.http import require_http_methods
 
 from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
+from OpenBench.config import OPENBENCH_CONFIG
+from OpenBench.workloads.get_workload import machine_info_list
 
 
 WORKER_MODES = [('automatic', 'Automatic'), ('testing-only', 'Testing only'), ('training-only', 'Training only'), ('paused', 'Paused')]
@@ -56,6 +58,15 @@ def worker_rows(user, identifier=None):
             'owner': machine.user, 'hardware': info.get('cpu_name', 'CPU'),
             'platform': info.get('os_name', ''), 'capabilities': ['Tests', 'Datagen', 'Tuning'],
             'threads': info.get('concurrency', 0), 'memory': round(info.get('ram_total_mb', 0) / 1024),
+            'preferences': [
+                {'key': key, 'label': label, 'help': help_text, 'value': ', '.join(machine_info_list(info, key))}
+                for key, label, help_text in (
+                    ('focus', 'Focus engines', 'Prefer these engines among workloads with the highest priority.'),
+                    ('force', 'Force engines', 'Prefer these engines over workload priority; accept other engines when none are available.'),
+                    ('only', 'Only engines', 'Accept workloads only for these engines. Leave blank to allow all supported engines.'),
+                )
+            ],
+            'noisy': bool(info.get('noisy')), 'fleet': bool(info.get('fleet')),
             'gpu_memory': None, 'updated': machine.updated, 'demo': bool(info.get('demo')),
             'state': 'Disconnected' if info.get('disconnected') else 'Busy' if online and job and not job.finished else 'Available' if online else 'Offline',
             'job': job.dev.name if online and job and not job.finished else '',
@@ -167,6 +178,22 @@ def detail(request, pk):
                     return redirect(request, worker['url'], error='Choose whose training workloads this worker accepts.')
                 if machine:
                     info = {**machine.info, 'machine_name': name, 'custom_name': name}
+                    settings = dict(info.get('worker_settings', {}))
+                    for key in ('focus', 'force', 'only'):
+                        if key not in request.POST:
+                            continue
+                        values = list(dict.fromkeys(value.strip() for value in request.POST[key].split(',') if value.strip()))
+                        allowed = set(OPENBENCH_CONFIG['engines']) | set(machine_info_list(info, key))
+                        if any(value not in allowed for value in values):
+                            return redirect(request, worker['url'], error='Choose valid engine names for %s, separated by commas.' % key)
+                        settings[key] = values
+                    for key in ('noisy', 'fleet'):
+                        if key in request.POST:
+                            if request.POST[key] not in ('on', 'off'):
+                                return redirect(request, worker['url'], error='Choose a valid value for %s.' % key)
+                            settings[key] = request.POST[key] == 'on'
+                    info.update(settings)
+                    info['worker_settings'] = settings
                     Machine.objects.filter(pk=machine.pk).update(info=info, mode=mode)
                 if capability:
                     info = {**capability.info, 'custom_name': name}
@@ -204,4 +231,4 @@ def detail(request, pk):
                     record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected'})
             record_event('worker.disconnected', machine or capability, request.user.pk)
         return redirect(request, worker['url'])
-    return render(request, 'worker_detail.html', {'page_title': worker['name'], 'worker': worker})
+    return render(request, 'worker_detail.html', {'page_title': worker['name'], 'worker': worker, 'engine_names': sorted(OPENBENCH_CONFIG['engines'])})

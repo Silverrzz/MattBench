@@ -353,8 +353,11 @@ def training_detail(request, pk):
     from OpenBench.training_telemetry import training_metrics
     run.metrics = training_metrics(run.metrics, run.snapshot, run.dataset, run.state)
     output_artifacts = list(run.artifacts.select_related('checkpoint_network', 'checkpoint_archive'))
+    from OpenBench.training_checkpoints import artifact_deletion_error, checkpoint_users
+    protected_checkpoints = set(checkpoint_users(run.checkpoints.all()).values_list('resume_from_id', flat=True)) if manage else set()
     for item in output_artifacts:
         checkpoint = getattr(item, 'checkpoint_network', None) or getattr(item, 'checkpoint_archive', None)
+        item.delete_error = artifact_deletion_error(run, item, checkpoint, checkpoint is not None and checkpoint.pk in protected_checkpoints)
         match = re.fullmatch(r'sb-(\d+)\.bin', item.name)
         item.output_superbatch = checkpoint.superbatch if checkpoint else int(match[1]) if match else 0
         item.start_checkpoint_id = checkpoint.pk if checkpoint and item.kind == 'checkpoint' and run.owner_id == request.user.pk and run.snapshot['settings'].get('resume_supported') else None
@@ -403,7 +406,18 @@ def artifact(request, pk, artifact_id):
         response['Content-Length'] = str(row.size)
         return response
     enabled(request.user)
-    if run.snapshot.get('demo') or not may_manage(request.user, row.run) or row.kind != 'network':
+    if run.snapshot.get('demo') or not may_manage(request.user, row.run):
+        raise PermissionDenied
+    if request.POST.get('action') == 'delete':
+        from OpenBench.training_checkpoints import delete_training_artifact
+        try:
+            delete_training_artifact(run, row.pk, request.user)
+        except ValidationError as error:
+            return redirect(request, '/training/%d/' % pk, error=error_text(error))
+        except OSError:
+            return redirect(request, '/training/%d/' % pk, error='Output record removed, but storage cleanup failed. Ask an administrator to reconcile artifact storage.')
+        return redirect(request, '/training/%d/' % pk, status='Output file deleted. Any imported network copy has been kept.')
+    if row.kind != 'network':
         raise PermissionDenied
     from django.core.files import File
     from django.core.files.storage import FileSystemStorage

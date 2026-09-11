@@ -55,10 +55,10 @@
         </section>
         <div id="training-artifacts" class="mt-3" data-live>{% live_region 'training-artifacts' %}
             <h2>Outputs</h2>
-            <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">Network</th></tr></thead><tbody>
+            <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">Network</th>{% if can_manage %}<th scope="col">Delete</th>{% endif %}</tr></thead><tbody>
                 {% for item in output_artifacts %}<tr><td><a href="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{{ item.name }}</a></td><td>{{ item.size|filesizeformat }}</td><td>{{ item.output_label }}</td><td>
                     {% if item.start_checkpoint_id %}<a class="button" href="/training/new/?checkpoint={{ item.start_checkpoint_id }}">New train from SB {{ item.output_superbatch }}</a>{% elif item.network_id %}<a href="/networks/{{ run.engine.name }}/">Imported</a>{% elif item.kind == 'network' and can_register %}<button class="button artifact-import-trigger" type="button" data-import-url="/training/{{ run.id }}/artifacts/{{ item.pk }}/" data-import-name="{{ run.name }}" data-import-file="{{ item.name }}" aria-haspopup="dialog" aria-controls="artifact-import-dialog">Import</button>{% else %}—{% endif %}
-                </td></tr>{% empty %}<tr><td colspan="4">No outputs yet</td></tr>{% endfor %}
+                </td>{% if can_manage %}<td>{% if item.kind == 'checkpoint' or item.kind == 'network' %}<form method="post" action="/training/{{ run.id }}/artifacts/{{ item.pk }}/" onsubmit="return confirm('Permanently delete this output file? Any imported network copy will be kept.')">{% csrf_token %}<button class="button" type="submit" name="action" value="delete" aria-label="Delete {{ item.name }}" {% if item.delete_error %}disabled aria-describedby="artifact-delete-help-{{ item.pk }}"{% endif %}>Delete</button>{% if item.delete_error %}<p class="field-note" id="artifact-delete-help-{{ item.pk }}">{{ item.delete_error }}</p>{% endif %}</form>{% endif %}</td>{% endif %}</tr>{% empty %}<tr><td colspan="{% if can_manage %}5{% else %}4{% endif %}">No outputs yet</td></tr>{% endfor %}
             </tbody></table>
         {% endlive_region %}</div>
         <p class="field-note" id="training-last-report"></p>

@@ -39,6 +39,20 @@
             <div class="field training-environment">
                 {{ form.environment.label_tag }}
                 <p class="field-note" id="training-environment-note">One KEY=value per row. Applied when building and running training.</p>
+                <div id="training-environment-presets" data-user-id="{{ request.user.pk }}" hidden>
+                    <label for="training-environment-preset">Saved preset</label>
+                    <div class="training-preset-controls">
+                        <select id="training-environment-preset"><option value="">Choose a preset</option></select>
+                        <button class="button" type="button" id="training-apply-preset" disabled>Apply</button>
+                        <button class="button" type="button" id="training-delete-preset" disabled>Delete</button>
+                    </div>
+                    <div class="training-preset-controls">
+                        <input id="training-preset-name" type="text" maxlength="80" placeholder="Preset name" aria-label="Preset name">
+                        <button class="button" type="button" id="training-save-preset">Save preset</button>
+                    </div>
+                    <p class="field-note">Presets are saved for your account in this browser. Applying a preset replaces the rows below.</p>
+                    <p class="field-note" id="training-preset-status" role="status"></p>
+                </div>
                 {{ form.environment }}{{ form.environment.errors }}
                 <div id="training-environment-rows"></div>
                 <button class="button" type="button" id="training-add-environment" aria-label="Add environment variable" hidden>+</button>

@@ -114,7 +114,7 @@ def parse_arguments():
     args.server   = args.server   if args.server   else os.environ['OPENBENCH_SERVER'  ]
     args.worker_identity = None
     identity_path = os.path.join(args.training_directory, 'identity.json')
-    if os.path.isfile(identity_path):
+    if not args.password and os.path.isfile(identity_path):
         with open(identity_path, encoding='utf-8') as source:
             identity = json.load(source)
         if identity.get('registered') and identity.get('server') == args.server.rstrip('/') and identity.get('username') == args.username:

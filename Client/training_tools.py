@@ -142,7 +142,7 @@ def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_rep
             source = work / 'source'
             print('Fetching %s at %s' % (repository, revision), flush=True)
             for args in (
-                ['git', 'init', str(source)],
+                ['git', '-c', 'init.defaultBranch=main', 'init', str(source)],
                 ['git', '-C', str(source), 'remote', 'add', 'origin', repository],
                 ['git', '-C', str(source), 'fetch', '--depth', '1', 'origin', revision],
                 ['git', '-C', str(source), 'checkout', '--detach', 'FETCH_HEAD'],

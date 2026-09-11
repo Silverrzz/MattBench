@@ -49,6 +49,43 @@ def checkpoint_users(checkpoints):
     return TrainingRun.objects.filter(resume_from__in=checkpoints).filter(~Q(state__in=TRAINING_TERMINAL) | Q(state='FAILED', metrics__recovery_pending=1, cancel_requested=False, recovery_run=None))
 
 
+def artifact_deletion_error(run, artifact, checkpoint, protected=False):
+    if artifact.kind not in ('checkpoint', 'network'):
+        return 'Only checkpoint and network outputs can be deleted.'
+    if not run.terminal:
+        return 'Finish or stop training before deleting its outputs.'
+    if run.state == 'FAILED' and run.metrics.get('recovery_pending') and not run.cancel_requested and not run.recovery_run_id:
+        return 'Cancel automatic recovery before deleting outputs.'
+    if checkpoint and artifact.kind == 'network':
+        return 'Delete the resume checkpoint for SB %d first.' % checkpoint.superbatch
+    if protected:
+        return 'Another training run still needs this checkpoint. Finish or cancel it first.'
+    return ''
+
+
+def delete_training_artifact(run, artifact_id, user):
+    from django.utils import timezone
+    from OpenBench.training_storage import artifact_path
+    with storage_lock():
+        run = TrainingRun.objects.select_for_update().get(pk=run.pk)
+        artifact = get_object_or_404(TrainingArtifact.objects.select_for_update(), pk=artifact_id, run=run)
+        checkpoint = TrainingCheckpoint.objects.select_for_update().filter(Q(archive=artifact) | Q(network=artifact)).first()
+        error = artifact_deletion_error(run, artifact, checkpoint, checkpoint is not None and checkpoint_users([checkpoint]).exists())
+        if error:
+            raise ValidationError(error)
+        artifact_path(artifact.path)
+        if settings.TRAINING_REPLICA_ROOT:
+            artifact_path(artifact.path, replica=True)
+        if checkpoint:
+            TrainingRun.objects.filter(resume_from=checkpoint, state__in=TRAINING_TERMINAL).update(resume_from=None)
+            checkpoint.delete()
+        path = artifact.path
+        record_event('training.artifact.deleted', run, user.pk, {'artifact_id': artifact.pk, 'name': artifact.name, 'kind': artifact.kind, 'size': artifact.size}, key='training.artifact.deleted:%s:%s' % (run.pk, artifact.pk))
+        artifact.delete()
+        TrainingRun.objects.filter(pk=run.pk).update(updated=timezone.now())
+        transaction.on_commit(lambda: remove_artifact(path))
+
+
 def prune_checkpoints(run, newest_id=None):
     keep = run.snapshot.get('settings', {}).get('checkpoint_keep_last', 0)
     if type(keep) is not int or keep <= 0:

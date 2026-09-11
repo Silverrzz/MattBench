@@ -137,7 +137,7 @@ class CheckpointUploader:
         archive.unlink()
         if limits.get('delete_uploaded_checkpoints', True) and result.get('replicated'):
             if any(not file.exists() or file.stat().st_size != size or file.stat().st_mtime_ns != modified for file, size, modified in before):
-                raise RuntimeError('The schedule changed an uploaded checkpoint; its local directory was preserved.')
+                raise RuntimeError('The schedule changed an uploaded checkpoint.')
             if checkpoint != outputs and checkpoint.is_relative_to(outputs):
                 shutil.rmtree(checkpoint)
 
@@ -155,7 +155,7 @@ class CheckpointUploader:
                 self.upload(item)
             except Exception as error:
                 reason = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-                self.error = 'Checkpoint upload failed: %s Local checkpoint files are preserved.' % reason
+                self.error = 'Checkpoint upload failed: %s' % reason
                 self.reporter.abort_reason = self.error
                 self.reporter.stop.set()
             finally:
@@ -175,9 +175,8 @@ class CheckpointUploader:
 
     def close(self):
         self.closed.set()
-        deadline = time.monotonic() + 320
         for thread in self.threads:
-            thread.join(timeout=max(0, deadline - time.monotonic()))
+            thread.join()
 
 
 def download_checkpoint(connection, job, directory, reporter):

@@ -31,6 +31,7 @@
         const initialEnvironment = environmentInput.value.split('\n').map(value => value.replace(/\r$/, ''));
         environmentInput.hidden = true;
         addEnvironment.hidden = false;
+        let environmentRowNumber = 0;
         function persistEnvironment() {
             environmentInput.value = Array.from(environmentRows.querySelectorAll('input'), input => input.value).join('\n');
         }
@@ -41,7 +42,8 @@
             input.type = 'text';
             input.value = value;
             input.placeholder = 'KEY=value';
-            input.autocomplete = 'off';
+            input.name = 'environment-row-' + (++environmentRowNumber);
+            input.autocomplete = 'on';
             input.spellcheck = false;
             input.setAttribute('aria-label', 'Environment variable, KEY=value');
             input.setAttribute('aria-describedby', 'training-environment-note');
@@ -63,6 +65,91 @@
         initialEnvironment.forEach(value => addEnvironmentRow(value));
         addEnvironment.addEventListener('click', () => addEnvironmentRow('', true));
         form.addEventListener('submit', persistEnvironment);
+        const presetPanel = document.getElementById('training-environment-presets');
+        const presetSelect = document.getElementById('training-environment-preset');
+        const presetName = document.getElementById('training-preset-name');
+        const applyPreset = document.getElementById('training-apply-preset');
+        const deletePreset = document.getElementById('training-delete-preset');
+        const presetStatus = document.getElementById('training-preset-status');
+        const presetKey = 'training-environment-presets:' + presetPanel.dataset.userId;
+        presetPanel.hidden = false;
+        function readPresets() {
+            const saved = JSON.parse(localStorage.getItem(presetKey) || '[]');
+            if (!Array.isArray(saved)) throw new Error('Invalid presets');
+            return saved.filter(preset => preset && typeof preset.name === 'string' && typeof preset.environment === 'string');
+        }
+        function showPresets(presets, selected = '') {
+            presetSelect.replaceChildren(new Option('Choose a preset', ''));
+            presets.forEach(preset => presetSelect.append(new Option(preset.name, preset.name)));
+            presetSelect.value = selected;
+            applyPreset.disabled = deletePreset.disabled = !presetSelect.value;
+        }
+        try {
+            showPresets(readPresets());
+        } catch {
+            presetStatus.textContent = 'Saved presets could not be loaded from this browser.';
+        }
+        presetSelect.addEventListener('change', () => {
+            applyPreset.disabled = deletePreset.disabled = !presetSelect.value;
+            presetName.value = presetSelect.value;
+            presetStatus.textContent = '';
+        });
+        presetName.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                document.getElementById('training-save-preset').click();
+            }
+        });
+        document.getElementById('training-save-preset').addEventListener('click', () => {
+            const name = presetName.value.trim();
+            if (!name) {
+                presetStatus.textContent = 'Enter a name for this preset.';
+                presetName.focus();
+                return;
+            }
+            persistEnvironment();
+            try {
+                const presets = readPresets();
+                const existing = presets.find(preset => preset.name === name);
+                if (existing) existing.environment = environmentInput.value;
+                else presets.push({name, environment: environmentInput.value});
+                localStorage.setItem(presetKey, JSON.stringify(presets));
+                showPresets(presets, name);
+                presetName.value = name;
+                presetStatus.textContent = existing ? 'Preset updated.' : 'Preset saved.';
+            } catch {
+                presetStatus.textContent = 'Could not save the preset. Check that browser storage is available.';
+            }
+        });
+        applyPreset.addEventListener('click', () => {
+            try {
+                const presets = readPresets();
+                const preset = presets.find(item => item.name === presetSelect.value);
+                if (!preset) {
+                    showPresets(presets);
+                    presetStatus.textContent = 'This preset is no longer available.';
+                    return;
+                }
+                environmentRows.replaceChildren();
+                environmentRowNumber = 0;
+                preset.environment.split('\n').forEach(value => addEnvironmentRow(value));
+                persistEnvironment();
+                presetStatus.textContent = 'Preset applied.';
+            } catch {
+                presetStatus.textContent = 'Could not load the preset from this browser.';
+            }
+        });
+        deletePreset.addEventListener('click', () => {
+            try {
+                const presets = readPresets().filter(preset => preset.name !== presetSelect.value);
+                localStorage.setItem(presetKey, JSON.stringify(presets));
+                showPresets(presets);
+                presetName.value = '';
+                presetStatus.textContent = 'Preset deleted. Current environment variables are unchanged.';
+            } catch {
+                presetStatus.textContent = 'Could not delete the preset from this browser.';
+            }
+        });
         const options = JSON.parse(document.getElementById('training-schedule-options').textContent);
         const datasets = JSON.parse(document.getElementById('training-dataset-options').textContent);
         const engine = document.getElementById('train-engine');

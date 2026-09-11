@@ -27,6 +27,21 @@
             <input id="worker-name" name="name" value="{{ worker.name }}" maxlength="128" required data-preserve-live>
             <label for="worker-mode">Worker mode</label>
             <select id="worker-mode" name="mode" data-preserve-live>{% for value, label in worker.modes %}<option value="{{ value }}"{% if value == worker.mode %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+            {% if 'Tests' in worker.capabilities %}
+            {% for preference in worker.preferences %}
+            <label for="worker-{{ preference.key }}">{{ preference.label }} <code>--{{ preference.key }}</code></label>
+            <input id="worker-{{ preference.key }}" name="{{ preference.key }}" value="{{ preference.value }}" aria-describedby="worker-{{ preference.key }}-help" placeholder="Engine names, separated by commas" data-preserve-live>
+            <p id="worker-{{ preference.key }}-help">{{ preference.help }}</p>
+            {% endfor %}
+            <details><summary>Available engine names</summary><p>{{ engine_names|join:', ' }}</p></details>
+            <label for="worker-noisy">Noisy mode <code>--noisy</code></label>
+            <select id="worker-noisy" name="noisy" aria-describedby="worker-noisy-help" data-preserve-live><option value="off"{% if not worker.noisy %} selected{% endif %}>Off</option><option value="on"{% if worker.noisy %} selected{% endif %}>On</option></select>
+            <p id="worker-noisy-help">Reject workloads that use or measure time.</p>
+            <label for="worker-fleet">Fleet mode <code>--fleet</code></label>
+            <select id="worker-fleet" name="fleet" aria-describedby="worker-fleet-help" data-preserve-live><option value="off"{% if not worker.fleet %} selected{% endif %}>Off</option><option value="on"{% if worker.fleet %} selected{% endif %}>On</option></select>
+            <p id="worker-fleet-help">Exit the worker when no testing workload is assigned. Requires an updated worker client.</p>
+            <p>Engine preferences and noisy mode apply to the next assignment. Saved settings override command-line values when this worker reconnects.</p>
+            {% endif %}
             {% if 'Training' in worker.capabilities %}
             <label for="worker-training-scope">Accept training workloads from</label>
             <select id="worker-training-scope" name="training_scope" data-preserve-live><option value="own"{% if not worker.accept_any_owner %} selected{% endif %}>My account only</option><option value="any"{% if worker.accept_any_owner %} selected{% endif %}>Any account</option></select>

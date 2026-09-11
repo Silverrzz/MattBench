@@ -1039,6 +1039,7 @@ def server_configure_worker(config):
         'focus'          : config.focus,          # List of engines we have a preference to help
         'force'          : config.force,          # List of engines we prefer over workload priority
         'only'           : config.only,
+        'fleet'          : config.fleet,
         'cli_options'    : config.cli_options,    # Command line options except for credentials and server
         'cxx_comp'       : config.cxx_comp,       # C++ Compiler used to build Fastchess binaries
         'fastchess_ver'  : config.fastchess_ver,  # Fastchess Version, set during server_configure_fastchess()
@@ -1051,7 +1052,8 @@ def server_configure_worker(config):
         'system_info' : json.dumps(system_info),
         'mode': config.training_args.mode,
     }
-    payload.update(getattr(config.training_args, 'worker_identity', None) or {})
+    if not config.password:
+        payload.update(getattr(config.training_args, 'worker_identity', None) or {})
     session_path = os.path.join(config.training_args.training_directory, 'machine-session.json')
     if os.path.isfile(session_path):
         with open(session_path, encoding='utf-8') as source:
@@ -1061,13 +1063,28 @@ def server_configure_worker(config):
 
     # Send all of this to the server, and get a Machine Id + Secret Token
     target   = utils.url_join(config.server, 'clientWorkerInfo')
-    response = requests.post(target, data=payload, timeout=TIMEOUT_HTTP)
-    if not response.ok:
-        raise utils.OpenBenchFatalWorkerException('Worker registration failed: HTTP %d. Check the server log for clientWorkerInfo.' % response.status_code)
-    try:
-        response = response.json()
-    except requests.exceptions.JSONDecodeError:
-        raise utils.OpenBenchFatalWorkerException('Worker registration returned a non-JSON response. Check the server URL and server log.') from None
+    for attempt in range(2):
+        response = requests.post(target, data=payload, timeout=TIMEOUT_HTTP)
+        if not response.ok:
+            raise utils.OpenBenchFatalWorkerException('Worker registration failed: HTTP %d. Check the server log for clientWorkerInfo.' % response.status_code)
+        try:
+            response = response.json()
+        except requests.exceptions.JSONDecodeError:
+            raise utils.OpenBenchFatalWorkerException('Worker registration returned a non-JSON response. Check the server URL and server log.') from None
+        if attempt == 0 and payload.get('worker_id') and response.get('error') in ('Bad worker credentials', 'Bad Credentials'):
+            import getpass
+            print('Saved worker credentials were rejected. Sign in with your account password to reconnect.')
+            try:
+                config.password = getpass.getpass('MattBench password: ')
+            except EOFError:
+                raise utils.OpenBenchFatalWorkerException('Saved worker credentials were rejected. Supply --password or OPENBENCH_PASSWORD to reconnect.') from None
+            config.training_args.password = config.password
+            config.training_args.worker_identity = None
+            payload.pop('worker_id', None)
+            payload.pop('worker_token', None)
+            payload['password'] = config.password
+            continue
+        break
 
     # Throw all the way back to the client.py
     if 'Bad Client Version' in response.get('error', ''):
@@ -1075,6 +1092,8 @@ def server_configure_worker(config):
 
     # The 'error' header is included if there was an issue
     if 'error' in response:
+        if response['error'] == 'Bad Credentials' and os.name == 'nt' and config.password and len(config.password) >= 2 and config.password.startswith("'") and config.password.endswith("'"):
+            raise utils.OpenBenchFatalWorkerException('Bad Credentials: the password contains surrounding single quotes. Windows Command Prompt passes single quotes literally. Use double quotes, or omit --password to enter it at the password prompt.')
         raise utils.OpenBenchFatalWorkerException(response['error'])
 
     # Store machine_id, and the secret for this session
@@ -1146,6 +1165,9 @@ def server_request_workload(config):
         base_name   = response['workload']['test']['base']['name'  ]
         print('Workload [%s] %s vs [%s] %s\n' % (dev_engine, dev_name, base_engine, base_name))
 
+    for key in ('focus', 'force', 'only', 'noisy', 'fleet'):
+        if key in response.get('settings', {}):
+            setattr(config, key, response['settings'][key])
     config.workload = response.get('workload', None)
 
 
