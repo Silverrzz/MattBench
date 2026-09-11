@@ -699,6 +699,11 @@ def client_get_build_info(request):
 @transaction.atomic
 def client_worker_info(request):
 
+    info = json.loads(request.POST['system_info'])
+    expected_ver = OPENBENCH_CONFIG['client_version']
+    if info.get('client_ver') != expected_ver:
+        return JsonResponse({'error': 'Bad Client Version: Expected %d' % expected_ver})
+
     persistent_worker = None
     # Verify the User's credentials
     try:
@@ -716,13 +721,6 @@ def client_worker_info(request):
     except UnableToAuthenticate:
         return JsonResponse({ 'error' : 'Bad Credentials' })
 
-    # Request update before creating a machine
-    info         = json.loads(request.POST['system_info'])
-    expected_ver = OPENBENCH_CONFIG['client_version']
-
-    if info.get('client_ver') != expected_ver:
-        return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
-
     # Create a new Machine for this session
     mode = request.POST.get('mode', 'automatic')
     if mode not in ('automatic', 'testing-only', 'training-only', 'paused'):
@@ -730,9 +728,7 @@ def client_worker_info(request):
     machine = Machine.objects.select_for_update().get(pk=persistent_worker.machine_id) if persistent_worker and persistent_worker.machine_id else None
     if machine is None and request.POST.get('previous_machine_id', '').isdigit():
         previous = Machine.objects.select_for_update().filter(pk=request.POST['previous_machine_id'], user=user).first()
-        if previous and previous.info.get('disconnected'):
-            return JsonResponse({'error': 'Bad Client Version: Worker disconnected by its owner.'})
-        if previous and secrets.compare_digest(previous.secret, request.POST.get('previous_machine_secret', '')):
+        if previous and not previous.info.get('disconnected') and secrets.compare_digest(previous.secret, request.POST.get('previous_machine_secret', '')):
             machine = previous
     if machine is None:
         machine = Machine(user=user, info=info, mode=persistent_worker.mode if persistent_worker else mode)

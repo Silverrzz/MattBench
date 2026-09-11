@@ -49,7 +49,7 @@ def try_forever(func, args, message, timeout=15):
             return func(*args)
 
         except BadVersionException:
-            raise BadVersionException()
+            raise
 
         except Exception as exception:
             print ('\n\n' + message)
@@ -156,7 +156,11 @@ def download_client_files(args):
                     zip_file.extractall(temp_dir)
 
                 # Copy all files except client.py
-                client_dir = os.path.join(temp_dir, 'OpenBench-%s' % (repo_ref), 'Client')
+                client_dirs = [os.path.join(temp_dir, name, 'Client') for name in os.listdir(temp_dir)]
+                client_dirs = [path for path in client_dirs if os.path.isfile(os.path.join(path, 'worker.py'))]
+                if len(client_dirs) != 1:
+                    raise ValueError('Client archive must contain one Client/worker.py')
+                client_dir = client_dirs[0]
                 for root, dirs, files in os.walk(client_dir):
                     for file in files:
                         if file != 'client.py':
@@ -184,6 +188,7 @@ if __name__ == '__main__':
 
     from client import BadVersionException
 
+    last_update = None
     while True:
 
         try:
@@ -191,11 +196,15 @@ if __name__ == '__main__':
             importlib.reload(worker)
             worker.run_openbench_worker(args)
 
-        except BadVersionException:
+        except BadVersionException as error:
 
             if args.no_client_downloads:
                 raise Exception('Client update requested, but --no-client-downloads provided')
 
+            update = (worker.CLIENT_VERSION, str(error))
+            if update == last_update:
+                raise RuntimeError('Downloaded client is still rejected by the server: %s. Check the server client version and repository reference.' % error) from None
+            last_update = update
             print ('[NOTE] Downloading newer version of Client...')
             try_forever(download_client_files, [args], 'Failed to download Client files')
 
