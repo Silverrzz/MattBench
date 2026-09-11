@@ -7,11 +7,13 @@
     {% csrf_token %}{{ form.non_field_errors }}
     <section class="training-form-section" aria-labelledby="training-setup-heading">
     <h3 id="training-setup-heading">Training setup</h3>
+    <div class="field">{{ form.checkpoint.label_tag }}{{ form.checkpoint }}{{ form.checkpoint.errors }}<p class="field-note" id="training-checkpoint-help">Start fresh or choose a saved checkpoint. Starting training always creates a new task.</p></div>
     <div class="field-grid training-identity">
         <div class="field">{{ form.engine.label_tag }}{{ form.engine }}{{ form.engine.errors }}</div>
         <div class="field"><div class="training-schedule-label field-label">{{ form.schedule.label_tag }}<a id="training-schedule-link" hidden>Edit schedule</a></div>{{ form.schedule }}{{ form.schedule.errors }}</div>
         <div class="field">{{ form.name.label_tag }}{{ form.name }}{{ form.name.errors }}</div>
     </div>
+    <div class="field" id="training-wdl-override">{{ form.wdl.label_tag }}{{ form.wdl }}{{ form.wdl.errors }}<p class="field-note">Optional, from 0 to 1. Applies to the remaining training in this task; leave blank to use the schedule.</p></div>
     </section>
     {{ form.stage_datasets }}{{ form.stage_datasets.errors }}
         <section class="training-form-section" aria-labelledby="training-data-heading">
@@ -31,6 +33,7 @@
                     <div id="training-checkpoint-count"><label class="sr-only" for="train-checkpoint_keep_last">Number to keep</label>{{ form.checkpoint_keep_last }}<span>checkpoints</span></div>
                 </div>
                 {{ form.checkpoint_retention.errors }}{{ form.checkpoint_keep_last.errors }}
+                <p class="field-note">Stage-end checkpoints are also kept so you can retry later stages.</p>
                 <label class="choice training-local-cleanup">{{ form.delete_uploaded_checkpoints }}{{ form.delete_uploaded_checkpoints.label }}</label>
             </div>
             <div class="field training-environment">
@@ -52,4 +55,5 @@
 </form>
 {{ schedule_options|json_script:'training-schedule-options' }}
 {{ dataset_options|json_script:'training-dataset-options' }}
+{{ checkpoint_options|json_script:'training-checkpoint-options' }}
 {% endblock %}

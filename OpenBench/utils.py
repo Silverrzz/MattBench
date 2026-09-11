@@ -209,18 +209,31 @@ def getRecentMachines(minutes=2):
     target = datetime.datetime.utcnow()
     target = target.replace(tzinfo=datetime.timezone.utc)
     target = target - datetime.timedelta(minutes=minutes)
-    return Machine.objects.filter(updated__gte=target).exclude(info__has_key='demo')
+    return Machine.objects.filter(updated__gte=target).exclude(info__has_key='demo').exclude(info__has_key='disconnected')
 
 def getMachineStatus(username=None):
+    from OpenBench.models import TrainingRun, TrainingWorker
+    from OpenBench.training_models import TRAINING_ACTIVE
 
     machines = getRecentMachines()
 
     if username != None:
         machines = machines.filter(user__username=username)
 
-    return ": {0} Workers / ".format(len(machines)) + \
-           "{0} Threads / ".format(sum([f.info['concurrency'] for f in machines])) + \
-           "{0} MNPS ".format(round(sum([f.info['concurrency'] * f.mnps for f in machines]), 2))
+    machines = list(machines)
+    gpu_workers = TrainingWorker.objects.filter(enabled=True, machine__isnull=True, updated__gte=timezone.now() - datetime.timedelta(minutes=2)).exclude(info__has_key='demo')
+    if username is not None:
+        gpu_workers = gpu_workers.filter(owner__username=username)
+    training = TrainingRun.objects.filter(state__in=TRAINING_ACTIVE)
+    training_machines = set(training.filter(worker__machine__in=machines).values_list('worker__machine_id', flat=True))
+    reserved = set(TrainingRun.objects.filter(requested_worker__machine__in=machines, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo').values_list('requested_worker__machine_id', flat=True))
+    capacity = [machine for machine in machines if machine.pk not in training_machines and (machine.workload or machine.mode == 'automatic' and machine.pk not in reserved)]
+    training_count = len(training_machines) + training.filter(worker__in=gpu_workers).count()
+    return ': %d Workers / %d Training / %d Test threads / %s MNPS' % (
+        len(machines) + gpu_workers.count(), training_count,
+        sum(machine.info['concurrency'] for machine in capacity),
+        round(sum(machine.info['concurrency'] * machine.mnps for machine in capacity if machine.workload), 2),
+    )
 
 def getPaging(content, page, url, pagelen=25):
 

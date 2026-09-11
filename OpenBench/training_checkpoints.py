@@ -1,8 +1,10 @@
 from pathlib import Path
+import json
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
@@ -43,6 +45,10 @@ def checkpoint_ready(request, pk):
     return JsonResponse({'checkpoint': checkpoint.pk, 'superbatch': superbatch, 'stored': True, 'replicated': archive_replicated and network_replicated})
 
 
+def checkpoint_users(checkpoints):
+    return TrainingRun.objects.filter(resume_from__in=checkpoints).filter(~Q(state__in=TRAINING_TERMINAL) | Q(state='FAILED', metrics__recovery_pending=1, cancel_requested=False, recovery_run=None))
+
+
 def prune_checkpoints(run, newest_id=None):
     keep = run.snapshot.get('settings', {}).get('checkpoint_keep_last', 0)
     if type(keep) is not int or keep <= 0:
@@ -51,7 +57,10 @@ def prune_checkpoints(run, newest_id=None):
     with transaction.atomic():
         TrainingRun.objects.select_for_update().get(pk=run.pk)
         candidates = list(run.checkpoints.select_for_update().select_related('archive').order_by('-superbatch')[keep:])
-        protected = set(TrainingRun.objects.filter(resume_from__in=candidates).exclude(state__in=TRAINING_TERMINAL).values_list('resume_from_id', flat=True))
+        protected = set(checkpoint_users(candidates).values_list('resume_from_id', flat=True))
+        from OpenBench.training_telemetry import training_stages
+        boundaries = {stage['end'] for stage in training_stages(run.snapshot, run.dataset)}
+        protected.update(checkpoint.pk for checkpoint in candidates if checkpoint.superbatch in boundaries)
         protected.add(newest_id)
         removed = []
         for checkpoint in candidates:
@@ -101,11 +110,55 @@ def resume_training(user, source, checkpoint_id=None, worker=None):
         checkpoint = checkpoints.filter(pk=checkpoint_id).first() if checkpoint_id else checkpoints.first()
         if not checkpoint:
             raise ValidationError('No complete checkpoint is available.')
+        validate_checkpoint_schedule(checkpoint, source.engine, source.snapshot['files'], source.snapshot['settings'])
         verify_artifact(checkpoint.archive)
         provenance = {'checkpoint_id': checkpoint.pk, 'run_id': source.pk, 'superbatch': checkpoint.superbatch, 'sha256': checkpoint.archive.sha256, 'size': checkpoint.archive.size, 'metadata': checkpoint.metadata}
         run = TrainingRun.objects.create(owner=user, engine=source.engine, name=source.name, schedule=source.schedule, snapshot={**source.snapshot, 'resume': provenance}, dataset=effective_dataset(source), parameters=source.parameters, requested_worker=worker, resume_from=checkpoint, state='QUEUED')
         record_event('training.resumed', run, user.pk, {'source_run_id': source.pk, **provenance})
         return run
+
+
+def checkpoint_provenance(checkpoint):
+    verify_artifact(checkpoint.archive)
+    return {'checkpoint_id': checkpoint.pk, 'run_id': checkpoint.run_id, 'superbatch': checkpoint.superbatch, 'sha256': checkpoint.archive.sha256, 'size': checkpoint.archive.size, 'metadata': checkpoint.metadata}
+
+
+def validate_checkpoint_schedule(checkpoint, engine, files, config):
+    from OpenBench.schedule_builder import MANIFEST, validate_spec
+    source = checkpoint.run
+    original = source.snapshot
+    if engine.pk != source.engine_id:
+        raise ValidationError('Choose the checkpoint’s engine.')
+    if not config.get('resume_supported') or not original['settings'].get('resume_supported'):
+        raise ValidationError('Choose a schedule that supports checkpoints.')
+    for key in ('bullet_repo', 'bullet_ref', 'backend'):
+        if config.get(key) != original['settings'].get(key):
+            raise ValidationError('The checkpoint requires the same Bullet version and GPU backend.')
+    if MANIFEST in files and MANIFEST in original['files']:
+        try:
+            before_manifest = json.loads(original['files'][MANIFEST])
+            after_manifest = json.loads(files[MANIFEST])
+            before = validate_spec(before_manifest['spec'])
+            after = validate_spec(after_manifest['spec'])
+            if (before_manifest.get('version', 1) >= 3) != (after_manifest.get('version', 1) >= 3):
+                raise ValidationError('Independent output heads require a new training run. This checkpoint uses a different output architecture.')
+            before_threats = before_manifest.get('export', {}).get('threat_features', 59808 if before['threat_inputs'] else 0)
+            after_threats = after_manifest.get('export', {}).get('threat_features', 59808 if after['threat_inputs'] else 0)
+            if before_threats != after_threats:
+                raise ValidationError('The checkpoint requires the same threat features. Pawn-to-pawn TI requires a new training run.')
+        except (KeyError, TypeError, ValueError):
+            raise ValidationError('The checkpoint’s network configuration could not be verified.') from None
+        architecture = ('layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
+                        'half_move_clock', 'merged_king_planes', 'score_outputs', 'score_buckets', 'wdl_outputs', 'wdl_buckets',
+                        'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation')
+        if any(before[key] != after[key] for key in architecture):
+            raise ValidationError('The checkpoint requires the same network architecture. You can change WDL, learning rate and training duration.')
+        if checkpoint.superbatch >= after['superbatches']:
+            raise ValidationError('The schedule must end after SB %d. Choose an earlier checkpoint or extend the schedule.' % checkpoint.superbatch)
+    elif files != original['files']:
+        raise ValidationError('Custom schedules must match the checkpoint’s source files. Use the schedule builder to change WDL or learning rate safely.')
+    elif checkpoint.superbatch >= original.get('training_end_superbatch', source.metrics.get('end_superbatch', float('inf'))):
+        raise ValidationError('Choose an earlier checkpoint; this checkpoint is already at the end of the schedule.')
 
 
 def cleanup_checkpoints(run):
@@ -114,7 +167,7 @@ def cleanup_checkpoints(run):
     paths = []
     with transaction.atomic():
         checkpoints = list(run.checkpoints.select_for_update().select_related('archive', 'network'))
-        if TrainingRun.objects.filter(resume_from__in=checkpoints).exclude(state__in=TRAINING_TERMINAL).exists():
+        if checkpoint_users(checkpoints).exists():
             raise ValidationError('A running training still needs one of these checkpoints. Finish or cancel it before cleanup.')
         TrainingRun.objects.filter(resume_from__in=checkpoints, state__in=TRAINING_TERMINAL).update(resume_from=None)
         for checkpoint in checkpoints:
@@ -186,7 +239,7 @@ def import_checkpoint_networks(run, user, selected):
 def finish_checkpoints(run, user, selected):
     with storage_lock():
         checkpoints = list(run.checkpoints.select_for_update())
-        if TrainingRun.objects.filter(resume_from__in=checkpoints).exclude(state__in=TRAINING_TERMINAL).exists():
+        if checkpoint_users(checkpoints).exists():
             raise ValidationError('A running training still needs one of these checkpoints. Finish or cancel it before cleanup.')
         import_checkpoint_networks(run, user, selected)
         cleanup_checkpoints(run)

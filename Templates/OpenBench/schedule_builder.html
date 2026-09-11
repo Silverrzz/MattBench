@@ -17,39 +17,58 @@
             <div class="builder-controls">
                 <div class="builder-tabs" role="tablist" aria-label="Builder settings">
                     <button type="button" id="tab-network" role="tab" aria-controls="panel-network" aria-selected="true" data-tab="network">Network</button>
-                    <button type="button" id="tab-buckets" role="tab" aria-controls="panel-buckets" aria-selected="false" tabindex="-1" data-tab="buckets">Buckets</button>
                     <button type="button" id="tab-training" role="tab" aria-controls="panel-training" aria-selected="false" tabindex="-1" data-tab="training">Training</button>
                 </div>
                 <section class="builder-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
                     <div class="builder-group">
                         <h2>Input features</h2>
-                        <div class="builder-input-base">Piece-square inputs <span>768 per king bucket</span></div>
+                        <div class="builder-output-row">
+                            <label class="choice"><input type="checkbox" name="psqt_inputs">Piece-square inputs (PSQT)</label>
+                            <div class="builder-input-buckets">
+                                <label class="builder-head-buckets">Buckets <input name="input_buckets" type="number" min="1" max="32" required aria-label="Input buckets"></label>
+                                <button type="button" class="button" id="builder-assign-buckets" hidden>Assign buckets</button>
+                            </div>
+                        </div>
+                        <label class="choice"><input type="checkbox" name="mirrored">Horizontal mirroring</label>
                         <label class="choice"><input type="checkbox" name="threat_inputs">Threat inputs (TI)</label>
                         <label class="choice"><input type="checkbox" name="pawn_pair_inputs">Pawn-pair inputs (PP)</label>
+                        <label class="choice"><input type="checkbox" name="half_move_clock">Half-Move-Clock input</label>
+                        <label class="choice"><input type="checkbox" name="merged_king_planes">Merged king planes</label>
+                    </div>
+                    <div class="builder-group">
+                        <h2>Outputs</h2>
+                        <div class="builder-output-row">
+                            <label class="choice"><input type="checkbox" name="score_outputs">Score output</label>
+                            <label class="builder-head-buckets">Buckets <input name="score_buckets" type="number" min="1" max="32" required aria-label="Score output buckets"></label>
+                        </div>
+                        <div class="builder-output-row">
+                            <label class="choice"><input type="checkbox" name="wdl_outputs">WDL output</label>
+                            <label class="builder-head-buckets">Buckets <input name="wdl_buckets" type="number" min="1" max="32" required aria-label="WDL output buckets"></label>
+                        </div>
+                        <div class="builder-output-row">
+                            <label class="choice"><input type="checkbox" name="uncertainty_outputs">Unc head output</label>
+                            <label class="builder-head-buckets">Buckets <input name="uncertainty_buckets" type="number" min="1" max="32" required aria-label="Uncertainty output buckets"></label>
+                        </div>
                     </div>
                     <div class="builder-group">
                         <div class="builder-group-heading"><h2>Hidden layers</h2><button class="button" id="builder-add-layer" type="button">+ Add layer</button></div>
                         <div id="builder-layers"></div>
+                        <label class="choice"><input type="checkbox" name="pairwise_activation">Pairwise activation</label>
+                        <label class="choice"><input type="checkbox" name="skip_connection">Skip connection</label>
                         <div class="field"><label for="builder-activation">Activation</label><select id="builder-activation" name="activation"><option value="screlu">SCReLU</option><option value="crelu">CReLU</option></select></div>
                     </div>
                     <div class="builder-group">
                         <div class="field"><label for="builder-feature-format">Feature layer export</label><select id="builder-feature-format" name="feature_format"><option value="i16">i16 · scale 255</option><option value="f32">f32</option></select></div>
                     </div>
                 </section>
-                <section class="builder-panel" id="panel-buckets" role="tabpanel" aria-labelledby="tab-buckets" hidden>
-                    <div class="builder-group">
-                        <div class="field-grid">
-                            <div class="field"><label for="builder-input-buckets">Input buckets</label><input id="builder-input-buckets" name="input_buckets" type="number" min="1" max="32" required></div>
-                            <div class="field"><label for="builder-output-buckets">Output buckets</label><input id="builder-output-buckets" name="output_buckets" type="number" min="1" max="32" required></div>
-                        </div>
-                        <label class="choice"><input type="checkbox" name="mirrored">Mirror files a–h, b–g, c–f, d–e</label>
-                    </div>
+                <dialog id="builder-bucket-dialog" class="builder-bucket-dialog" aria-labelledby="builder-bucket-title">
+                    <div class="builder-group-heading"><h2 id="builder-bucket-title">King bucket assignments</h2><button type="button" class="button" id="builder-close-buckets">Done</button></div>
                     <div class="builder-group">
                         <div class="builder-board-toolbar"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
                         <div class="builder-board" id="builder-board" role="group" aria-label="King square input buckets"></div>
                         <p class="builder-note" id="builder-layout-status" aria-live="polite"></p>
                     </div>
-                </section>
+                </dialog>
                 <section class="builder-panel" id="panel-training" role="tabpanel" aria-labelledby="tab-training" hidden>
                     <div class="builder-group">
                         <div class="field-grid">
@@ -60,15 +79,38 @@
                         </div>
                     </div>
                     <div class="builder-group">
-                        <h3>Learning rate stages</h3>
-                        <div id="builder-lr-stages"></div>
-                        <button type="button" class="button" id="builder-add-lr-stage">Add LR stage</button>
+                        <h3>Learning rate</h3>
+                        <div class="field-grid">
+                            <label class="field">Curve<select id="builder-lr-kind"><option value="constant">Constant</option><option value="linear">Linear</option><option value="cosine">Cosine</option></select></label>
+                            <label class="field">Initial LR<input id="builder-lr-initial" type="number" min="0" max="1" step="any" required></label>
+                            <label class="field">Final LR<input id="builder-lr-final" type="number" min="0" max="1" step="any" required></label>
+                        </div>
                     </div>
                     <div class="builder-group">
                         <h3>WDL blend stages</h3>
                         <div id="builder-wdl-stages"></div>
                         <button type="button" class="button" id="builder-add-wdl-stage">Add WDL stage</button>
                     </div>
+                    <details class="training-options"><summary>Position filtering &amp; sampling</summary>
+                        <div class="field"><label for="builder-random-skip">Random FEN skip probability</label><input id="builder-random-skip" name="random_fen_skip" type="number" min="0" max="1" step="any" required></div>
+                        <p class="builder-note">0 skips none; 1 skips everything and cannot train. Sampling happens while loading positions; source datasets are unchanged.</p>
+                        <label class="choice"><input type="checkbox" name="position_filtering">Filter positions</label>
+                        <div id="builder-position-filters" class="field-grid">
+                            <label class="field">Minimum ply<input name="min_ply" type="number" min="0" max="100000" required></label>
+                            <label class="field">Maximum ply<input name="max_ply" type="number" min="0" max="100000" required></label>
+                            <label class="field">Minimum absolute eval (cp)<input name="min_eval" type="number" min="0" max="32768" required></label>
+                            <label class="field">Maximum absolute eval (cp)<input name="max_eval" type="number" min="0" max="32768" required></label>
+                            <label class="field">Minimum pieces<input name="min_pieces" type="number" min="2" max="32" required></label>
+                            <label class="field">Maximum pieces<input name="max_pieces" type="number" min="2" max="32" required></label>
+                            <label class="choice"><input type="checkbox" name="filter_check">Skip positions in check</label>
+                            <label class="choice"><input type="checkbox" name="filter_tactical">Skip tactical moves</label>
+                            <label class="choice"><input type="checkbox" name="filter_castling">Skip castling moves</label>
+                        </div>
+                        <p class="builder-note">Ranges are inclusive. Ply counts half-moves from the game position; piece counts include kings. Tactical filtering skips recorded captures and promotions.</p>
+                        <label class="choice"><input type="checkbox" name="piece_count_sampling">Piece-count distribution sampling</label>
+                        <p class="builder-note">Keep probability for each piece count: 1 keeps all eligible positions, 0 drops them. These shape the distribution rather than specifying final proportions. Combined keep probability is (1 − random skip) × piece-count keep.</p>
+                        <div id="builder-piece-count-keep" class="builder-piece-counts"></div>
+                    </details>
                     <details class="training-options"><summary>Dataset processing on worker</summary>
                         <label class="choice"><input type="checkbox" name="shuffle">Shuffle games</label>
                         <label class="choice"><input type="checkbox" name="interleave">Interleave already-shuffled files</label>
@@ -95,6 +137,10 @@
             </section>
         </div>
     </fieldset>
+    <div class="builder-architecture">
+        <h2>Network architecture</h2>
+        <output id="builder-architecture" aria-live="polite"></output>
+    </div>
     <div class="form-actions schedule-save builder-actions">
         <p id="builder-feedback" role="status" aria-live="polite"></p>
         <a class="button" id="builder-open-source" href="/training/schedules/{{ builder_data.id }}/" {% if not builder_data.id %}hidden{% endif %}>Edit source</a>

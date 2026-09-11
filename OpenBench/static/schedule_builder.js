@@ -64,6 +64,67 @@
         if (input.type === 'checkbox') input.checked = value;
         else input.value = value;
     }
+    data.spec.piece_count_keep.forEach((value, index) => {
+        const label = document.createElement('label');
+        label.className = 'field';
+        label.append(document.createTextNode((index + 2) + ' pieces'));
+        const input = document.createElement('input');
+        Object.assign(input, {type: 'number', min: '0', max: '1', step: 'any', required: true, value: String(value)});
+        input.dataset.pieceCount = index + 2;
+        input.setAttribute('aria-label', 'Keep probability for ' + (index + 2) + ' pieces');
+        label.append(input);
+        byId('piece-count-keep').append(label);
+    });
+    const syncFilters = () => {
+        byId('position-filters').hidden = !field('position_filtering').checked;
+        byId('position-filters').querySelectorAll('input').forEach(input => { input.disabled = !field('position_filtering').checked; });
+        byId('piece-count-keep').hidden = !field('piece_count_sampling').checked;
+        byId('piece-count-keep').querySelectorAll('input').forEach(input => { input.disabled = !field('piece_count_sampling').checked; });
+    };
+    field('position_filtering').addEventListener('input', syncFilters);
+    field('piece_count_sampling').addEventListener('input', syncFilters);
+    syncFilters();
+    const syncNetwork = () => {
+        for (const name of ['score', 'wdl', 'uncertainty']) {
+            field(name + '_buckets').disabled = !field(name + '_outputs').checked;
+        }
+        const missingPrediction = !field('score_outputs').checked && !field('wdl_outputs').checked;
+        field('score_outputs').setCustomValidity(missingPrediction ? 'Enable a score or WDL output. The uncertainty head needs a prediction error to learn from.' : '');
+        const pieces = field('merged_king_planes').checked ? 704 : 768;
+        const bucketedInputs = field('psqt_inputs').checked || field('half_move_clock').checked;
+        field('input_buckets').disabled = !bucketedInputs;
+        field('merged_king_planes').disabled = !field('psqt_inputs').checked;
+        byId('assign-buckets').hidden = !bucketedInputs || field('input_buckets').valueAsNumber <= 1;
+        if (byId('assign-buckets').hidden && byId('bucket-dialog').open) byId('bucket-dialog').close();
+        const anyInputs = ['psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'half_move_clock'].some(name => field(name).checked);
+        field('psqt_inputs').setCustomValidity(anyInputs ? '' : 'Enable at least one input feature.');
+        const count = name => Number.isInteger(field(name).valueAsNumber) ? field(name).valueAsNumber : '?';
+        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map(input => Number.isInteger(input.valueAsNumber) ? input.valueAsNumber : '?');
+        const kingInputs = [];
+        if (field('psqt_inputs').checked) kingInputs.push(pieces + ' PSQT');
+        if (field('half_move_clock').checked) kingInputs.push('11 HMC');
+        const featureGroups = [];
+        if (kingInputs.length) featureGroups.push('(' + kingInputs.join(' + ') + ')x' + count('input_buckets') + (field('mirrored').checked ? 'hm' : ''));
+        if (field('threat_inputs').checked) featureGroups.push('60144 TIhm');
+        if (field('pawn_pair_inputs').checked) featureGroups.push('4560 PPhm');
+        const inputs = featureGroups.join(' + ') || 'no inputs';
+        const heads = [];
+        if (field('score_outputs').checked) heads.push('SCOREx' + count('score_buckets'));
+        if (field('wdl_outputs').checked) heads.push('WDLx' + count('wdl_buckets'));
+        if (field('uncertainty_outputs').checked) heads.push('UNCx' + count('uncertainty_buckets'));
+        const dense = [...layers.slice(1), '(' + (heads.join(' + ') || 'no outputs') + ')'].join(' -> ');
+        const skip = field('skip_connection').checked ? ' · skip L2 -> L3' : '';
+        const pairwise = field('pairwise_activation').checked;
+        field('pairwise_activation').setCustomValidity(pairwise && (!Number.isInteger(layers[0]) || layers[0] % 2) ? 'Pairwise activation requires an even feature-layer size.' : '');
+        byId('architecture').textContent = '(' + inputs + ' -> ' + (layers[0] ?? '?') + ')x2' + (pairwise ? '-pw' : '') + ' -> (' + dense + ')' + ' · ' + field('activation').value.toUpperCase() + skip;
+    };
+    const syncSkipConnection = () => {
+        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map(input => input.valueAsNumber);
+        const invalid = field('skip_connection').checked && (layers.length < 3 || layers[1] !== layers[2]);
+        field('skip_connection').setCustomValidity(invalid ? 'The skip connection requires at least three hidden layers, with Layer 2 and Layer 3 the same size.' : '');
+    };
+    field('skip_connection').addEventListener('input', syncSkipConnection);
+    byId('layers').addEventListener('input', syncSkipConnection);
     const renumberLayers = () => {
         const rows = [...byId('layers').children];
         rows.forEach((row, index) => {
@@ -77,6 +138,8 @@
             row.querySelector('button').setAttribute('aria-label', 'Remove layer ' + (index + 1));
         });
         byId('add-layer').disabled = rows.length >= 8;
+        syncSkipConnection();
+        syncNetwork();
     };
     const addLayer = value => {
         const row = document.createElement('div');
@@ -149,6 +212,11 @@
         drawBoard();
     };
     updatePalette();
+    byId('assign-buckets').addEventListener('click', () => {
+        updatePalette();
+        byId('bucket-dialog').showModal();
+    });
+    byId('close-buckets').addEventListener('click', () => byId('bucket-dialog').close());
     paint.addEventListener('change', drawBoard);
     const rememberLayout = () => {
         undo.push({layout: [...layout], count: field('input_buckets').value, mirrored: field('mirrored').checked});
@@ -246,12 +314,42 @@
         updatePalette();
         changed();
     });
-    const readStages = channel => [...byId(channel + '-stages').children].map(row =>
-        Object.fromEntries([...row.querySelectorAll('[data-stage-field]')].map(input =>
-            [input.dataset.stageField, input.type === 'number' ? input.valueAsNumber : input.value])));
-    const renderStages = (channel, stages) => {
-        const container = byId(channel + '-stages');
-        container.replaceChildren();
+    const totalSuperbatches = () => Math.max(1, Math.floor(field('superbatches').valueAsNumber) || data.spec.superbatches);
+    const normalizeWdl = values => {
+        const total = totalSuperbatches();
+        const stages = values.slice(0, total).map(stage => ({...stage}));
+        let start = 1;
+        stages.forEach((stage, index) => {
+            stage.start = start;
+            stage.end = index === stages.length - 1 ? total : Math.max(start, Math.min(Number.isInteger(stage.end) ? stage.end : start, total - (stages.length - index - 1)));
+            if (stage.kind === 'constant' || stage.start === stage.end) stage.final = stage.initial;
+            start = stage.end + 1;
+        });
+        return stages;
+    };
+    const readWdl = () => [...byId('wdl-stages').children].map(row => Object.fromEntries(
+        [...row.querySelectorAll('[data-stage-field]')].map(input => [input.dataset.stageField, input.type === 'number' ? input.valueAsNumber : input.value])));
+    const syncWdl = () => {
+        const stages = normalizeWdl(readWdl());
+        const rows = [...byId('wdl-stages').children];
+        stages.forEach((stage, index) => {
+            const row = rows[index];
+            const get = name => row.querySelector('[data-stage-field="' + name + '"]');
+            get('start').value = stage.start;
+            get('end').value = stage.end;
+            get('start').readOnly = true;
+            get('end').readOnly = index === stages.length - 1;
+            get('end').min = stage.start;
+            get('end').max = totalSuperbatches() - (stages.length - index - 1);
+            const constant = stage.kind === 'constant' || stage.start === stage.end;
+            get('final').readOnly = constant;
+            if (constant) get('final').value = stage.initial;
+        });
+        byId('add-wdl-stage').disabled = stages.length >= totalSuperbatches();
+    };
+    const renderWdl = values => {
+        const stages = normalizeWdl(values);
+        byId('wdl-stages').replaceChildren();
         stages.forEach((stage, index) => {
             const row = document.createElement('fieldset');
             row.className = 'builder-stage';
@@ -265,66 +363,52 @@
                 label.append(document.createTextNode(title));
                 const input = document.createElement(key === 'kind' ? 'select' : 'input');
                 input.dataset.stageField = key;
-                if (key === 'kind') {
-                    input.append(new Option('Constant', 'constant'), new Option('Linear', 'linear'), new Option('Cosine', 'cosine'));
-                } else {
-                    Object.assign(input, {type: 'number', min: ['start', 'end'].includes(key) ? '1' : '0', max: ['start', 'end'].includes(key) ? '1000000' : '1', step: ['start', 'end'].includes(key) ? '1' : 'any', required: true});
-                }
+                if (key === 'kind') input.append(new Option('Constant', 'constant'), new Option('Linear', 'linear'), new Option('Cosine', 'cosine'));
+                else Object.assign(input, {type: 'number', min: ['start', 'end'].includes(key) ? '1' : '0', max: ['start', 'end'].includes(key) ? '1000000' : '1', step: ['start', 'end'].includes(key) ? '1' : 'any', required: true});
                 input.value = stage[key];
                 label.append(input);
                 grid.append(label);
             }
-            const sync = () => {
-                const constant = grid.querySelector('select').value === 'constant';
-                const final = grid.querySelector('[data-stage-field="final"]');
-                final.disabled = constant;
-                final.parentElement.hidden = constant;
-                if (constant) final.value = grid.querySelector('[data-stage-field="initial"]').value;
-            };
-            grid.addEventListener('input', sync);
-            sync();
+            grid.addEventListener('input', syncWdl);
             const remove = document.createElement('button');
             Object.assign(remove, {type: 'button', className: 'button', textContent: 'Remove stage', disabled: stages.length === 1});
             remove.addEventListener('click', () => {
-                const values = readStages(channel);
+                const values = readWdl();
                 values.splice(index, 1);
-                renderStages(channel, values);
+                renderWdl(values);
                 changed();
             });
             row.append(legend, grid, remove);
-            container.append(row);
+            byId('wdl-stages').append(row);
         });
+        syncWdl();
     };
-    for (const channel of ['lr', 'wdl']) {
-        renderStages(channel, data.spec[channel + '_stages']);
-        byId('add-' + channel + '-stage').addEventListener('click', () => {
-            const stages = readStages(channel);
-            const last = stages[stages.length - 1];
-            const end = field('superbatches').valueAsNumber;
-            let start = last.end + 1;
-            if (last.end === end && last.end > last.start) {
-                start = Math.floor((last.start + last.end) / 2) + 1;
-                last.end = start - 1;
-            }
-            stages.push({start, end: Math.max(start, end), kind: 'constant', initial: last.final, final: last.final});
-            renderStages(channel, stages);
-            changed();
-        });
-    }
-    let previousSuperbatches = data.spec.superbatches;
-    field('superbatches').addEventListener('change', () => {
-        const total = field('superbatches').valueAsNumber;
-        if (!Number.isInteger(total) || total < 1) return;
-        for (const channel of ['lr', 'wdl']) {
-            const stages = readStages(channel);
-            const last = stages[stages.length - 1];
-            if (last.end === previousSuperbatches && total >= last.start) {
-                last.end = total;
-                renderStages(channel, stages);
-            }
-        }
-        previousSuperbatches = total;
+    renderWdl(data.spec.wdl_stages);
+    byId('add-wdl-stage').addEventListener('click', () => {
+        const stages = normalizeWdl(readWdl());
+        if (stages.length >= totalSuperbatches()) return;
+        const last = stages[stages.length - 1];
+        last.end = Math.floor((last.start + last.end) / 2);
+        stages.push({start: last.end + 1, end: totalSuperbatches(), kind: 'constant', initial: last.final, final: last.final});
+        renderWdl(stages);
         changed();
+    });
+    const initialLr = data.spec.lr_stages[0];
+    byId('lr-kind').value = initialLr.kind;
+    byId('lr-initial').value = initialLr.initial;
+    byId('lr-final').value = data.spec.lr_stages[data.spec.lr_stages.length - 1].final;
+    const syncLr = () => {
+        const constant = byId('lr-kind').value === 'constant' || totalSuperbatches() === 1;
+        byId('lr-final').readOnly = constant;
+        if (constant) byId('lr-final').value = byId('lr-initial').value;
+    };
+    byId('lr-kind').addEventListener('input', syncLr);
+    byId('lr-initial').addEventListener('input', syncLr);
+    syncLr();
+    field('superbatches').addEventListener('input', () => {
+        if (!Number.isInteger(field('superbatches').valueAsNumber) || field('superbatches').valueAsNumber < 1) return;
+        renderWdl(readWdl());
+        syncLr();
     });
     const readSpec = () => {
         const spec = {...data.spec, king_layout: [...layout], layers: [...form.querySelectorAll('[data-layer]')].map(input => input.valueAsNumber)};
@@ -332,7 +416,13 @@
             const input = field(name);
             if (input) spec[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? input.valueAsNumber : input.value;
         }
-        for (const channel of ['lr', 'wdl']) spec[channel + '_stages'] = readStages(channel);
+        spec.lr_stages = [{start: 1, end: totalSuperbatches(), kind: byId('lr-kind').value, initial: byId('lr-initial').valueAsNumber, final: byId('lr-final').valueAsNumber}];
+        spec.wdl_stages = normalizeWdl(readWdl());
+        if (!spec.psqt_inputs && !spec.half_move_clock) {
+            spec.input_buckets = 1;
+            spec.king_layout = Array(64).fill(0);
+        }
+        spec.piece_count_keep = [...byId('piece-count-keep').querySelectorAll('input')].map(input => input.valueAsNumber);
         return spec;
     };
     const request = async (body, signal) => {
@@ -364,6 +454,7 @@
         }
     };
     function changed(regenerate = true) {
+        syncNetwork();
         dirty = true;
         byId('use').hidden = true;
         message(feedback, 'Unsaved changes');

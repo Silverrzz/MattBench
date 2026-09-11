@@ -16,8 +16,8 @@ from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.debug import sensitive_post_parameters
 
 from OpenBench.models import DatasetUpload, EngineConfig, HuggingFaceCredential, Network, PGN, Profile
-from OpenBench.models import Test, TrainingArtifact, TrainingRun, TrainingSchedule, TrainingWorker
-from OpenBench.models import LifecycleEvent, TrainingDataset
+from OpenBench.models import Machine, Test, TrainingArtifact, TrainingRun, TrainingSchedule, TrainingWorker
+from OpenBench.models import LifecycleEvent, TrainingDataset, TrainingCheckpoint
 from OpenBench.lifecycle import record_event
 from OpenBench.training import DEFAULT_SETTINGS, hf_token, relative_path, repo_id, save_credential, validate_schedule
 from OpenBench.training import worker_requirement_errors
@@ -152,6 +152,8 @@ from OpenBench.schedule_builder import schedule_dataset_stages
 
 
 class TrainingForm(forms.Form):
+    checkpoint = forms.ModelChoiceField(label='Starting point', queryset=TrainingCheckpoint.objects.none(), required=False, empty_label='Start from scratch')
+    wdl = forms.FloatField(label='WDL for remaining training', min_value=0, max_value=1, required=False, widget=forms.NumberInput(attrs={'step': '0.01', 'placeholder': 'Use schedule values'}))
     skip_broken_games = forms.BooleanField(label='Skip invalid games and report discarded data', initial=True, required=False)
     name = forms.RegexField(label='Network name', regex=r'\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z', max_length=64, error_messages={'invalid': 'Use letters, numbers, dots, dashes or underscores, starting with a letter or number.'})
     engine = forms.ModelChoiceField(queryset=EngineConfig.objects.filter(enabled=True).order_by('name'))
@@ -166,11 +168,14 @@ class TrainingForm(forms.Form):
 
     def __init__(self, user, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['checkpoint'].queryset = TrainingCheckpoint.objects.filter(run__owner=user, run__snapshot__settings__resume_supported=True).exclude(run__snapshot__has_key='demo').select_related('run', 'archive').order_by('-run_id', '-superbatch')
+        self.fields['checkpoint'].label_from_instance = lambda row: '%s · Run #%d · SB %d → %d' % (row.run.name, row.run_id, row.superbatch, row.superbatch + 1)
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
         cutoff = timezone.now() - timedelta(minutes=2)
-        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), owner=user, enabled=True).exclude(info__has_key='demo')
-        self.fields['worker'].label_from_instance = lambda row: '%s / %s' % (row.name, row.info.get('gpu', 'GPU'))
+        self.fields['worker'].queryset = TrainingWorker.objects.filter(owner=user, enabled=True).exclude(info__has_key='demo').select_related('machine')
+        busy_workers = set(TrainingRun.objects.filter(state__in=TRAINING_ACTIVE).values_list('worker_id', flat=True))
+        self.fields['worker'].label_from_instance = lambda row: '%s / %s (%s; %s)' % (row.name, row.info.get('gpu', 'GPU'), 'Offline' if max(row.updated, row.machine.updated if row.machine_id else row.updated) < cutoff else 'Busy' if row.pk in busy_workers or row.machine_id and row.machine.workload else 'Online', row.machine.get_mode_display() if row.machine_id else row.get_mode_display())
         for name, field in self.fields.items():
             field.widget.attrs.update({'id': 'train-' + name})
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
@@ -235,6 +240,29 @@ class TrainingForm(forms.Form):
         if schedule and worker:
             for error in worker_requirement_errors(worker.info, config):
                 self.add_error('worker', error)
+        checkpoint = data.get('checkpoint')
+        if data.get('wdl') is not None and not checkpoint:
+            self.add_error('wdl', 'Select a checkpoint to change WDL for the remaining training.')
+        if schedule:
+            from OpenBench.schedule_builder import builder_state, generate_schedule
+            spec, current = builder_state(schedule)
+            files = schedule.files
+            if checkpoint and data.get('wdl') is not None:
+                if not current:
+                    self.add_error('wdl', 'WDL overrides require a schedule managed by the schedule builder.')
+                else:
+                    for stage in spec['wdl_stages']:
+                        if stage['end'] > checkpoint.superbatch:
+                            stage.update(kind='constant', initial=data['wdl'], final=data['wdl'])
+            if current:
+                _, files, _ = generate_schedule(spec)
+            if checkpoint and data.get('engine'):
+                from OpenBench.training_checkpoints import validate_checkpoint_schedule
+                try:
+                    validate_checkpoint_schedule(checkpoint, data['engine'], files, config)
+                except ValidationError as error:
+                    self.add_error('checkpoint', error)
+            data['run_files'] = files
         return data
 
 
@@ -245,27 +273,58 @@ def new_training(request):
     from OpenBench.views import redirect, render
     enabled(request.user)
     initial = {'dataset': request.GET.get('dataset', ''), 'schedule': request.GET.get('schedule'), 'engine': request.GET.get('engine')}
+    if request.method == 'GET' and request.GET.get('checkpoint'):
+        if not request.GET['checkpoint'].isdigit() or len(request.GET['checkpoint']) > 18:
+            return redirect(request, '/training/new/', error='Choose a saved checkpoint.')
+        selected_checkpoint = get_object_or_404(TrainingCheckpoint.objects.select_related('run').exclude(run__snapshot__has_key='demo'), pk=request.GET['checkpoint'], run__owner=request.user, run__snapshot__settings__resume_supported=True)
+        source = selected_checkpoint.run
+        source_datasets = source.dataset.get('stages') or [source.dataset]
+        initial.update(checkpoint=selected_checkpoint.pk, engine=source.engine_id, schedule=source.schedule_id, name=('%s-sb%d' % (source.name[:45], selected_checkpoint.superbatch)),
+                       dataset=source_datasets[0].get('registry_id', ''), stage_datasets=[{'stage': index, 'dataset': stage.get('registry_id', '')} for index, stage in enumerate(source_datasets)],
+                       environment='\n'.join('%s=%s' % pair for pair in source.snapshot.get('environment', {}).items()))
     form = TrainingForm(request.user, request.POST if request.method == 'POST' else None, initial=initial)
     if request.method == 'POST' and form.is_valid():
         try:
             hf_token(request.user.pk)
             data = form.cleaned_data
             schedule = data['schedule']
-            config = validate_schedule(schedule.files, data['run_settings'])
-            run = TrainingRun.objects.create(
-                owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
-                requested_worker=data['worker'],
-                snapshot={'name': schedule.name, 'version': schedule.version, 'files': schedule.files, 'settings': config, 'environment': data['environment']},
-                dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
-            )
-            record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name})
+            files = data.get('run_files', schedule.files)
+            config = validate_schedule(files, data['run_settings'])
+            checkpoint = data.get('checkpoint')
+            snapshot = {'name': schedule.name, 'version': schedule.version, 'files': files, 'settings': config, 'environment': data['environment']}
+            if checkpoint:
+                from OpenBench.training_checkpoints import checkpoint_provenance
+                from OpenBench.training_storage import storage_lock
+                with storage_lock():
+                    checkpoint = TrainingCheckpoint.objects.select_for_update().select_related('archive', 'run').filter(pk=checkpoint.pk).first()
+                    if checkpoint is None:
+                        raise ValidationError('This checkpoint was removed. Choose another starting point.')
+                    snapshot['resume'] = checkpoint_provenance(checkpoint)
+                    snapshot['bullet_commit'] = checkpoint.run.snapshot.get('bullet_commit')
+                if data.get('wdl') is not None:
+                    snapshot['wdl_override'] = data['wdl']
+            with transaction.atomic():
+                if data['worker']:
+                    if data['worker'].machine_id:
+                        Machine.objects.select_for_update().get(pk=data['worker'].machine_id)
+                    data['worker'] = TrainingWorker.objects.select_for_update().get(pk=data['worker'].pk)
+                    if not data['worker'].enabled:
+                        raise ValidationError('This worker was disconnected. Select another worker.')
+                run = TrainingRun.objects.create(
+                    owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
+                    requested_worker=data['worker'],
+                    snapshot=snapshot, resume_from=checkpoint,
+                    dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
+                )
+            record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name, 'checkpoint_id': checkpoint.pk if checkpoint else None})
             return redirect(request, '/training/%d/' % run.pk)
         except ValidationError as error:
             form.add_error(None, error)
     options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'scope': row.scope_label, 'stages': schedule_dataset_stages(row)} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
     dataset_options = [{'id': str(row.pk), 'name': row.name, 'repo': row.repo, 'revision': row.revision, 'owner': row.owner.username, 'is_owner': row.owner_id == request.user.pk} for row in form.fields['dataset'].queryset.select_related('owner')]
     dataset_options.sort(key=lambda row: (not row['is_owner'], row['name'].casefold(), row['owner'].casefold(), row['id']))
-    return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists()})
+    checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': [stage.get('registry_id', '') for stage in (row.run.dataset.get('stages') or [row.run.dataset])]} for row in form.fields['checkpoint'].queryset]
+    return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'checkpoint_options': checkpoint_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists()})
 
 
 @login_required(login_url='/login/')
@@ -285,16 +344,12 @@ def training_detail(request, pk):
             now = timezone.now()
             cancelled = TrainingRun.objects.filter(pk=pk, state__in=('VALIDATING', 'PREPARING', 'QUEUED')).update(state='CANCELLED', finished=now, updated=now, cancel_requested=True)
             TrainingRun.objects.filter(pk=pk, state__in=TRAINING_ACTIVE).update(cancel_requested=True)
+            TrainingRun.objects.filter(pk=pk, state='FAILED', recovery_run=None, metrics__recovery_pending=1).update(cancel_requested=True, error='Automatic recovery cancelled.')
             record_event('training.cancel.requested', run, request.user.pk)
             if cancelled:
                 record_event('training.cancelled', run, request.user.pk)
         elif request.POST.get('action') == 'resume':
-            from OpenBench.training_checkpoints import resume_training
-            try:
-                copy = resume_training(request.user, run, request.POST.get('checkpoint') or None)
-                return redirect(request, '/training/%d/' % copy.pk)
-            except ValidationError as error:
-                return redirect(request, '/training/%d/' % pk, error=error_text(error))
+            return redirect(request, '/training/new/', error='Select a checkpoint and settings in New train to create a separate task.')
         elif request.POST.get('action') == 'finish-checkpoints':
             from OpenBench.training_checkpoints import finish_checkpoints
             try:
@@ -305,17 +360,16 @@ def training_detail(request, pk):
             except ValidationError as error:
                 return redirect(request, '/training/%d/' % pk, error=error_text(error))
         elif request.POST.get('action') == 'restart' and run.terminal:
-            from OpenBench.training_datasets import effective_dataset
-            snapshot = {key: value for key, value in run.snapshot.items() if key != 'resume'}
-            copy = TrainingRun.objects.create(owner=request.user, engine=run.engine, name=run.name, schedule=run.schedule, snapshot=snapshot, dataset=effective_dataset(run), parameters=run.parameters, state='QUEUED' if run.dataset.get('commit') and run.snapshot.get('bullet_commit') else 'VALIDATING')
-            record_event('training.created', copy, request.user.pk, {'restart_of': run.pk})
-            return redirect(request, '/training/%d/' % copy.pk)
+            return redirect(request, '/training/new/?engine=%s&schedule=%s' % (run.engine_id, run.schedule_id or ''))
         return redirect(request, '/training/%d/' % pk)
+    from OpenBench.training_telemetry import training_metrics
+    run.metrics = training_metrics(run.metrics, run.snapshot, run.dataset, run.state)
     output_artifacts = list(run.artifacts.select_related('checkpoint_network', 'checkpoint_archive'))
     for item in output_artifacts:
         checkpoint = getattr(item, 'checkpoint_network', None) or getattr(item, 'checkpoint_archive', None)
         match = re.fullmatch(r'sb-(\d+)\.bin', item.name)
         item.output_superbatch = checkpoint.superbatch if checkpoint else int(match[1]) if match else 0
+        item.start_checkpoint_id = checkpoint.pk if checkpoint and item.kind == 'checkpoint' and run.owner_id == request.user.pk and run.snapshot['settings'].get('resume_supported') else None
         item.output_label = {'network': 'Network', 'checkpoint': 'Resume checkpoint', 'manifest': 'Manifest', 'log': 'Log'}.get(item.kind, item.kind)
         if item.kind == 'network' and item.output_superbatch:
             final = run.state == 'COMPLETED' and item.output_superbatch == run.metrics.get('end_superbatch', run.metrics.get('superbatch'))

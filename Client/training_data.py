@@ -77,6 +77,7 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
     memory_bytes = config.get('shuffle_memory_mb', 256) * 1024 ** 2
     fan_in = config.get('interleave_fan_in', 32)
     shard_bytes = config.get('dataset_shard_mb', 512) * 1024 ** 2
+    source_bytes = sum(path.stat().st_size for path in paths)
     total = 0
     with TemporaryDirectory(prefix='ordering-', dir=destination) as temporary:
         work = Path(temporary)
@@ -116,6 +117,8 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
                         flush()
                 else:
                     runs.append((path, count))
+            if shuffle:
+                path.unlink()
         if not total:
             raise RuntimeError('No Viriformat games to order.')
         reporter.update(dataset_games=total)
@@ -144,8 +147,7 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
                 target = work / ('merge-%d-%d.vf' % (generation, start))
                 merge_games(group, target, seed, combiner, environment, reporter, command)
                 for path, _ in group:
-                    if path.parent == work:
-                        path.unlink()
+                    path.unlink()
                 return target, sum(count for _, count in group)
             jobs = [(index, group, rng.getrandbits(64)) for index, group in enumerate(groups)]
             with ThreadPoolExecutor(max_workers=max(1, int(reporter.job['worker_info']['threads']))) as executor:
@@ -161,8 +163,10 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
         reporter.update(current_file='Interleaving complete Viriformat games into output shards')
         target = work / 'interleaved.vf'
         merge_games(runs, target, rng.getrandbits(64), combiner, environment, reporter, command)
+        for path, _ in runs:
+            path.unlink()
         outputs = converted_shards([target], destination / 'shards', reporter, shard_bytes)
-    if sum(path.stat().st_size for path in outputs) != sum(path.stat().st_size for path in paths):
+    if sum(path.stat().st_size for path in outputs) != source_bytes:
         raise RuntimeError('Game ordering must preserve dataset size.')
     return outputs, total
 

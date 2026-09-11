@@ -41,12 +41,22 @@
 .workspace-subtabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); margin: 0 0 24px; }
 .workspace-subtabs button { padding: 12px 16px; min-height: 44px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--subtle); font: 12px var(--mono); cursor: pointer; }
 .workspace-subtabs button[aria-selected="true"] { color: var(--text); border-color: var(--brand); }
+.workers-page > .workspace-stats { margin-bottom: 0; }
+.workers-name { width: 21%; }
+.workers-hardware { width: 25%; }
+.workers-capacity { width: 13%; }
+.workers-job { width: 24%; }
+.workers-status { width: 17%; }
+.workers-table td { overflow-wrap: anywhere; }
 .worker-list { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-.worker-row { display: grid; grid-template-columns: minmax(145px, 1.1fr) minmax(175px, 1.2fr) minmax(90px, .7fr) minmax(130px, 1fr) 90px; gap: 18px; align-items: center; padding: 18px 20px; }
+.worker-row { display: grid; grid-template-columns: minmax(145px, 1.1fr) minmax(175px, 1.2fr) minmax(90px, .7fr) minmax(130px, 1fr) 140px; gap: 18px; align-items: center; padding: 18px 20px; }
 .worker-row + .worker-row { border-top: 1px solid var(--line); }
 .worker-row > div { min-width: 0; display: grid; gap: 6px; }
 .worker-row a { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .worker-row small { color: var(--subtle); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.worker-row form { display: grid; gap: 6px; min-width: 0; }
+.worker-row form label { font-size: 10px; color: var(--subtle); }
+.worker-row form select { width: 100%; min-width: 0; font-size: 11px; }
 .worker-hardware, .worker-capacity { font-size: 12px; overflow-wrap: anywhere; }
 .worker-header { background: var(--surface); color: var(--subtle); font-size: 10px; padding-top: 11px; padding-bottom: 11px; }
 .worker-state { font-size: 11px; display: flex; align-items: center; gap: 7px; }
@@ -62,7 +72,7 @@
 [data-search-row][hidden], [data-filter-section][hidden], [data-tab-panel][hidden] { display: none !important; }
 @media (max-width: 1000px) {
     .workspace-columns { grid-template-columns: minmax(0, 1fr); }
-    .worker-row { grid-template-columns: minmax(125px, 1fr) minmax(140px, 1.2fr) minmax(100px, 1fr) 80px; gap: 12px; }
+    .worker-row { grid-template-columns: minmax(125px, 1fr) minmax(140px, 1.2fr) minmax(100px, 1fr) 125px; gap: 12px; }
     .worker-capacity { display: none !important; }
 }
 @media (max-width: 600px) {

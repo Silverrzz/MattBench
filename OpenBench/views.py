@@ -696,6 +696,7 @@ def client_get_build_info(request):
     return JsonResponse(data)
 
 @csrf_exempt
+@transaction.atomic
 def client_worker_info(request):
 
     persistent_worker = None
@@ -723,9 +724,23 @@ def client_worker_info(request):
         return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
     # Create a new Machine for this session
-    machine = persistent_worker.machine if persistent_worker and persistent_worker.machine_id else Machine(user=user, info=info)
+    mode = request.POST.get('mode', 'automatic')
+    if mode not in ('automatic', 'training-only', 'paused'):
+        return JsonResponse({'error': 'Invalid worker mode'})
+    machine = Machine.objects.select_for_update().get(pk=persistent_worker.machine_id) if persistent_worker and persistent_worker.machine_id else None
+    if machine is None and request.POST.get('previous_machine_id', '').isdigit():
+        previous = Machine.objects.select_for_update().filter(pk=request.POST['previous_machine_id'], user=user).first()
+        if previous and previous.info.get('disconnected'):
+            return JsonResponse({'error': 'Bad Client Version: Worker disconnected by its owner.'})
+        if previous and secrets.compare_digest(previous.secret, request.POST.get('previous_machine_secret', '')):
+            machine = previous
+    if machine is None:
+        machine = Machine(user=user, info=info, mode=persistent_worker.mode if persistent_worker else mode)
+    machine.workload = 0
 
     # Save the machine's latest information and Secret Token for this session
+    if machine.info.get('custom_name'):
+        info.update(custom_name=machine.info['custom_name'], machine_name=machine.info['custom_name'])
     machine.info   = info
     machine.secret = secrets.token_hex(32)
 
@@ -773,12 +788,22 @@ def client_get_network(request, engine, name):
 
 @csrf_exempt
 @verify_worker
+@transaction.atomic
 def client_get_workload(request, machine):
-    from OpenBench.models import TrainingRun
     from OpenBench.training_models import TRAINING_ACTIVE
+    machine = Machine.objects.select_for_update().get(pk=machine.pk)
+    machine.updated = timezone.now()
+    machine.save(update_fields=['updated'])
     if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():
         return JsonResponse({})
-    return JsonResponse(get_workload(request, machine))
+    reserved = TrainingRun.objects.filter(requested_worker__machine=machine, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo').exists()
+    if machine.mode != 'automatic' or reserved:
+        Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
+        return JsonResponse({})
+    result = get_workload(request, machine)
+    if not result:
+        Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
+    return JsonResponse(result)
 
 @csrf_exempt
 @verify_worker
@@ -839,7 +864,10 @@ def client_submit_error(request, machine):
 def client_submit_results(request, machine):
 
     # Returns {}, or { 'stop' : True }
-    return JsonResponse(OpenBench.utils.update_test(request, machine))
+    result = OpenBench.utils.update_test(request, machine)
+    if Machine.objects.filter(pk=machine.pk).exclude(workload=int(request.POST['test_id'])).exists():
+        result['stop'] = True
+    return JsonResponse(result)
 
 @csrf_exempt
 @verify_worker
@@ -851,7 +879,8 @@ def client_heartbeat(request, machine):
     # Include a 'stop' header iff the test was finished
     finished = Test.objects.filter(id=int(request.POST['test_id'])).values_list('finished', flat=True).first()
 
-    return JsonResponse([{}, { 'stop' : True }][bool(finished)])
+    stopped = Machine.objects.filter(pk=machine.pk).exclude(workload=int(request.POST['test_id'])).exists()
+    return JsonResponse({'stop': True} if finished or stopped else {})
 
 @csrf_exempt
 @verify_worker

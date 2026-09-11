@@ -207,7 +207,8 @@ def resolve_inputs(run):
     if len(selected) > 4096:
         raise ValidationError('Select at most 4096 dataset files per run.')
     repository = config['bullet_repo'].removeprefix('https://github.com/')
-    response = requests.get('https://api.github.com/repos/%s/commits/%s' % (repository, quote(config['bullet_ref'], safe='')), timeout=30)
+    bullet_ref = run.snapshot.get('bullet_commit') if run.snapshot.get('resume') else config['bullet_ref']
+    response = requests.get('https://api.github.com/repos/%s/commits/%s' % (repository, quote(bullet_ref or config['bullet_ref'], safe='')), timeout=30)
     response.raise_for_status()
     commit = response.json()['sha']
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[0-9a-f]{40}', info.sha):

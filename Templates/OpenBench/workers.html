@@ -2,26 +2,31 @@
 {% load static live %}
 {% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
 {% block content %}
-<div>
-    <div id="live-workers" data-live>{% live_region 'live-workers' %}
-        <dl class="workspace-stats"><div><dt>Connected</dt><dd>{{ online_count }}</dd></div><div><dt>Busy</dt><dd>{{ busy_count }}</dd></div><div><dt>CPU threads</dt><dd>{{ thread_count }}</dd></div></dl>
-        {% for group in worker_groups %}
-        <section aria-labelledby="workers-{{ group.id }}">
-        <h2 id="workers-{{ group.id }}">{{ group.title }}</h2>
-        <div class="worker-list">
-            <div class="worker-row worker-header"><span>Worker</span><span>Hardware</span><span class="worker-capacity">Capacity</span><span>Current job</span><span>Status</span></div>
-            {% for worker in group.workers %}
-            <article class="worker-row">
-                <div><a href="{{ worker.url }}"><strong>{{ worker.name }}</strong></a><small>{{ worker.owner.username }}{% if worker.demo %} · Demo{% endif %}</small></div>
-                <div class="worker-hardware"><span>{{ worker.hardware }}</span><small>{{ worker.platform }}{% if worker.gpu_memory %} · {{ worker.gpu_memory|floatformat:0 }} GB VRAM{% endif %}</small></div>
-                <div class="worker-capacity"><span>{{ worker.threads }} threads</span>{% if worker.memory %}<small>{{ worker.memory }} GB RAM</small>{% endif %}</div>
-                <div class="worker-job">{% if worker.job %}<a href="{{ worker.job_url }}">{{ worker.job }}</a><small>{{ worker.rate }}</small>{% else %}<small>{{ worker.capabilities|join:' · ' }}</small>{% endif %}</div>
-                <div><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span><small>{{ worker.updated|timesince }} ago</small></div>
-            </article>
-            {% empty %}<div class="empty-block">{{ group.empty }}</div>{% endfor %}
+<div class="tests-page workers-page" id="live-workers" data-live>{% live_region 'live-workers' %}
+    <dl class="workspace-stats"><div><dt>Connected</dt><dd>{{ online_count }}</dd></div>{% for label, count in activity_counts %}<div><dt>{{ label }}</dt><dd>{{ count }}</dd></div>{% endfor %}<div><dt>Test / datagen threads</dt><dd>{{ thread_count }}</dd></div></dl>
+    {% for group in worker_groups %}
+    <section class="tests-section" aria-labelledby="workers-{{ group.id }}">
+        <h2 id="workers-{{ group.id }}">{{ group.title }} <span class="section-count">{{ group.workers|length }}</span></h2>
+        {% if group.workers %}
+        <div class="table-scroll" role="region" aria-label="{{ group.title }}; scroll horizontally for more columns" tabindex="0">
+            <table class="index-tests hoverable workers-table" aria-label="{{ group.title }}">
+                <colgroup><col class="workers-name"><col class="workers-hardware"><col class="workers-capacity"><col class="workers-job"><col class="workers-status"></colgroup>
+                <thead><tr class="table-header"><th scope="col">Worker</th><th scope="col">Hardware</th><th scope="col">Capacity</th><th scope="col">Current job</th><th scope="col">Status</th></tr></thead>
+                <tbody>
+                {% for worker in group.workers %}
+                    <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">
+                        <td class="test-revision"><a class="revision-link" href="{{ worker.url }}">{{ worker.name }}</a><div class="revision-meta">{{ worker.owner.username }}{% if worker.demo %}<span class="test-flag">Demo</span>{% endif %}</div></td>
+                        <td class="test-author">{{ worker.hardware }}<div class="revision-meta">{{ worker.platform }}{% if worker.gpu_memory %} &middot; {{ worker.gpu_memory|floatformat:0 }} GB VRAM{% endif %}</div></td>
+                        <td class="test-author">{{ worker.threads }} threads{% if worker.memory %}<div class="revision-meta">{{ worker.memory }} GB RAM</div>{% endif %}</td>
+                        <td class="test-author">{% if worker.job %}{% if worker.job_url %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}{{ worker.job }}{% endif %}<div class="revision-meta">{{ worker.rate }}</div>{% else %}<div class="revision-meta">{{ worker.capabilities|join:' · ' }}</div>{% endif %}</td>
+                        <td class="test-author"><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span><div class="revision-meta">{{ worker.updated|timesince }} ago</div></td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
         </div>
-        </section>
-        {% endfor %}
-    {% endlive_region %}</div>
-</div>
+        {% else %}<div class="tests-empty"><strong>{{ group.empty }}</strong></div>{% endif %}
+    </section>
+    {% endfor %}
+{% endlive_region %}</div>
 {% endblock %}

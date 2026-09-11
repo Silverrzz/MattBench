@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import tarfile
 import threading
@@ -46,6 +47,24 @@ def sha256_file(path):
         for chunk in iter(lambda: source.read(4 * 1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def remove_work_directory(path, root):
+    root = root.resolve()
+    target = path.resolve()
+    if target == root or not target.is_relative_to(root) or path.is_symlink():
+        raise RuntimeError('Cleanup path escapes the worker directory: %s' % path)
+    if not path.exists():
+        return
+    def retry(function, name, error):
+        if not issubclass(error[0], PermissionError):
+            raise error[1]
+        os.chmod(name, os.stat(name).st_mode | stat.S_IWUSR)
+        function(name)
+    try:
+        shutil.rmtree(path, onerror=retry)
+    except OSError as error:
+        raise RuntimeError('Could not clean up %s: %s' % (path, error)) from error
 
 
 class Connection:
@@ -104,6 +123,8 @@ class Reporter:
         self.log_file = self.log_path.open('a', encoding='utf-8')
         self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
+        self.control_thread = threading.Thread(target=self.control_loop, daemon=True)
+        self.control_thread.start()
 
     def write(self, text):
         text = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
@@ -146,6 +167,8 @@ class Reporter:
     def flush(self):
         with self.send_lock:
             with self.lock:
+                if self.inflight is not None and self.state in ('FAILED', 'CANCELLED') and self.inflight['state'] != self.state:
+                    self.inflight = None
                 if self.inflight is None:
                     self.inflight = {'sequence': self.sequence + 1, 'state': self.state, 'metrics': dict(self.metrics), 'log': self.pending[:32768], 'error': self.error}
                 payload = self.inflight
@@ -172,7 +195,7 @@ class Reporter:
         self.check()
         with self.lock:
             self.state = state
-            self.metrics['progress'] = 0
+            self.metrics['progress'] = 100 if state == 'COMPLETED' else 0
         self.write('\n%s\n' % state.capitalize())
         while True:
             self.check()
@@ -184,6 +207,25 @@ class Reporter:
                 if time.monotonic() - self.last_success > 480:
                     raise RuntimeError('Server unavailable for eight minutes; stopping this run.') from None
                 self.stop.wait(5)
+
+    def control_loop(self):
+        while not self.done.is_set() and not self.stop.is_set():
+            try:
+                result = self.connection.request('POST', '%d/control/' % self.job['id'], json={}, timeout=(2, 2)).json()
+                if result.get('stop'):
+                    if result.get('state') == self.state and self.state in ('COMPLETED', 'FAILED', 'CANCELLED'):
+                        return
+                    if result.get('state') == 'FAILED':
+                        self.abort_reason = 'The server marked this run failed; local files were preserved.'
+                    self.stop.set()
+                    if self.state in ('DOWNLOADING', 'CONVERTING'):
+                        from huggingface_hub.utils._xet import abort_xet_session
+                        abort_xet_session()
+                    return
+            except (requests.RequestException, RuntimeError, ValueError):
+                pass
+            if self.done.wait(1):
+                return
 
     def loop(self):
         while not self.done.wait(5):
@@ -210,6 +252,7 @@ class Reporter:
 
     def close(self):
         self.done.set()
+        self.control_thread.join(timeout=5)
         self.thread.join(timeout=65)
         with self.lock:
             self.log_file.close()
@@ -268,7 +311,7 @@ def command(args, cwd, environment, reporter, trusted=False, cpu_threads=None):
             if reporter.state == 'TRAINING' and reporter.job['snapshot'].get('resume') and not reporter.resumed and time.monotonic() - command_started > 300:
                 raise RuntimeError('The schedule did not acknowledge restoring its checkpoint within five minutes.')
             try:
-                line = output.get(timeout=1)
+                line = output.get(timeout=0.1)
             except queue.Empty:
                 continue
             if line is None:
@@ -475,12 +518,14 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
             cleaned.replace(target)
             if not games:
                 target.unlink()
+                source_path.unlink(missing_ok=True)
                 return None
         else:
             try:
                 command([str(pawnocchio), 'sanitise', '--input', str(target), '--check-only'], directory, environment, reporter, cpu_threads=1)
             except RuntimeError as error:
                 raise RuntimeError('Dataset validation failed for %s. Enable Skip invalid games to sanitise the dataset. %s' % (name, error)) from error
+        source_path.unlink(missing_ok=True)
         return target
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dataset-prep') as executor:
@@ -527,6 +572,7 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
                                     reporter.check()
                                     output.write(chunk)
                             submit(staged, member.name, expected_format, True)
+                    path.unlink()
                 else:
                     submit(path, name, expected_format)
                 reporter.update(progress=100 * (index + 1) / len(paths))
@@ -615,6 +661,8 @@ def finalize_saved(connection, job, directory):
         return True
     finally:
         reporter.close()
+        if reporter.ack_state == 'COMPLETED':
+            remove_work_directory(directory, directory.parent)
 
 
 def execute(connection, job, root, pawnocchio):
@@ -633,12 +681,19 @@ def execute(connection, job, root, pawnocchio):
         if environment.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'):
             reporter.write('Using Microsoft linker: %s\n' % environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'])
         source_dataset = job['dataset']
+        resume_superbatch = job['snapshot'].get('resume', {}).get('superbatch', 0)
+        if source_dataset.get('stages') and all(stage.get('end', float('inf')) <= resume_superbatch for stage in source_dataset['stages']):
+            raise RuntimeError('The checkpoint is already at or beyond the end of the schedule. Choose an earlier checkpoint or extend the schedule.')
         resume_directory = download_checkpoint(connection, job, directory, reporter)
         stage_data = []
         stage_statistics = []
         prepared_stages = {}
         data = []
         for index, stage in enumerate(source_dataset.get('stages') or [source_dataset]):
+            if stage.get('end', float('inf')) <= resume_superbatch:
+                stage_data.append([])
+                stage_statistics.append({})
+                continue
             indices = stage.get('file_indices', list(range(len(source_dataset['files']))))
             key = tuple(indices)
             if key in prepared_stages:
@@ -721,11 +776,16 @@ def execute(connection, job, root, pawnocchio):
         reporter.checkpoints = CheckpointUploader(connection, job, directory, reporter)
         command(snapshot['settings']['run'], repository, environment, reporter)
         reporter.checkpoints.finish()
+        for index in range(len(stage_data)):
+            remove_work_directory(directory / ('stage-%d' % index), directory)
         reporter.stage('SAVING')
         save_outputs(connection, job, directory, reporter)
         reporter.stage('COMPLETED')
     except Exception as error:
-        if reporter.abort_reason:
+        recoverable = interrupted.is_set() or isinstance(error, requests.RequestException) or str(error).startswith('Server unavailable') or (reporter.abort_reason or '').startswith(('Server unavailable', 'The server marked this run failed'))
+        if interrupted.is_set():
+            error = RuntimeError('Worker interrupted. Training will recover automatically when the worker reconnects.')
+        elif reporter.abort_reason:
             error = RuntimeError(reporter.abort_reason)
         elif reporter.stop.is_set():
             error = Stopped('Training stopped by the server or its owner.')
@@ -734,6 +794,9 @@ def execute(connection, job, root, pawnocchio):
         with reporter.lock:
             reporter.error = message[:2048]
             reporter.state = 'CANCELLED' if isinstance(error, Stopped) else 'FAILED'
+            if recoverable:
+                reporter.metrics['recovery_pending'] = 1
+                job['recovery_pending'] = True
         try:
             for attempt in range(3):
                 reporter.flush()
@@ -748,6 +811,8 @@ def execute(connection, job, root, pawnocchio):
         reporter.close()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+        if reporter.ack_state in ('COMPLETED', 'CANCELLED') and not job.get('recovery_pending'):
+            remove_work_directory(directory, root)
     return interrupted.is_set()
 
 
@@ -762,23 +827,28 @@ class WorkerSession:
     def close(self):
         self.directory_lock.close()
 
-    def poll(self):
-        result = self.connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(self.args.directory).free / 1024 ** 3, 'claim_id': self.registration['claim_id']}).json()
+    def poll(self, completed_workload=0):
+        result = self.connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(self.args.directory).free / 1024 ** 3, 'claim_id': self.registration['claim_id'], 'machine_idle': self.args.unified, 'completed_workload': completed_workload}).json()
         if not result['run']:
             return False
         job = result['run']
         directory = self.args.directory / str(job['id'])
         interrupted = False
+        executed = False
         if directory.exists():
             stop_previous(directory)
-            if job['state'] not in ('COMPLETED', 'CANCELLED') and not finalize_saved(self.connection, job, directory):
+            if job['state'] in ('COMPLETED', 'CANCELLED'):
+                remove_work_directory(directory, self.args.directory)
+            elif not finalize_saved(self.connection, job, directory):
                 self.connection.request('POST', '%d/recover/' % job['id'], json={})
         elif job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+            executed = True
             interrupted = execute(self.connection, job, self.args.directory, self.args.pawnocchio)
         elif job['state'] not in ('COMPLETED', 'CANCELLED'):
             self.connection.request('POST', '%d/recover/' % job['id'], json={})
-        self.registration['claim_id'] = str(uuid.uuid4())
-        write_json(self.identity_path, self.registration)
+        if not interrupted and not (executed and job.get('recovery_pending')):
+            self.registration['claim_id'] = str(uuid.uuid4())
+            write_json(self.identity_path, self.registration)
         if interrupted:
             raise SystemExit()
         return True
@@ -801,11 +871,13 @@ def main(argv=None, worker_config=None):
     parser.add_argument('--vram-gb', type=float)
     parser.add_argument('--threads', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--once', action='store_true')
+    parser.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker')
     parser.add_argument('--register-only', action='store_true', help='Persist worker credentials, then exit without claiming a run.')
     parser.add_argument('--high-performance-transfers', '--high-performance-downloads', dest='high_performance_downloads', action='store_true', help='Enable Xet high-performance uploads and downloads; intended for high bandwidth and at least 64 GB RAM.')
     parser.add_argument('--execution-image', default='', help='Optional Linux execution image pinned as repository@sha256:digest. Omit to run natively. Include Rust, GPU libraries and cached Cargo dependencies.')
     parser.add_argument('--memory-gb', type=int, default=max(1, int(psutil.virtual_memory().total / 1024 ** 3 * 0.8)))
     args = parser.parse_args(argv)
+    args.unified = worker_config is not None
     parsed = urlsplit(args.server)
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1')):
         parser.error('Use HTTPS for the server URL (HTTP is allowed on localhost).')
@@ -860,7 +932,7 @@ def main(argv=None, worker_config=None):
     info['runtime']['dataset_tools'] = tool_provenance
     info['runtime']['gpu_driver'] = driver_version.strip()
     if not registration['registered'] or worker_config is not None:
-        payload = {'username': username, 'name': args.name, 'info': json.dumps(info), 'worker': registration['worker'], 'token': registration['token']}
+        payload = {'username': username, 'name': args.name, 'info': json.dumps(info), 'worker': registration['worker'], 'token': registration['token'], 'mode': args.mode}
         if worker_config is not None:
             payload.update(machine_id=worker_config.machine_id, machine_secret=worker_config.secret_token)
         else:
@@ -898,16 +970,21 @@ def main(argv=None, worker_config=None):
                 job = result['run']
                 directory = args.directory / str(job['id'])
                 interrupted = False
+                executed = False
                 if directory.exists():
                     stop_previous(directory)
-                    if job['state'] not in ('COMPLETED', 'CANCELLED') and not finalize_saved(connection, job, directory):
+                    if job['state'] in ('COMPLETED', 'CANCELLED'):
+                        remove_work_directory(directory, args.directory)
+                    elif not finalize_saved(connection, job, directory):
                         connection.request('POST', '%d/recover/' % job['id'], json={})
                 elif job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+                    executed = True
                     interrupted = execute(connection, job, args.directory, args.pawnocchio)
                 elif job['state'] not in ('COMPLETED', 'CANCELLED'):
                     connection.request('POST', '%d/recover/' % job['id'], json={})
-                registration['claim_id'] = str(uuid.uuid4())
-                write_json(identity_path, registration)
+                if not interrupted and not (executed and job.get('recovery_pending')):
+                    registration['claim_id'] = str(uuid.uuid4())
+                    write_json(identity_path, registration)
                 if args.once or interrupted:
                     return
         except (requests.RequestException, RuntimeError) as error:

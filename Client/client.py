@@ -200,4 +200,5 @@ if __name__ == '__main__':
             try_forever(download_client_files, [args], 'Failed to download Client files')
 
         except KeyboardInterrupt:
+            print('\nWorker interrupted; exiting.', flush=True)
             break

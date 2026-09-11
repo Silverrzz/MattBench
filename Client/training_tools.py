@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -46,15 +47,31 @@ def zig_toolchain(root, version, target):
     with TemporaryDirectory(prefix='zig-download-', dir=root) as temporary:
         work = Path(temporary)
         archive = work / ('download' + suffix)
-        with requests.get('https://ziglang.org/download/%s/%s%s' % (version, name, suffix), stream=True, timeout=(15, 120)) as response:
-            response.raise_for_status()
-            with archive.open('xb') as output:
-                for chunk in response.iter_content(1024 * 1024):
-                    output.write(chunk)
+        started = last_report = time.monotonic()
+        downloaded = 0
+        try:
+            with requests.get('https://ziglang.org/download/%s/%s%s' % (version, name, suffix), stream=True, timeout=(15, 30)) as response:
+                response.raise_for_status()
+                total = int(response.headers.get('Content-Length') or 0)
+                if total:
+                    print('Zig archive: %.1f MiB. Progress is reported every 5 seconds.' % (total / 1024 ** 2), flush=True)
+                with archive.open('xb') as output:
+                    for chunk in response.iter_content(64 * 1024):
+                        output.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if now - last_report >= 5:
+                            size = '%.1f / %.1f MiB (%.0f%%)' % (downloaded / 1024 ** 2, total / 1024 ** 2, downloaded * 100 / total) if total else '%.1f MiB' % (downloaded / 1024 ** 2)
+                            print('Downloading Zig: %s, %.2f MiB/s' % (size, downloaded / 1024 ** 2 / max(now - started, 0.001)), flush=True)
+                            last_report = now
+        except requests.RequestException as error:
+            raise RuntimeError('Zig %s download failed after %.1f MiB: %s' % (version, downloaded / 1024 ** 2, error)) from error
+        print('Zig download complete (%.1f MiB). Verifying checksum...' % (downloaded / 1024 ** 2), flush=True)
         if digest(archive) != checksum:
             raise RuntimeError('Zig download checksum mismatch.')
         unpacked = work / 'unpacked'
         unpacked.mkdir()
+        print('Extracting Zig %s...' % version, flush=True)
         if suffix == '.zip':
             with zipfile.ZipFile(archive) as source:
                 for member in source.infolist():
@@ -77,6 +94,7 @@ def zig_toolchain(root, version, target):
         if not (unpacked / name / executable.name).is_file():
             raise RuntimeError('Zig archive has no compiler.')
         (unpacked / name).rename(destination)
+    print('Zig %s ready.' % version, flush=True)
     return executable
 
 

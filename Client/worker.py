@@ -1049,12 +1049,25 @@ def server_configure_worker(config):
         'username'    : config.username,
         'password'    : config.password,
         'system_info' : json.dumps(system_info),
+        'mode': config.training_args.mode,
     }
     payload.update(getattr(config.training_args, 'worker_identity', None) or {})
+    session_path = os.path.join(config.training_args.training_directory, 'machine-session.json')
+    if os.path.isfile(session_path):
+        with open(session_path, encoding='utf-8') as source:
+            previous = json.load(source)
+        if previous.get('server') == config.server and previous.get('username') == config.username:
+            payload.update(previous_machine_id=previous['machine_id'], previous_machine_secret=previous['secret'])
 
     # Send all of this to the server, and get a Machine Id + Secret Token
     target   = utils.url_join(config.server, 'clientWorkerInfo')
-    response = requests.post(target, data=payload, timeout=TIMEOUT_HTTP).json()
+    response = requests.post(target, data=payload, timeout=TIMEOUT_HTTP)
+    if not response.ok:
+        raise utils.OpenBenchFatalWorkerException('Worker registration failed: HTTP %d. Check the server log for clientWorkerInfo.' % response.status_code)
+    try:
+        response = response.json()
+    except requests.exceptions.JSONDecodeError:
+        raise utils.OpenBenchFatalWorkerException('Worker registration returned a non-JSON response. Check the server URL and server log.') from None
 
     # Throw all the way back to the client.py
     if 'Bad Client Version' in response.get('error', ''):
@@ -1067,6 +1080,10 @@ def server_configure_worker(config):
     # Store machine_id, and the secret for this session
     config.machine_id   = response['machine_id']
     config.secret_token = response['secret']
+    os.makedirs(config.training_args.training_directory, exist_ok=True)
+    with open(session_path + '.tmp', 'w', encoding='utf-8') as output:
+        json.dump({'server': config.server, 'username': config.username, 'machine_id': config.machine_id, 'secret': config.secret_token}, output)
+    os.replace(session_path + '.tmp', session_path)
     configure_training(config)
 
 
@@ -1080,7 +1097,7 @@ def configure_training(config):
     if not args.training_backend and not shutil.which('nvidia-smi'):
         return
     import training_worker
-    arguments = ['--server', config.server, '--username', config.username, '--threads', str(config.threads), '--directory', args.training_directory]
+    arguments = ['--server', config.server, '--username', config.username, '--threads', str(config.threads), '--directory', args.training_directory, '--mode', args.mode]
     if config.identity and config.identity != 'None':
         arguments.extend(['--name', config.identity])
     for name in ('backend', 'device', 'gpu_name', 'vram_gb', 'execution_image'):
@@ -1186,12 +1203,16 @@ def complete_workload(config):
 
         # Submit NPS stats
         if config.workload['test']['type'] in ('SPRT', 'GAMES'):
-            ServerReporter.report_nps_stats(config, pgn_util.collect_nps_stats(pgn_files, scale_factor))
+            ServerReporter.report_nps_stats(config, pgn_util.collect_nps_stats(pgn_files, scale_factor)).raise_for_status()
 
         # Upload the PGN if requested
         if config.workload['test']['upload_pgns'] != 'FALSE':
             compact = config.workload['test']['upload_pgns'] == 'COMPACT'
-            ServerReporter.report_pgn(config, pgn_util.compress_pgn_files(pgn_files, scale_factor, compact))
+            ServerReporter.report_pgn(config, pgn_util.compress_pgn_files(pgn_files, scale_factor, compact)).raise_for_status()
+
+    for path in pgn_files:
+        if os.path.isfile(path):
+            os.remove(path)
 
 def safe_download_network_weights(config, branch):
 
@@ -1384,6 +1405,7 @@ def parse_arguments(client_args):
     p.add_argument(      '--only'    , help='Only help certain engine(s)' , nargs='+'          )
     p.add_argument(      '--force'   , help='Prefer engine(s) over priority', nargs='+'         )
     p.add_argument('--training-directory', default=os.environ.get('MATTBENCH_WORKER_DIRECTORY', os.path.abspath('training-work')))
+    p.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker; manage registered workers on their worker page')
     p.add_argument('--no-training', action='store_true', help='Disable GPU training on this worker')
     p.add_argument('--training-backend', choices=('cuda', 'rocm'))
     p.add_argument('--training-device')
@@ -1442,7 +1464,7 @@ def run_openbench_worker(client_args):
             # Cleanup on each workload request
             cleanup_client()
 
-            if config.training_session and config.training_session.poll():
+            if config.training_session and config.training_session.poll((getattr(config, 'workload', None) or {}).get('test', {}).get('id', 0)):
                 continue
 
             # Keep asking for a workload until we get a response

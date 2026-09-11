@@ -16,7 +16,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -108,17 +108,25 @@ def register(request):
     with transaction.atomic():
         if machine:
             machine = Machine.objects.select_for_update().get(pk=machine.pk)
-        worker, created = TrainingWorker.objects.get_or_create(pk=worker_id, defaults={'owner': user, 'name': name, 'info': info, 'secret_hash': hashlib.sha256(secret.encode()).hexdigest()})
+        mode = request.POST.get('mode', 'automatic')
+        if mode not in ('automatic', 'training-only', 'paused'):
+            return JsonResponse({'error': 'Invalid worker mode.'}, status=400)
+        worker, created = TrainingWorker.objects.get_or_create(pk=worker_id, defaults={'owner': user, 'name': name, 'info': info, 'secret_hash': hashlib.sha256(secret.encode()).hexdigest(), 'mode': machine.mode if machine else mode})
         if not created:
             if worker.owner_id != user.pk or not worker.enabled or not secrets.compare_digest(worker.secret_hash, hashlib.sha256(secret.encode()).hexdigest()):
                 return JsonResponse({'error': 'Worker identity is revoked or belongs to another account.'}, status=403)
             if TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).exists() and worker.info.get('runtime') != info.get('runtime'):
                 return JsonResponse({'error': 'Finish or cancel the active training run before changing this worker runtime.'}, status=409)
+            if worker.info.get('custom_name'):
+                info['custom_name'] = worker.info['custom_name']
             worker.info = info
-            worker.name = name
+            worker.name = info.get('custom_name', name)
             worker.updated = timezone.now()
             worker.save(update_fields=['info', 'name', 'updated'])
         if machine:
+            if not created:
+                machine.mode = worker.mode
+                machine.save(update_fields=['mode'])
             worker.machine = machine
             worker.save(update_fields=['machine'])
         record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', '')})
@@ -134,8 +142,12 @@ def claim(request):
     worker = request.training_worker
     if worker.info.get('protocol') != 3:
         return JsonResponse({'error': 'Update and register the training worker to use dataset manifests.'}, status=409)
-    TrainingWorker.objects.select_for_update().get(pk=worker.pk)
+    machine = Machine.objects.select_for_update().get(pk=worker.machine_id) if worker.machine_id else None
+    worker = TrainingWorker.objects.select_for_update().get(pk=worker.pk)
     data = json_body(request)
+    if machine and data.get('machine_idle') is True and machine.workload == data.get('completed_workload'):
+        Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
+        machine.workload = 0
     claim_id = uuid.UUID(data.get('claim_id', ''))
     now = timezone.now()
     free_disk = data.get('disk_gb', worker.info['disk_gb'])
@@ -146,7 +158,10 @@ def claim(request):
     existing = TrainingRun.objects.filter(worker=worker, claim_id=claim_id).first() or TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).first()
     if existing:
         return JsonResponse({'run': assignment(existing, info)})
-    candidates = TrainingRun.objects.filter(owner=worker.owner, state='QUEUED', worker=None, cancel_requested=False).exclude(snapshot__has_key='demo').filter(Q(requested_worker=None) | Q(requested_worker=worker)).order_by('created')[:100]
+    if (machine.mode if machine else worker.mode) == 'paused' or machine and machine.workload:
+        return JsonResponse({'run': None})
+    reservations = TrainingRun.objects.filter(requested_worker=worker, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo')
+    candidates = TrainingRun.objects.filter(owner=worker.owner, state='QUEUED', worker=None, cancel_requested=False).exclude(snapshot__has_key='demo').filter(Q(requested_worker=worker) if reservations.exists() else Q(requested_worker=None) | Q(requested_worker=worker)).annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created')[:100]
     for run in candidates:
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
@@ -177,7 +192,7 @@ def claim(request):
 
 def assignment(run, info):
     from OpenBench.training_datasets import effective_dataset
-    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': run.snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested}
+    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': run.snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested, 'recovery_pending': bool(run.metrics.get('recovery_pending'))}
 
 
 @worker_endpoint
@@ -190,13 +205,25 @@ def recover(request, pk):
             return JsonResponse({'recovery_run': run.recovery_run_id})
         if run.state in ('COMPLETED', 'CANCELLED'):
             return JsonResponse({'recovery_run': None})
+        if run.terminal and not run.metrics.get('recovery_pending') and not run.error.startswith(('Worker heartbeat lost.', 'Worker restarted.')):
+            return JsonResponse({'recovery_run': None})
         if not run.terminal:
             run.state = 'CANCELLED' if run.cancel_requested else 'FAILED'
             run.finished = run.updated = timezone.now()
             run.error = 'Worker restarted. Local files were preserved.'
             run.save(update_fields=['state', 'finished', 'updated', 'error'])
-        if not run.cancel_requested and run.snapshot['settings'].get('resume_supported') and run.checkpoints.exists():
-            resumed = resume_training(run.owner, run, worker=request.training_worker)
+        if not run.cancel_requested:
+            if run.snapshot['settings'].get('resume_supported') and run.checkpoints.exists():
+                resumed = resume_training(run.owner, run, worker=request.training_worker)
+            else:
+                from OpenBench.training_datasets import effective_dataset
+                if run.snapshot.get('resume'):
+                    if not run.resume_from_id:
+                        raise ValidationError('The starting checkpoint was removed. Create a new train from an available checkpoint.')
+                    verify_artifact(run.resume_from.archive)
+                resumed = TrainingRun.objects.create(owner=run.owner, engine=run.engine, name=run.name, schedule=run.schedule, snapshot=run.snapshot, dataset=effective_dataset(run), parameters=run.parameters, requested_worker=request.training_worker, resume_from=run.resume_from, state='QUEUED')
+            resumed.snapshot = {**resumed.snapshot, 'automatic_recovery': True, 'recovery_source': run.pk}
+            resumed.save(update_fields=['snapshot'])
             run.recovery_run = resumed
             run.save(update_fields=['recovery_run'])
         record_event('training.recovered', run, run.owner_id, {'recovery_run': run.recovery_run_id})
@@ -208,6 +235,15 @@ def owned_run(request, pk):
     if not run:
         raise ValidationError('This run is not assigned to this worker.')
     return run
+
+
+@worker_endpoint
+@require_POST
+def control(request, pk):
+    run = TrainingRun.objects.only('state', 'cancel_requested').filter(pk=pk, worker=request.training_worker).first()
+    if not run:
+        raise ValidationError('This run is not assigned to this worker.')
+    return JsonResponse({'stop': run.cancel_requested or run.terminal, 'state': run.state})
 
 
 @worker_endpoint
@@ -264,9 +300,11 @@ def report(request, pk):
                 with path.open(encoding='utf-8', errors='replace') as source:
                     context = source.read(65536) + '\n' + context
         clean_metrics, samples = bullet_telemetry(context + log, clean_metrics)
-        if 'loss' in metrics and not samples:
-            samples.append({'loss': metrics['loss'], 'step': metrics.get('step', metrics.get('superbatch', sequence))})
+        if 'loss' in metrics and not samples and clean_metrics.get('superbatch'):
+            samples.append({'loss': metrics['loss'], 'step': clean_metrics['superbatch'], 'superbatch': clean_metrics['superbatch']})
         history = merge_loss_history(history, samples, now.timestamp())
+    from OpenBench.training_telemetry import training_metrics
+    clean_metrics = training_metrics(clean_metrics, run.snapshot, run.dataset, state)
     changes = {'state': state, 'updated': now, 'metrics': clean_metrics, 'history': history, 'log_tail': (run.log_tail + log)[-32768:], 'report_sequence': sequence}
     if error:
         changes['error'] = error

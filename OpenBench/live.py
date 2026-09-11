@@ -11,6 +11,7 @@ from django.conf import settings
 from django.contrib.auth import get_user
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpRequest, QueryDict
+from django.middleware.csrf import CsrfViewMiddleware
 from django.urls import Resolver404, resolve
 
 from OpenBench import views
@@ -85,6 +86,8 @@ class LiveUpdates(AsyncJsonWebsocketConsumer):
         request._get_scheme = lambda: urlsplit(dict(self.scope['headers'])[b'origin'].decode()).scheme
         session_store = import_module(settings.SESSION_ENGINE).SessionStore
         request.session = session_store(session_key=self.scope['session'].session_key)
+        request.COOKIES = self.scope.get('cookies', {}).copy()
+        CsrfViewMiddleware(lambda current: None).process_request(request)
         request.user = get_user(request)
         request.live_regions = {}
         request.live_subscriptions = self.subscriptions.copy()

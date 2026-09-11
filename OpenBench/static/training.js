@@ -1,4 +1,28 @@
 (() => {
+    const importDialog = document.getElementById('artifact-import-dialog');
+    if (importDialog) {
+        const importForm = document.getElementById('artifact-import-form');
+        const importName = document.getElementById('artifact-import-name');
+        let importUrl;
+        document.addEventListener('click', event => {
+            const trigger = event.target.closest('[data-import-url]');
+            if (!trigger) return;
+            importUrl = trigger.dataset.importUrl;
+            importForm.action = importUrl;
+            importName.value = trigger.dataset.importName.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 64);
+            document.getElementById('artifact-import-file').textContent = trigger.dataset.importFile;
+            importDialog.showModal();
+            importName.focus();
+            importName.select();
+        });
+        importDialog.querySelectorAll('[data-import-close]').forEach(button => {
+            button.addEventListener('click', () => importDialog.close());
+        });
+        importDialog.addEventListener('close', () => {
+            const trigger = Array.from(document.querySelectorAll('[data-import-url]')).find(button => button.dataset.importUrl === importUrl);
+            trigger?.focus();
+        });
+    }
     const form = document.getElementById('training-new-form');
     if (form) {
         const environmentInput = document.getElementById('train-environment');
@@ -42,6 +66,10 @@
         const options = JSON.parse(document.getElementById('training-schedule-options').textContent);
         const datasets = JSON.parse(document.getElementById('training-dataset-options').textContent);
         const engine = document.getElementById('train-engine');
+        const checkpoint = document.getElementById('train-checkpoint');
+        const checkpointOptions = JSON.parse(document.getElementById('training-checkpoint-options').textContent);
+        const checkpointHelp = document.getElementById('training-checkpoint-help');
+        const wdlOverride = document.getElementById('training-wdl-override');
         const schedule = document.getElementById('train-schedule');
         const scheduleLink = document.getElementById('training-schedule-link');
         const datasetInput = document.getElementById('train-dataset');
@@ -239,6 +267,9 @@
                 stage.className = 'training-stage-label';
                 const title = document.createElement('strong');
                 title.textContent = 'Stage ' + (index + 1);
+                const selectedCheckpoint = checkpointOptions.find(option => option.id === checkpoint.value);
+                if (selectedCheckpoint && range.end !== null && range.end <= selectedCheckpoint.superbatch) title.textContent += ' (already completed)';
+                else if (selectedCheckpoint && range.start !== null && range.start <= selectedCheckpoint.superbatch + 1) title.textContent += ' (resumes at SB ' + (selectedCheckpoint.superbatch + 1) + ')';
                 const bounds = document.createElement('span');
                 bounds.textContent = range.start === null ? 'Entire training run' : 'SB ' + range.start + '–' + range.end;
                 stage.append(title, bounds);
@@ -257,7 +288,42 @@
             scheduleLink.hidden = !schedule.value;
             if (schedule.value) scheduleLink.href = '/training/schedules/' + schedule.value + '/';
             renderOverrides();
+            updateCheckpointHelp();
         }
+        function updateCheckpointHelp() {
+            const selected = checkpointOptions.find(option => option.id === checkpoint.value);
+            checkpoint.setCustomValidity('');
+            wdlOverride.hidden = !selected;
+            document.getElementById('train-wdl').disabled = !selected;
+            if (!selected) {
+                checkpointHelp.textContent = 'Start fresh or choose a saved checkpoint. Starting training always creates a new task.';
+                return;
+            }
+            const range = stages();
+            const index = range.findIndex(stage => stage.end === null || stage.end > selected.superbatch);
+            if (range.length && index < 0) {
+                const message = `The schedule must end after SB ${selected.superbatch}. Choose an earlier checkpoint or extend the schedule.`;
+                checkpoint.setCustomValidity(message);
+                checkpointHelp.textContent = message;
+                return;
+            }
+            checkpointHelp.textContent = `New task from ${selected.name}, run #${selected.run}, SB ${selected.superbatch}. Starts at SB ${selected.superbatch + 1}${index >= 0 ? ` (Stage ${index + 1} of ${range.length})` : ''}. Adjust the schedule or WDL below before starting.`;
+        }
+        checkpoint.addEventListener('change', () => {
+            const selected = checkpointOptions.find(option => option.id === checkpoint.value);
+            if (selected) {
+                engine.value = selected.engine;
+                updateSchedules();
+                if (Array.from(schedule.options).some(option => option.value === selected.schedule)) schedule.value = selected.schedule;
+                overrides = selected.datasets.map((dataset, stage) => ({dataset, stage}));
+                drafts.set(schedule.value, overrides);
+                previousSchedule = schedule.value;
+                document.getElementById('train-name').value = `${selected.name.slice(0, 45)}-sb${selected.superbatch}`;
+                scheduleChanged();
+            }
+            renderOverrides();
+            updateCheckpointHelp();
+        });
         function updateSchedules() {
             const previous = schedule.value;
             const available = options.filter(option => !option.engine || option.engine === engine.value);
@@ -436,7 +502,9 @@
     };
     function update(data) {
         if (data.state) detail.dataset.runState = data.state;
-        const lines = [`${detail.dataset.runState === 'TRAINING' ? 'Training progress' : 'Progress'}: ${Number(data.metrics.progress || 0).toFixed(1)}%`];
+        const progress = detail.dataset.runState === 'COMPLETED' ? 100 : Number(data.metrics.progress || 0);
+        const stage = detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
+        const lines = [`Progress: ${progress.toFixed(1)}%${stage}`];
         for (const [key, [label, unit]] of Object.entries(labels)) {
             const value = data.metrics[key];
             if (value === undefined) continue;
@@ -454,7 +522,13 @@
         if (data.updated) detail.dataset.updated = data.updated;
         const reportTime = new Date(detail.dataset.updated);
         if (!Number.isNaN(reportTime.getTime())) document.getElementById('training-last-report').textContent = `Last worker report: ${reportTime.toLocaleTimeString()}`;
-        lossPoints = (data.history || []).filter(point => Number.isFinite(point.loss) && Number.isFinite(point.step)).sort((a, b) => a.step - b.step);
+        lossPoints = (data.history || []).map(point => {
+            let superbatch = point.superbatch ?? point.step;
+            if (point.superbatch === undefined && data.metrics.end_superbatch && superbatch > data.metrics.end_superbatch && data.metrics.batches_per_superbatch) {
+                superbatch = Math.ceil(superbatch / data.metrics.batches_per_superbatch);
+            }
+            return {...point, step: superbatch};
+        }).filter(point => Number.isFinite(point.loss) && Number.isFinite(point.step)).sort((a, b) => a.step - b.step);
         drawLoss();
 
     }

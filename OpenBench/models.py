@@ -57,6 +57,7 @@ class Machine(Model):
     secret    = CharField(max_length=64, default='None')
     info      = JSONField()
     workload  = IntegerField(default=0)
+    mode = CharField(max_length=16, default='automatic', choices=[('automatic', 'Automatic'), ('training-only', 'Training only'), ('paused', 'Paused')])
 
     def __str__(self):
         return '[%d] %s' % (self.id, self.user.username)

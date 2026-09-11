@@ -158,13 +158,13 @@ impl Threats {
             |sq| bishop.attacks[sq] | rook.attacks[sq],
         );
 
-        let mut offsets = [4 * 84; 5];
+        let mut offsets = [6 * 84; 5];
         for (i, &cnt) in [10 * knight.count, 8 * bishop.count, 8 * rook.count, 10 * queen.count].iter().enumerate() {
             offsets[i + 1] = offsets[i] + cnt;
         }
 
         Self {
-            pawn_map: make_targets([Piece::KNIGHT, Piece::ROOK]),
+            pawn_map: make_targets([Piece::PAWN, Piece::KNIGHT, Piece::ROOK]),
             non_pk_data: [knight, bishop, rook, queen],
             offsets,
         }
@@ -320,11 +320,32 @@ fn make_targets<const N: usize>(valid: [usize; N]) -> [usize; 12] {
 pub struct Inputs<Base> {
     base: Base,
     auxiliary: AuxiliaryInputs,
+    clock: bool,
+    merged_kings: bool,
+    psqt: bool,
 }
 
 impl<Base: SparseInputType<RequiredDataType = ChessBoard>> Inputs<Base> {
-    pub fn new(base: Base, threats: bool, pairs: bool) -> Self {
-        Self { base, auxiliary: AuxiliaryInputs::new(threats, pairs) }
+    pub fn new(base: Base, threats: bool, pairs: bool, clock: bool, merged_kings: bool, psqt: bool) -> Self {
+        Self { base, auxiliary: AuxiliaryInputs::new(threats, pairs), clock, merged_kings, psqt }
+    }
+
+    fn piece_features(&self) -> usize {
+        if !self.psqt { 0 } else if self.merged_kings { 704 } else { 768 }
+    }
+
+    fn bucket_width(&self) -> usize {
+        self.piece_features() + if self.clock { 11 } else { 0 }
+    }
+
+    fn base_count(&self) -> usize {
+        self.base.num_inputs() / 768 * self.bucket_width()
+    }
+
+    fn remap(&self, feature: usize) -> usize {
+        let piece_square = feature % 768;
+        let piece_square = if self.merged_kings && piece_square >= 704 { piece_square - 384 } else { piece_square };
+        feature / 768 * self.bucket_width() + piece_square
     }
 }
 
@@ -332,15 +353,26 @@ impl<Base: SparseInputType<RequiredDataType = ChessBoard>> SparseInputType for I
     type RequiredDataType = ChessBoard;
 
     fn num_inputs(&self) -> usize {
-        self.base.num_inputs() + self.auxiliary.num_inputs()
+        self.base_count() + self.auxiliary.num_inputs()
     }
 
     fn max_active(&self) -> usize {
-        self.base.max_active() + self.auxiliary.max_active()
+        (if self.psqt { self.base.max_active() } else { 0 }) + self.auxiliary.max_active() + usize::from(self.clock)
     }
 
     fn map_features<F: FnMut(usize, usize)>(&self, pos: &ChessBoard, mut f: F) {
-        self.base.map_features(pos, &mut f);
+        let mut buckets = (0, 0);
+        self.base.map_features(pos, |stm, ntm| {
+            buckets = (stm / 768, ntm / 768);
+            if self.psqt {
+                f(self.remap(stm), self.remap(ntm));
+            }
+        });
+        if self.clock && pos.extra[0] >= 14 {
+            let clock = usize::from(pos.extra[0].min(100) - 14) / 8;
+            let offset = self.piece_features() + clock.min(10);
+            f(buckets.0 * self.bucket_width() + offset, buckets.1 * self.bucket_width() + offset);
+        }
         let mut stm = [0; AuxiliaryInputs::MAX_PAIRS + Threats::MAX_ACTIVE];
         let mut ntm = [0; AuxiliaryInputs::MAX_PAIRS + Threats::MAX_ACTIVE];
         let mut our_count = 0;
@@ -353,7 +385,7 @@ impl<Base: SparseInputType<RequiredDataType = ChessBoard>> SparseInputType for I
             their_count += 1;
         });
         assert_eq!(our_count, their_count);
-        let offset = self.base.num_inputs();
+        let offset = self.base_count();
         for i in 0..our_count {
             f(offset + stm[i], offset + ntm[i]);
         }
@@ -364,6 +396,6 @@ impl<Base: SparseInputType<RequiredDataType = ChessBoard>> SparseInputType for I
     }
 
     fn description(&self) -> String {
-        "Piece-square inputs with selected threat and pawn-pair features".to_owned()
+        "Piece-square inputs with selected king planes, clock, threat and pawn-pair features".to_owned()
     }
 }

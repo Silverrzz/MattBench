@@ -11,6 +11,8 @@
                 <tr><td class="td-label">Author</td><td>{{ run.owner.username }}</td></tr>
                 <tr><td class="td-label">Engine</td><td>{{ run.engine.name }}</td></tr>
                 <tr><td class="td-label">Network</td><td>{{ run.name }}{% if run.snapshot.demo %} <span class="test-flag">Demo</span>{% endif %}</td></tr>
+                {% if run.snapshot.resume %}<tr><td class="td-label">Starting checkpoint</td><td><a href="/training/{{ run.snapshot.resume.run_id }}/">Run #{{ run.snapshot.resume.run_id }}</a> · SB {{ run.snapshot.resume.superbatch }}{% if run.snapshot.automatic_recovery %} · Automatic recovery{% endif %}</td></tr>{% endif %}
+                {% if run.snapshot.wdl_override != None %}<tr><td class="td-label">Remaining WDL</td><td>{{ run.snapshot.wdl_override }}</td></tr>{% endif %}
                 <tr><td class="td-label">Creation</td><td class="timestamp">{{ run.created|date:'U' }}</td></tr>
                 <tr><td class="td-label">Started</td><td>{{ run.started|date:'j M Y, H:i'|default:'—' }}</td></tr>
                 <tr><td class="td-label">Finished</td><td>{{ run.finished|date:'j M Y, H:i'|default:'—' }}</td></tr>
@@ -35,13 +37,13 @@
     <div id="actions">
         <h4>{{ run.name }} <span class="workload-id">#{{ run.id }}</span></h4>
         {% if can_manage %}<form method="post">{% csrf_token %}<div class="anchor-container" id="training-actions" data-live>{% live_region 'training-actions' %}
-            {% if run.terminal %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="restart">Run again</button>{% if latest_checkpoint and run.snapshot.settings.resume_supported %}<button class="anchorbutton btn-blue" type="submit" name="action" value="resume">Resume from SB {{ latest_checkpoint.superbatch }}</button>{% endif %}{% else %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel" {% if run.cancel_requested %}disabled{% endif %}>Stop</button>{% endif %}
+            {% if run.terminal %}<a class="anchorbutton btn-yellow" href="/training/new/?engine={{ run.engine_id }}&schedule={{ run.schedule_id|default:'' }}">New train</a>{% if run.metrics.recovery_pending and not run.recovery_run_id and not run.cancel_requested %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel">Cancel recovery</button>{% endif %}{% else %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel" {% if run.cancel_requested %}disabled{% endif %}>Stop</button>{% endif %}
         {% endlive_region %}</div></form>{% endif %}
         <div class="anchor-container"><button class="mt-1 anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button></div>
         <div class="anchor-container"><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/configuration/">Download config</a><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/log/">Download log</a></div>
         <p id="workload-feedback" class="field-note" role="status"></p>
-        <div id="training-status" data-live>{% live_region 'training-status' %}{% if run.error %}<p class="training-error" role="alert">{{ run.error }}</p>{% endif %}{% if run.cancel_requested and not run.terminal %}<p class="training-notice">Stopping…</p>{% endif %}{% endlive_region %}</div>
-        <pre class="long-statblock" id="long-statblock">Progress: {{ run.metrics.progress|default:0 }}%</pre>
+        <div id="training-status" data-live>{% live_region 'training-status' %}{% if run.recovery_run_id %}<p class="training-notice">Automatic recovery: <a href="/training/{{ run.recovery_run_id }}/">train #{{ run.recovery_run_id }}</a>.</p>{% elif run.metrics.recovery_pending and not run.cancel_requested %}<p class="training-notice">Waiting for the worker to reconnect. Training will continue automatically from the latest saved checkpoint, or restart if none was saved.</p>{% elif run.error %}<p class="training-error" role="alert">{{ run.error }}</p>{% endif %}{% if run.cancel_requested and not run.terminal %}<p class="training-notice">Stopping…</p>{% endif %}{% endlive_region %}</div>
+        <pre class="long-statblock" id="long-statblock">Progress: {% if run.state == 'COMPLETED' %}100.0{% else %}{{ run.metrics.progress|default:0 }}{% endif %}%</pre>
         <section id="training-chart" class="history-chart" aria-labelledby="training-loss-heading" hidden>
             <div class="history-chart-heading"><h2 id="training-loss-heading">Training loss</h2><span id="training-loss-range" class="history-chart-feedback"></span></div>
             <div class="history-chart-plot" tabindex="0" role="group" aria-labelledby="training-loss-heading" aria-describedby="training-loss-help">
@@ -55,7 +57,7 @@
             <h2>Outputs</h2>
             <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">Network</th></tr></thead><tbody>
                 {% for item in output_artifacts %}<tr><td><a href="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{{ item.name }}</a></td><td>{{ item.size|filesizeformat }}</td><td>{{ item.output_label }}</td><td>
-                    {% if item.network_id %}<a href="/networks/{{ run.engine.name }}/">Imported</a>{% elif item.kind == 'network' and can_register %}<details class="artifact-import"><summary>Import</summary><form method="post" action="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{% csrf_token %}<label class="sr-only" for="net-name-{{ item.pk }}">Network name</label><input id="net-name-{{ item.pk }}" name="name" data-preserve-live value="{{ run.name }}-{{ item.pk }}" required maxlength="64" pattern="[A-Za-z0-9_.-]+"><button class="button" type="submit">Import</button></form></details>{% else %}—{% endif %}
+                    {% if item.start_checkpoint_id %}<a class="button" href="/training/new/?checkpoint={{ item.start_checkpoint_id }}">New train from SB {{ item.output_superbatch }}</a>{% elif item.network_id %}<a href="/networks/{{ run.engine.name }}/">Imported</a>{% elif item.kind == 'network' and can_register %}<button class="button artifact-import-trigger" type="button" data-import-url="/training/{{ run.id }}/artifacts/{{ item.pk }}/" data-import-name="{{ run.name }}-{{ item.pk }}" data-import-file="{{ item.name }}" aria-haspopup="dialog" aria-controls="artifact-import-dialog">Import</button>{% else %}—{% endif %}
                 </td></tr>{% empty %}<tr><td colspan="4">No outputs yet</td></tr>{% endfor %}
             </tbody></table>
         {% endlive_region %}</div>
@@ -63,6 +65,19 @@
     </div>
 
 </div>
+{% if can_register %}
+<dialog id="artifact-import-dialog" class="training-dialog artifact-import-dialog" aria-labelledby="artifact-import-title" aria-describedby="artifact-import-file">
+    <div class="training-dialog-heading"><h2 id="artifact-import-title">Import network</h2><button class="button" type="button" data-import-close aria-label="Close">×</button></div>
+    <form method="post" id="artifact-import-form">
+        {% csrf_token %}
+        <div class="training-dialog-body form-stack">
+            <p id="artifact-import-file" class="field-note"></p>
+            <div class="field"><label for="artifact-import-name">Network name</label><input id="artifact-import-name" name="name" required maxlength="64" pattern="[A-Za-z0-9_.-]+" aria-describedby="artifact-import-help" autocomplete="off" spellcheck="false"><p id="artifact-import-help" class="field-note">Use letters, numbers, dots, dashes or underscores.</p></div>
+        </div>
+        <div class="training-dialog-actions"><button class="button" type="button" data-import-close>Cancel</button><button class="button" type="submit">Import network</button></div>
+    </form>
+</dialog>
+{% endif %}
 {{ run.metrics|json_script:'training-initial-metrics' }}
 {{ run.history|json_script:'training-initial-history' }}
 {% endblock %}

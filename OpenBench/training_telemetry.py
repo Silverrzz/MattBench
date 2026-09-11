@@ -8,6 +8,36 @@ PROGRESS = re.compile(r'superbatch\s+(\d+)\s+\[(' + NUMBER + r')%\s+\((\d+)/(\d+
 SUMMARY = re.compile(r'superbatch\s+(\d+)\s*\|\s*time\s+(' + NUMBER + r')s\s*\|\s*running loss\s+(' + NUMBER + r')\s*\|\s*(' + NUMBER + r') pos/sec', re.I)
 
 
+def training_stages(snapshot, dataset):
+    stages = dataset.get('stages', [])
+    if stages and all(type(stage.get('start')) is int and type(stage.get('end')) is int for stage in stages):
+        return [{'start': stage['start'], 'end': stage['end']} for stage in stages]
+    try:
+        from OpenBench.schedule_builder import dataset_stages
+        spec = json.loads(snapshot['files']['mattbench-builder.json'])['spec']
+        return dataset_stages(spec)
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+def training_metrics(metrics, snapshot, dataset, state):
+    metrics = dict(metrics)
+    if state == 'COMPLETED':
+        metrics['progress'] = 100
+    stages = training_stages(snapshot, dataset)
+    if not stages:
+        stages = [{'start': 1, 'end': metrics.get('end_superbatch', 0)}]
+    metrics['stage_count'] = len(stages)
+    start = snapshot.get('resume', {}).get('superbatch', 0) + 1
+    superbatch = metrics.get('superbatch', start)
+    metrics['stage'] = next((index + 1 for index, stage in enumerate(stages) if superbatch <= stage['end']), len(stages))
+    end = stages[-1]['end']
+    if state == 'TRAINING' and end >= start and 'superbatch' in metrics:
+        fraction = metrics.get('superbatch_progress', 100 if 'loss' in metrics else 0) / 100
+        metrics['progress'] = max(0, min(100, 100 * (superbatch - start + fraction) / (end - start + 1)))
+    return metrics
+
+
 def bullet_telemetry(text, previous=None):
     metrics = dict(previous or {})
     samples = []
@@ -31,7 +61,7 @@ def bullet_telemetry(text, previous=None):
             metrics.update(superbatch=int(superbatch), superbatch_progress=100.0, superbatch_seconds=float(seconds), loss=float(loss), positions_per_second=float(speed))
             if metrics.get('batches_per_superbatch'):
                 metrics['batch'] = metrics['batches_per_superbatch']
-            samples.append({'step': int(superbatch), 'loss': float(loss)})
+            samples.append({'step': int(superbatch), 'superbatch': int(superbatch), 'loss': float(loss)})
         eta = re.search(r'Estimated time remaining in training:\s*(\d+)h\s*(\d+)m\s*(\d+)s', line)
         if eta:
             metrics['remaining_seconds'] = int(eta[1]) * 3600 + int(eta[2]) * 60 + int(eta[3])
@@ -52,8 +82,8 @@ def bullet_telemetry(text, previous=None):
                 allowed = ('loss', 'validation_loss', 'step', 'superbatch', 'learning_rate', 'positions_per_second', 'progress')
                 if isinstance(values, dict):
                     metrics.update({key: value for key, value in values.items() if key in allowed and type(value) in (int, float) and math.isfinite(value) and abs(value) < 1e20})
-                    if 'loss' in values and 'loss' in metrics:
-                        samples.append({'step': metrics.get('step', metrics.get('superbatch', 0)), 'loss': metrics['loss']})
+                    if 'loss' in values and 'loss' in metrics and metrics.get('superbatch'):
+                        samples.append({'step': metrics['superbatch'], 'superbatch': metrics['superbatch'], 'loss': metrics['loss']})
             except (ValueError, TypeError):
                 pass
     metrics = {key: value for key, value in metrics.items() if type(value) not in (int, float) or math.isfinite(value) and abs(value) <= 1e20}

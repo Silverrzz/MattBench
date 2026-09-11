@@ -54,6 +54,7 @@ urlpatterns = [
     django.urls.path('api/training/claim/', training_api.claim),
     django.urls.path('api/training/<int:pk>/recover/', training_api.recover),
     django.urls.path('api/training/<int:pk>/report/', training_api.report),
+    django.urls.path('api/training/<int:pk>/control/', training_api.control),
     django.urls.path('api/training/<int:pk>/dataset/<int:file_index>/', training_api.dataset_access),
     django.urls.path('api/training/<int:pk>/dataset/<int:file_index>/file/', training_api.dataset_file),
     django.urls.path('api/training/<int:pk>/xet-token/', training_api.xet_token),

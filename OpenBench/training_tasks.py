@@ -163,5 +163,5 @@ class TrainingTasks:
         cutoff = now - timedelta(seconds=settings.TRAINING_WORKER_TIMEOUT)
         for stale in TrainingRun.objects.filter(state__in=TRAINING_ACTIVE, updated__lt=cutoff).exclude(snapshot__has_key='demo'):
             with transaction.atomic():
-                if TrainingRun.objects.filter(pk=stale.pk, state__in=TRAINING_ACTIVE, updated__lt=cutoff).update(state='FAILED', error='Worker heartbeat lost. Reconnect the worker or resume an uploaded checkpoint.', finished=now, updated=now):
+                if TrainingRun.objects.filter(pk=stale.pk, state__in=TRAINING_ACTIVE, updated__lt=cutoff).update(state='FAILED', error='Worker heartbeat lost. Training will recover automatically when the worker reconnects.', metrics={**stale.metrics, 'recovery_pending': 1}, finished=now, updated=now):
                     record_event('training.interrupted', stale, stale.owner_id, {'latest_checkpoint_id': stale.checkpoints.values_list('pk', flat=True).first()})

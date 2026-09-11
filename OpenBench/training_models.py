@@ -82,6 +82,7 @@ class TrainingWorker(models.Model):
     info = models.JSONField(default=dict)
     updated = models.DateTimeField(default=timezone.now, db_index=True)
     enabled = models.BooleanField(default=True)
+    mode = models.CharField(max_length=16, default='automatic', choices=[('automatic', 'Automatic'), ('training-only', 'Training only'), ('paused', 'Paused')])
 
 
 class TrainingRun(models.Model):
@@ -97,7 +98,7 @@ class TrainingRun(models.Model):
     dataset = models.JSONField(default=dict)
     parameters = models.JSONField(default=dict)
     worker = models.ForeignKey(TrainingWorker, on_delete=models.PROTECT, null=True, blank=True, related_name='runs')
-    requested_worker = models.ForeignKey(TrainingWorker, on_delete=models.SET_NULL, null=True, blank=True, related_name='requested_runs')
+    requested_worker = models.ForeignKey(TrainingWorker, on_delete=models.PROTECT, null=True, blank=True, related_name='requested_runs')
     state = models.CharField(max_length=16, choices=TRAINING_STATES, default='VALIDATING', db_index=True)
     created = models.DateTimeField(default=timezone.now)
     updated = models.DateTimeField(default=timezone.now, db_index=True)
