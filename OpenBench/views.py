@@ -796,7 +796,7 @@ def client_get_workload(request, machine):
     machine.save(update_fields=['updated'])
     if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():
         return JsonResponse({})
-    reserved = TrainingRun.objects.filter(requested_worker__machine=machine, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo').exists()
+    reserved = TrainingRun.objects.filter(Q(owner_id=F('requested_worker__owner_id')) | Q(requested_worker__accept_any_owner=True), requested_worker__machine=machine, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo').exists()
     if machine.mode != 'automatic' or reserved:
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
         return JsonResponse({})

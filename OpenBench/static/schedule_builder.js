@@ -64,6 +64,12 @@
         if (input.type === 'checkbox') input.checked = value;
         else input.value = value;
     }
+    const initialPairwiseLayers = data.spec.pairwise_layers.join(',');
+    if (![...byId('pairwise-layers').options].some(option => option.value === initialPairwiseLayers)) {
+        byId('pairwise-layers').add(new Option(data.spec.pairwise_layers.map(layer => 'L' + layer).join(' and '), initialPairwiseLayers));
+    }
+    byId('pairwise-layers').value = initialPairwiseLayers;
+    const selectedPairwiseLayers = () => field('pairwise_activation').checked ? byId('pairwise-layers').value.split(',').map(Number) : [];
     data.spec.piece_count_keep.forEach((value, index) => {
         const label = document.createElement('label');
         label.className = 'field';
@@ -112,16 +118,22 @@
         if (field('score_outputs').checked) heads.push('SCOREx' + count('score_buckets'));
         if (field('wdl_outputs').checked) heads.push('WDLx' + count('wdl_buckets'));
         if (field('uncertainty_outputs').checked) heads.push('UNCx' + count('uncertainty_buckets'));
-        const dense = [...layers.slice(1), '(' + (heads.join(' + ') || 'no outputs') + ')'].join(' -> ');
-        const skip = field('skip_connection').checked ? ' · skip L2 -> L3' : '';
+        const pairwiseLayers = selectedPairwiseLayers();
         const pairwise = field('pairwise_activation').checked;
-        field('pairwise_activation').setCustomValidity(pairwise && (!Number.isInteger(layers[0]) || layers[0] % 2) ? 'Pairwise activation requires an even feature-layer size.' : '');
-        byId('architecture').textContent = '(' + inputs + ' -> ' + (layers[0] ?? '?') + ')x2' + (pairwise ? '-pw' : '') + ' -> (' + dense + ')' + ' · ' + field('activation').value.toUpperCase() + skip;
+        byId('pairwise-options').hidden = !pairwise;
+        byId('pairwise-options').querySelectorAll('select').forEach(input => { input.disabled = !pairwise; });
+        const pairwiseLabel = '-pw(' + field('pairwise_left_activation').value.toUpperCase() + '*' + field('pairwise_right_activation').value.toUpperCase() + ')';
+        const layerLabel = (size, index) => pairwiseLayers.includes(index + 1) ? size + pairwiseLabel + '=' + (Number.isInteger(size) ? size / 2 : '?') : size;
+        const dense = [...layers.slice(1).map((size, index) => layerLabel(size, index + 1)), '(' + (heads.join(' + ') || 'no outputs') + ')'].join(' -> ');
+        const skip = field('skip_connection').checked ? ' · skip L2 -> L3' : '';
+        field('pairwise_activation').setCustomValidity(pairwiseLayers.some(layer => !Number.isInteger(layers[layer - 1]) || layers[layer - 1] % 2) ? 'Each selected pairwise layer must exist and have an even number of neurons.' : '');
+        byId('architecture').textContent = '(' + inputs + ' -> ' + layerLabel(layers[0] ?? '?', 0) + ')x2 -> (' + dense + ')' + ' · ' + field('activation').value.toUpperCase() + skip;
     };
     const syncSkipConnection = () => {
-        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map(input => input.valueAsNumber);
+        const pairwiseLayers = selectedPairwiseLayers();
+        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map((input, index) => input.valueAsNumber / (pairwiseLayers.includes(index + 1) ? 2 : 1));
         const invalid = field('skip_connection').checked && (layers.length < 3 || layers[1] !== layers[2]);
-        field('skip_connection').setCustomValidity(invalid ? 'The skip connection requires at least three hidden layers, with Layer 2 and Layer 3 the same size.' : '');
+        field('skip_connection').setCustomValidity(invalid ? 'The skip connection requires Layer 2 and Layer 3 to have equal output widths after activation.' : '');
     };
     field('skip_connection').addEventListener('input', syncSkipConnection);
     byId('layers').addEventListener('input', syncSkipConnection);
@@ -246,9 +258,8 @@
         if (stroke || event.button !== 0 || !event.isPrimary || !square || square.matches(':disabled') || !paint.options.length) return;
         event.preventDefault();
         square.focus();
-        stroke = {pointerId: event.pointerId, bucket: Number(paint.value), mirrored: field('mirrored').checked, changed: false};
+        stroke = {pointerId: event.pointerId, square, bucket: Number(paint.value), mirrored: field('mirrored').checked, changed: false, dragged: false};
         board.setPointerCapture(event.pointerId);
-        paintSquare(square, stroke.bucket, stroke.mirrored);
     });
     board.addEventListener('pointermove', event => {
         if (!stroke || event.pointerId !== stroke.pointerId) return;
@@ -257,17 +268,28 @@
             return;
         }
         const square = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-square]');
+        if (!square || !board.contains(square) || square.matches(':disabled') || (!stroke.dragged && square === stroke.square)) return;
+        if (!stroke.dragged) {
+            stroke.dragged = true;
+            paintSquare(stroke.square, stroke.bucket, stroke.mirrored);
+        }
         paintSquare(square, stroke.bucket, stroke.mirrored);
     });
     ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(type => {
         board.addEventListener(type, event => {
-            if (stroke?.pointerId === event.pointerId) endStroke();
+            if (stroke?.pointerId !== event.pointerId) return;
+            if (type === 'pointerup' && !stroke.dragged) {
+                const square = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-square]');
+                if (square === stroke.square) paintSquare(square, (layout[Number(square.dataset.square)] + 1) % paint.options.length, stroke.mirrored);
+            }
+            endStroke();
         });
     });
     window.addEventListener('blur', endStroke);
     board.addEventListener('click', event => {
         if (event.detail !== 0 || !paint.options.length) return;
-        paintSquare(event.target.closest('[data-square]'), Number(paint.value), field('mirrored').checked);
+        const square = event.target.closest('[data-square]');
+        if (square) paintSquare(square, (layout[Number(square.dataset.square)] + 1) % paint.options.length, field('mirrored').checked);
     });
     board.addEventListener('focusin', event => {
         if (!event.target.matches('[data-square]')) return;
@@ -303,6 +325,13 @@
             }
         }
         updatePalette();
+        changed();
+    });
+    byId('flip-layout').addEventListener('click', () => {
+        endStroke();
+        rememberLayout();
+        layout = layout.map((_, index) => layout[index ^ 56]);
+        drawBoard();
         changed();
     });
     byId('undo-layout').addEventListener('click', () => {
@@ -417,6 +446,7 @@
             if (input) spec[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? input.valueAsNumber : input.value;
         }
         spec.lr_stages = [{start: 1, end: totalSuperbatches(), kind: byId('lr-kind').value, initial: byId('lr-initial').valueAsNumber, final: byId('lr-final').valueAsNumber}];
+        spec.pairwise_layers = byId('pairwise-layers').value.split(',').map(Number);
         spec.wdl_stages = normalizeWdl(readWdl());
         if (!spec.psqt_inputs && !spec.half_move_clock) {
             spec.input_buckets = 1;
@@ -455,6 +485,7 @@
     };
     function changed(regenerate = true) {
         syncNetwork();
+        syncSkipConnection();
         dirty = true;
         byId('use').hidden = true;
         message(feedback, 'Unsaved changes');

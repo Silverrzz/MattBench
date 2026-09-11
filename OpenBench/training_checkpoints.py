@@ -103,8 +103,8 @@ def resume_training(user, source, checkpoint_id=None, worker=None):
         raise ValidationError('This schedule has not enabled the checkpoint resume contract.')
     if checkpoint_id is not None and (not str(checkpoint_id).isdigit() or len(str(checkpoint_id)) > 18):
         raise ValidationError('Invalid checkpoint selection.')
-    if worker and (worker.owner_id != user.pk or not worker.enabled):
-        raise ValidationError('Choose an enabled worker belonging to this account.')
+    if worker and (not worker.enabled or worker.owner_id != user.pk and not worker.accept_any_owner):
+        raise ValidationError('Choose an enabled worker accepting workloads from this account.')
     with storage_lock():
         checkpoints = source.checkpoints.select_for_update().select_related('archive')
         checkpoint = checkpoints.filter(pk=checkpoint_id).first() if checkpoint_id else checkpoints.first()
@@ -153,6 +153,8 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
                         'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation')
         if any(before[key] != after[key] for key in architecture):
             raise ValidationError('The checkpoint requires the same network architecture. You can change WDL, learning rate and training duration.')
+        if before['pairwise_activation'] and any(before[key] != after[key] for key in ('pairwise_layers', 'pairwise_left_activation', 'pairwise_right_activation')):
+            raise ValidationError('The checkpoint requires the same pairwise layers and activations.')
         if checkpoint.superbatch >= after['superbatches']:
             raise ValidationError('The schedule must end after SB %d. Choose an earlier checkpoint or extend the schedule.' % checkpoint.superbatch)
     elif files != original['files']:

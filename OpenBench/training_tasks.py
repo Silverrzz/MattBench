@@ -36,8 +36,9 @@ def failure_message(error, operation):
 
 def upload_dataset(task):
     from huggingface_hub import HfApi, CommitOperationAdd
-    from OpenBench.dataset_manifest import MANIFEST_PATH, resolve_dataset, validate_manifest
+    from OpenBench.dataset_manifest import MANIFEST_PATH, resolve_dataset
     from huggingface_hub.errors import RepositoryNotFoundError
+    from OpenBench.dataset_upload_metadata import analyse_archive, upload_metadata
     api = HfApi(token=hf_token(task.owner_id))
     source = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % task.workload_id)
     size = source.stat().st_size
@@ -54,6 +55,10 @@ def upload_dataset(task):
                 last = timezone.now()
                 DatasetUpload.objects.filter(pk=task.pk).update(stage='Checking archive', progress=100 * read / max(1, size), updated=last)
     sha256 = digest.hexdigest()
+    DatasetUpload.objects.filter(pk=task.pk).update(stage='Analysing PGN archive', progress=0, updated=timezone.now())
+    def analysis_progress():
+        DatasetUpload.objects.filter(pk=task.pk).update(updated=timezone.now())
+    statistics = analyse_archive(source, analysis_progress)
     if source.stat().st_size != size:
         raise ValidationError('The PGN archive changed while reading it. Wait for all datagen workers to finish.')
     DatasetUpload.objects.filter(pk=task.pk).update(sha256=sha256, stage='Connecting to Hugging Face', progress=0, updated=timezone.now())
@@ -61,7 +66,7 @@ def upload_dataset(task):
         info = api.dataset_info(task.repo, files_metadata=True)
     except RepositoryNotFoundError:
         api.create_repo(task.repo, repo_type='dataset', private=task.private, exist_ok=True)
-        info = api.dataset_info(task.repo)
+        info = api.dataset_info(task.repo, files_metadata=True)
     if info.private != task.private:
         raise ValidationError('The existing repository has a different visibility. Select its current visibility or use a new repository.')
     existing = api.get_paths_info(task.repo, paths=[task.filename], repo_type='dataset', revision=info.sha)
@@ -76,11 +81,17 @@ def upload_dataset(task):
     from OpenBench.training import DATA_SUFFIXES
     manifest = read_manifest(task.repo, info, hf_token(task.owner_id))
     if manifest is None:
-        manifest = resolve_dataset(task.repo, info, ['*'], hf_token(task.owner_id))['manifest'] if any(file.rfilename.lower().endswith(DATA_SUFFIXES) for file in info.siblings) else {'version': 1, 'files': []}
-    if not any(file['path'] == task.filename or task.filename in file.get('sources', []) for file in manifest['files']):
-        manifest = {**manifest, 'files': manifest['files'] + [{'path': task.filename, 'size': size, 'sha256': sha256, 'format': 'pgn', 'shuffled': False}], 'statistics': {}}
-    validate_manifest(manifest)
-    operations.append(CommitOperationAdd(path_in_repo=MANIFEST_PATH, path_or_fileobj=json.dumps(manifest).encode()))
+        if any(file.rfilename.lower().endswith(DATA_SUFFIXES) for file in info.siblings):
+            resolved = resolve_dataset(task.repo, info, ['*'], hf_token(task.owner_id))
+            manifest = {**resolved['manifest'], 'files': resolved['files']}
+        else:
+            manifest = {'version': 1, 'files': []}
+    entry = {'path': task.filename, 'size': size, 'sha256': sha256, 'format': 'pgn', 'shuffled': False}
+    manifest, reports = upload_metadata(manifest, entry, statistics, task.repo, info.sha, task.workload_id)
+    DatasetUpload.objects.filter(pk=task.pk).update(stage='Uploading archive and dataset metadata', progress=0, updated=timezone.now())
+    for path, content in reports.items():
+        operations.append(CommitOperationAdd(path_in_repo=path, path_or_fileobj=content.encode('utf-8')))
+    operations.append(CommitOperationAdd(path_in_repo=MANIFEST_PATH, path_or_fileobj=(json.dumps(manifest, indent=2) + '\n').encode('utf-8')))
     commit = api.create_commit(repo_id=task.repo, repo_type='dataset', operations=operations, parent_commit=info.sha, commit_message='Upload MattBench datagen %d' % task.workload_id)
     revision = commit.oid
     with transaction.atomic():
@@ -126,13 +137,13 @@ class TrainingTasks:
             self.stop_event.wait(min(300, 10 * 2 ** task.task_attempts))
 
     def validate(self):
-        run = TrainingRun.objects.filter(state='VALIDATING').exclude(snapshot__has_key='demo').order_by('created').first()
+        run = TrainingRun.objects.filter(state='VALIDATING', deleted=False).exclude(snapshot__has_key='demo').order_by('created').first()
         if not run:
             return
         if run.task_attempts >= 5:
-            TrainingRun.objects.filter(pk=run.pk, state='VALIDATING').update(state='FAILED', error='Input validation exceeded five attempts. Check coordinator logs before restarting.', finished=timezone.now(), updated=timezone.now())
+            TrainingRun.objects.filter(pk=run.pk, state='VALIDATING', deleted=False).update(state='FAILED', error='Input validation exceeded five attempts. Check coordinator logs before restarting.', finished=timezone.now(), updated=timezone.now())
             return
-        if not TrainingRun.objects.filter(pk=run.pk, state='VALIDATING').update(state='PREPARING', task_attempts=F('task_attempts') + 1, updated=timezone.now()):
+        if not TrainingRun.objects.filter(pk=run.pk, state='VALIDATING', deleted=False).update(state='PREPARING', task_attempts=F('task_attempts') + 1, updated=timezone.now()):
             return
         run.refresh_from_db()
         try:

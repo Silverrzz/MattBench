@@ -35,9 +35,9 @@
         {% endlive_region %}</div>
     </div>
     <div id="actions">
-        <h4>{{ run.name }} <span class="workload-id">#{{ run.id }}</span></h4>
+        <h4>{{ run.name }} <span class="workload-id">#{{ run.id }}</span>{% if run.deleted %} <span class="status-label">Deleted</span>{% endif %}</h4>
         {% if can_manage %}<form method="post">{% csrf_token %}<div class="anchor-container" id="training-actions" data-live>{% live_region 'training-actions' %}
-            {% if run.terminal %}<a class="anchorbutton btn-yellow" href="/training/new/?engine={{ run.engine_id }}&schedule={{ run.schedule_id|default:'' }}">New train</a>{% if run.metrics.recovery_pending and not run.recovery_run_id and not run.cancel_requested %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel">Cancel recovery</button>{% endif %}{% else %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel" {% if run.cancel_requested %}disabled{% endif %}>Stop</button>{% endif %}
+            {% if run.deleted %}<button class="anchorbutton btn-preset" type="submit" name="action" value="restore">Restore</button>{% else %}<button class="anchorbutton btn-red" type="submit" name="action" value="delete">Delete</button>{% if run.terminal %}<a class="anchorbutton btn-yellow" href="/training/new/?engine={{ run.engine_id }}&schedule={{ run.schedule_id|default:'' }}">New train</a>{% if run.metrics.recovery_pending and not run.recovery_run_id and not run.cancel_requested %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel">Cancel recovery</button>{% endif %}{% else %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel" {% if run.cancel_requested %}disabled{% endif %}>Stop</button>{% endif %}{% endif %}
         {% endlive_region %}</div></form>{% endif %}
         <div class="anchor-container"><button class="mt-1 anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button></div>
         <div class="anchor-container"><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/configuration/">Download config</a><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/log/">Download log</a></div>

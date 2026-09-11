@@ -53,7 +53,7 @@ def error_text(error):
 def training_index(request, page=1):
     from OpenBench.utils import getPaging
     from OpenBench.views import render
-    runs = visible_runs(request.user).select_related(None).select_related('owner', 'engine', 'worker', 'requested_worker').defer('snapshot', 'dataset', 'parameters', 'history', 'log_tail').annotate(backend=F('snapshot__settings__backend'), min_vram_gb=F('snapshot__settings__min_vram_gb'), demo=F('snapshot__demo'))
+    runs = visible_runs(request.user).filter(deleted=False).select_related(None).select_related('owner', 'engine', 'worker', 'requested_worker').defer('snapshot', 'dataset', 'parameters', 'history', 'log_tail').annotate(backend=F('snapshot__settings__backend'), min_vram_gb=F('snapshot__settings__min_vram_gb'), demo=F('snapshot__demo'))
     finished = runs.filter(state__in=TRAINING_TERMINAL).order_by('-finished', '-pk')
     page = max(1, int(page))
     start, end, paging = getPaging(finished, page, 'training/page')
@@ -160,7 +160,7 @@ class TrainingForm(forms.Form):
     dataset = forms.ModelChoiceField(queryset=TrainingDataset.objects.none(), widget=forms.HiddenInput, required=False)
     stage_datasets = forms.JSONField(required=False, widget=forms.HiddenInput)
     schedule = forms.ModelChoiceField(queryset=TrainingSchedule.objects.none())
-    worker = forms.ModelChoiceField(queryset=TrainingWorker.objects.none(), required=False, empty_label='Any of my compatible workers')
+    worker = forms.ModelChoiceField(queryset=TrainingWorker.objects.none(), required=False, empty_label='Any compatible worker accepting my workloads')
     environment = forms.CharField(label='Environment variables', required=False, strip=False, max_length=32768, widget=forms.Textarea(attrs={'rows': 3, 'placeholder': 'KEY=value'}))
     checkpoint_retention = forms.ChoiceField(choices=[('latest', 'Keep latest'), ('all', 'Keep all checkpoints')], initial='latest')
     checkpoint_keep_last = forms.IntegerField(label='Checkpoints to keep', min_value=1, max_value=10000, initial=DEFAULT_SETTINGS['checkpoint_keep_last'], required=False)
@@ -173,7 +173,7 @@ class TrainingForm(forms.Form):
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
         cutoff = timezone.now() - timedelta(minutes=2)
-        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), owner=user, enabled=True).exclude(info__has_key='demo').select_related('machine')
+        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), Q(owner=user) | Q(accept_any_owner=True), enabled=True).exclude(info__has_key='demo').select_related('machine')
         busy_workers = set(TrainingRun.objects.filter(state__in=TRAINING_ACTIVE).values_list('worker_id', flat=True))
         self.fields['worker'].label_from_instance = lambda row: '%s / %s (%s; %s)' % (row.name, row.info.get('gpu', 'GPU'), 'Offline' if max(row.updated, row.machine.updated if row.machine_id else row.updated) < cutoff else 'Busy' if row.pk in busy_workers or row.machine_id and row.machine.workload else 'Online', row.machine.get_mode_display() if row.machine_id else row.get_mode_display())
         for name, field in self.fields.items():
@@ -310,6 +310,8 @@ def new_training(request):
                     data['worker'] = TrainingWorker.objects.select_for_update().get(pk=data['worker'].pk)
                     if not data['worker'].enabled:
                         raise ValidationError('This worker was disconnected. Select another worker.')
+                    if data['worker'].owner_id != request.user.pk and not data['worker'].accept_any_owner:
+                        raise ValidationError('This worker no longer accepts workloads from other accounts.')
                 run = TrainingRun.objects.create(
                     owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
                     requested_worker=data['worker'],
@@ -340,6 +342,14 @@ def training_detail(request, pk):
             raise PermissionDenied
         if run.snapshot.get('demo'):
             return redirect(request, '/training/%d/' % pk, error='Demo runs cannot be dispatched or modified.')
+        action = request.POST.get('action')
+        if action in ('delete', 'restore'):
+            deleted = action == 'delete'
+            TrainingRun.objects.filter(pk=pk).update(deleted=deleted, updated=timezone.now())
+            record_event('training.deleted' if deleted else 'training.restored', run, request.user.pk)
+            return redirect(request, '/training/', status='Workload was Deleted!' if deleted else 'Workload was Restored!')
+        if run.deleted:
+            return redirect(request, '/training/%d/' % pk, error='Restore this workload before modifying it.')
         if request.POST.get('action') == 'cancel':
             now = timezone.now()
             cancelled = TrainingRun.objects.filter(pk=pk, state__in=('VALIDATING', 'PREPARING', 'QUEUED')).update(state='CANCELLED', finished=now, updated=now, cancel_requested=True)

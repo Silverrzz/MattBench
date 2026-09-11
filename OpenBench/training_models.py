@@ -79,6 +79,7 @@ class TrainingWorker(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='training_workers')
     name = models.CharField(max_length=128)
     secret_hash = models.CharField(max_length=64)
+    accept_any_owner = models.BooleanField(default=False)
     info = models.JSONField(default=dict)
     updated = models.DateTimeField(default=timezone.now, db_index=True)
     enabled = models.BooleanField(default=True)
@@ -110,6 +111,7 @@ class TrainingRun(models.Model):
     error = models.TextField(blank=True)
     report_sequence = models.BigIntegerField(default=0)
     cancel_requested = models.BooleanField(default=False)
+    deleted = models.BooleanField(default=False)
     resume_from = models.ForeignKey('TrainingCheckpoint', on_delete=models.PROTECT, null=True, blank=True, related_name='resumed_runs')
 
     class Meta:

@@ -188,6 +188,7 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
             statistics.update(shuffle_algorithm='viriformat32-chunk-shuffle-pawnocchio-interleave-v3', shuffle_memory_mb=config.get('shuffle_memory_mb', 256))
     statistics.update(converted_bytes=sum(path.stat().st_size for path in selected), converted_files=len(selected))
     if 'analyse' in steps:
+        statistics.pop('analysis_kind', None)
         analysis = directory / 'analysis'
         analysis.mkdir()
         def analyse_file(item):

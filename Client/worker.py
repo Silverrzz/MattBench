@@ -1093,18 +1093,29 @@ def configure_training(config):
         config.training_session = None
     args = config.training_args
     if args.no_training:
+        print('Training disabled by --no-training.')
         return
-    if not args.training_backend and not shutil.which('nvidia-smi'):
-        return
+    from training_gpu import detect_gpu
+    detected = None
+    if not args.training_backend:
+        try:
+            detected = detect_gpu(device=args.training_device)
+        except RuntimeError as error:
+            print('Training not configured: %s' % error)
+            return
+    backend = args.training_backend or detected['backend']
+    print('Configuring %s training support...' % backend.upper())
     import training_worker
     arguments = ['--server', config.server, '--username', config.username, '--threads', str(config.threads), '--directory', args.training_directory, '--mode', args.mode]
+    arguments.extend(['--backend', backend])
     if config.identity and config.identity != 'None':
         arguments.extend(['--name', config.identity])
-    for name in ('backend', 'device', 'gpu_name', 'vram_gb', 'execution_image'):
+    for name in ('device', 'gpu_name', 'vram_gb', 'execution_image'):
         value = getattr(args, 'training_' + name)
         if value is not None:
             arguments.extend(['--' + name.replace('_', '-'), str(value)])
-    config.training_session = training_worker.main(arguments, worker_config=config)
+    config.training_session = training_worker.main(arguments, worker_config=config, gpu_info=detected)
+    print('Training support registered successfully.')
 
 def server_request_workload(config):
 
@@ -1407,14 +1418,16 @@ def parse_arguments(client_args):
     p.add_argument('--training-directory', default=os.environ.get('MATTBENCH_WORKER_DIRECTORY', os.path.abspath('training-work')))
     p.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker; manage registered workers on their worker page')
     p.add_argument('--no-training', action='store_true', help='Disable GPU training on this worker')
-    p.add_argument('--training-backend', choices=('cuda', 'rocm'))
-    p.add_argument('--training-device')
-    p.add_argument('--training-gpu-name')
-    p.add_argument('--training-vram-gb', type=float)
+    p.add_argument('--training-backend', '--backend', choices=('cuda', 'rocm'), default=os.environ.get('MATTBENCH_TRAINING_BACKEND'))
+    p.add_argument('--training-device', '--device', default=os.environ.get('MATTBENCH_TRAINING_DEVICE'))
+    p.add_argument('--training-gpu-name', '--gpu-name', default=os.environ.get('MATTBENCH_TRAINING_GPU_NAME'))
+    p.add_argument('--training-vram-gb', '--vram-gb', type=float, default=os.environ.get('MATTBENCH_TRAINING_VRAM_GB'))
     p.add_argument('--training-execution-image', default=os.environ.get('MATTBENCH_EXECUTION_IMAGE'))
 
     # Ignore unknown arguments ( from client )
     worker_args, unknown    = p.parse_known_args()
+    if worker_args.training_backend not in (None, 'cuda', 'rocm'):
+        p.error('MATTBENCH_TRAINING_BACKEND must be cuda or rocm.')
     worker_args.cli_options = format_cli_options(worker_args)
 
     # Add the client args (Username, Password, and Server) to the worker args

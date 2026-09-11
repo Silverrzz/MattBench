@@ -160,8 +160,12 @@ def claim(request):
         return JsonResponse({'run': assignment(existing, info)})
     if (machine.mode if machine else worker.mode) == 'paused' or machine and machine.workload:
         return JsonResponse({'run': None})
-    reservations = TrainingRun.objects.filter(requested_worker=worker, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo')
-    candidates = TrainingRun.objects.filter(owner=worker.owner, state='QUEUED', worker=None, cancel_requested=False).exclude(snapshot__has_key='demo').filter(Q(requested_worker=worker) if reservations.exists() else Q(requested_worker=None) | Q(requested_worker=worker)).annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created')[:100]
+    reservations = TrainingRun.objects.filter(requested_worker=worker, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo')
+    candidates = TrainingRun.objects.filter(state='QUEUED', worker=None, cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo')
+    if not worker.accept_any_owner:
+        reservations = reservations.filter(owner=worker.owner)
+        candidates = candidates.filter(owner=worker.owner)
+    candidates = candidates.filter(Q(requested_worker=worker) if reservations.exists() else Q(requested_worker=None) | Q(requested_worker=worker)).annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created')[:100]
     for run in candidates:
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
@@ -177,7 +181,7 @@ def claim(request):
                 if pinned and pinned != runtime:
                     continue
                 snapshot = {**run.snapshot, 'runtime': runtime, 'resume_semantics': 'optimiser-continuation; dataset reader restarts at the selected stage'}
-                claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=now, updated=now)
+                claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False, deleted=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=now, updated=now)
                 if claimed:
                     if worker.machine_id:
                         Machine.objects.filter(pk=worker.machine_id).update(workload=0, updated=now)
@@ -192,7 +196,7 @@ def claim(request):
 
 def assignment(run, info):
     from OpenBench.training_datasets import effective_dataset
-    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': run.snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested, 'recovery_pending': bool(run.metrics.get('recovery_pending'))}
+    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': run.snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested or run.deleted, 'recovery_pending': bool(run.metrics.get('recovery_pending'))}
 
 
 @worker_endpoint
@@ -203,7 +207,7 @@ def recover(request, pk):
         run = TrainingRun.objects.select_for_update().get(pk=owned_run(request, pk).pk)
         if run.recovery_run_id:
             return JsonResponse({'recovery_run': run.recovery_run_id})
-        if run.state in ('COMPLETED', 'CANCELLED'):
+        if run.deleted or run.state in ('COMPLETED', 'CANCELLED'):
             return JsonResponse({'recovery_run': None})
         if run.terminal and not run.metrics.get('recovery_pending') and not run.error.startswith(('Worker heartbeat lost.', 'Worker restarted.')):
             return JsonResponse({'recovery_run': None})
@@ -240,10 +244,10 @@ def owned_run(request, pk):
 @worker_endpoint
 @require_POST
 def control(request, pk):
-    run = TrainingRun.objects.only('state', 'cancel_requested').filter(pk=pk, worker=request.training_worker).first()
+    run = TrainingRun.objects.only('state', 'cancel_requested', 'deleted').filter(pk=pk, worker=request.training_worker).first()
     if not run:
         raise ValidationError('This run is not assigned to this worker.')
-    return JsonResponse({'stop': run.cancel_requested or run.terminal, 'state': run.state})
+    return JsonResponse({'stop': run.cancel_requested or run.deleted or run.terminal, 'state': run.state})
 
 
 @worker_endpoint
@@ -253,13 +257,13 @@ def report(request, pk):
     if run.terminal:
         return JsonResponse({'stop': True, 'state': run.state, 'sequence': run.report_sequence})
     data = json_body(request)
-    if run.cancel_requested and data.get('state') not in ('CANCELLED', 'FAILED'):
+    if (run.cancel_requested or run.deleted) and data.get('state') not in ('CANCELLED', 'FAILED'):
         return JsonResponse({'stop': True, 'state': run.state})
     sequence = data.get('sequence')
     if type(sequence) is not int or sequence < 1:
         raise ValueError
     if sequence <= run.report_sequence:
-        return JsonResponse({'stop': run.cancel_requested, 'sequence': run.report_sequence})
+        return JsonResponse({'stop': run.cancel_requested or run.deleted, 'sequence': run.report_sequence})
     state = data.get('state', run.state)
     if state != run.state and state not in ('FAILED', 'CANCELLED'):
         order = list(TRAINING_ACTIVE) + ['COMPLETED']
@@ -267,7 +271,7 @@ def report(request, pk):
             raise ValidationError('Invalid training stage transition.')
     if state == 'COMPLETED':
         artifacts = run.artifacts.all()
-        if run.cancel_requested or not artifacts.filter(kind='network').exists() or not artifacts.filter(kind='manifest').exists() or not artifacts.filter(kind='log').exists():
+        if run.deleted or run.cancel_requested or not artifacts.filter(kind='network').exists() or not artifacts.filter(kind='manifest').exists() or not artifacts.filter(kind='log').exists():
             raise ValidationError('Networks, manifest and complete log must be saved before completing a run.')
     metrics = data.get('metrics', {})
     if not isinstance(metrics, dict) or len(metrics) > 32:
@@ -311,7 +315,7 @@ def report(request, pk):
     if state in TRAINING_TERMINAL:
         changes['finished'] = now
     with transaction.atomic():
-        changed = TrainingRun.objects.filter(pk=pk, report_sequence=run.report_sequence, state=run.state, cancel_requested=run.cancel_requested).update(**changes)
+        changed = TrainingRun.objects.filter(pk=pk, report_sequence=run.report_sequence, state=run.state, cancel_requested=run.cancel_requested, deleted=run.deleted).update(**changes)
         if changed and state != run.state:
             record_event('training.' + state.lower(), run, run.owner_id, {'from': run.state, 'to': state, 'worker_id': str(request.training_worker.pk)}, key='training.state:%d:%d' % (run.pk, sequence))
     if changed:
@@ -323,13 +327,13 @@ def report(request, pk):
             if not path.exists() or path.stat().st_size < 64 * 1024 ** 2:
                 with path.open('a', encoding='utf-8') as output:
                     output.write(log)
-    return JsonResponse({'stop': run.cancel_requested, 'state': state if changed else run.state, 'sequence': sequence if changed else run.report_sequence})
+    return JsonResponse({'stop': run.cancel_requested or run.deleted, 'state': state if changed else run.state, 'sequence': sequence if changed else run.report_sequence})
 
 
 @worker_endpoint
 def dataset_access(request, pk, file_index):
     run = owned_run(request, pk)
-    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested:
+    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested or run.deleted:
         return JsonResponse({'error': 'Dataset access is closed for this run.'}, status=403)
     return JsonResponse(download_access(run, file_index, request.GET.get('stage')))
 
@@ -337,7 +341,7 @@ def dataset_access(request, pk, file_index):
 @worker_endpoint
 def xet_token(request, pk):
     run = owned_run(request, pk)
-    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested:
+    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested or run.deleted:
         return JsonResponse({'error': 'Dataset access is closed for this run.'}, status=403)
     file_index = request.GET.get('file')
     if file_index is not None:
@@ -361,7 +365,7 @@ def dataset_file(request, pk, file_index):
     from huggingface_hub import hf_hub_url
     from OpenBench.training_datasets import dataset_input
     run = owned_run(request, pk)
-    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested:
+    if run.state not in ('DOWNLOADING', 'CONVERTING') or run.cancel_requested or run.deleted:
         return JsonResponse({'error': 'Dataset access is closed for this run.'}, status=403)
     dataset = dataset_input(run, request.GET.get('stage'))
     file = dataset['files'][file_index]
@@ -382,7 +386,7 @@ def dataset_file(request, pk, file_index):
 @require_POST
 def upload_artifact(request, pk):
     run = owned_run(request, pk)
-    if run.state not in ('TRAINING', 'SAVING') or run.cancel_requested:
+    if run.state not in ('TRAINING', 'SAVING') or run.cancel_requested or run.deleted:
         return JsonResponse({'error': 'This run is not accepting artifacts.'}, status=409)
     name = request.GET.get('name', '')
     kind = request.GET.get('kind', '')
@@ -424,7 +428,7 @@ def upload_artifact(request, pk):
             raise ValidationError('Artifact checksum does not match.')
         if not size or kind == 'network' and size < run.snapshot['settings']['network_min_bytes']:
             raise ValidationError('The artifact is empty or smaller than the expected network size.')
-        if not TrainingRun.objects.filter(pk=pk, state__in=('TRAINING', 'SAVING'), cancel_requested=False).exists():
+        if not TrainingRun.objects.filter(pk=pk, state__in=('TRAINING', 'SAVING'), cancel_requested=False, deleted=False).exists():
             raise ValidationError('The run stopped accepting artifacts.')
         destination = directory / (uuid.uuid4().hex + '-' + name)
         with storage_lock():

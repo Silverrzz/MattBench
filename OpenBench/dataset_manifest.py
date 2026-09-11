@@ -184,7 +184,7 @@ def remaining_steps(dataset, config):
         steps.append('shuffle')
     if config.get('interleave', True) and not all(file.get('interleaved', False) for file in files):
         steps.append('interleave')
-    if config.get('analyse_dataset', True) and not dataset.get('statistics', {}).get('analysis'):
+    if config.get('analyse_dataset', True) and (not dataset.get('statistics', {}).get('analysis') or dataset.get('statistics', {}).get('analysis_kind') == 'pgn_headers'):
         steps.append('analyse')
     return steps
 

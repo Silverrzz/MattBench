@@ -13,6 +13,7 @@
         <section class="workspace-panel workspace-stack">
             <div class="panel-heading"><h2>Activity</h2><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span></div>
             <p>Mode: {{ worker.mode_label }}</p>
+            {% if 'Training' in worker.capabilities %}<p>Training workloads: {% if worker.accept_any_owner %}Any account{% else %}My account only{% endif %}</p>{% endif %}
             {% if worker.reservation %}<p>Reserved for <a href="/training/{{ worker.reservation.pk }}/">{{ worker.reservation.name }}</a>.{% if worker.mode == 'paused' %} Change mode to allow it to start.{% else %} It will start when this worker is free and the run is ready.{% endif %}</p>{% endif %}
             <dl class="workspace-facts"><div><dt>Current job</dt><dd>{% if worker.job %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}—{% endif %}</dd></div><div><dt>Last seen</dt><dd>{{ worker.updated|timesince }} ago</dd></div><div><dt>CPU threads</dt><dd>{{ worker.threads }}</dd></div>{% if worker.gpu_memory %}<div><dt>GPU memory</dt><dd>{{ worker.gpu_memory }} GB</dd></div>{% endif %}{% if worker.memory %}<div><dt>RAM</dt><dd>{{ worker.memory }} GB</dd></div>{% endif %}</dl>
             {% if worker.manage and worker.current_workload %}<form method="post">{% csrf_token %}<input type="hidden" name="workload" value="{{ worker.current_workload }}"><button class="button" type="submit" name="action" value="stop">Stop current workload</button></form>{% endif %}
@@ -27,6 +28,11 @@
             <input id="worker-name" name="name" value="{{ worker.name }}" maxlength="128" required data-preserve-live>
             <label for="worker-mode">Worker mode</label>
             <select id="worker-mode" name="mode" data-preserve-live>{% for value, label in worker.modes %}<option value="{{ value }}"{% if value == worker.mode %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+            {% if 'Training' in worker.capabilities %}
+            <label for="worker-training-scope">Accept training workloads from</label>
+            <select id="worker-training-scope" name="training_scope" data-preserve-live><option value="own"{% if not worker.accept_any_owner %} selected{% endif %}>My account only</option><option value="any"{% if worker.accept_any_owner %} selected{% endif %}>Any account</option></select>
+            <p>Applies to the next assignment. Current work will finish.</p>
+            {% endif %}
             <button class="button" type="submit" name="action" value="settings">Save settings</button>
         </form>
         {% if worker.disconnect %}<form method="post">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect worker</button></form>{% endif %}

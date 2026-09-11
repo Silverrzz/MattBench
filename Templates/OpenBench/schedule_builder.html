@@ -54,6 +54,11 @@
                         <div class="builder-group-heading"><h2>Hidden layers</h2><button class="button" id="builder-add-layer" type="button">+ Add layer</button></div>
                         <div id="builder-layers"></div>
                         <label class="choice"><input type="checkbox" name="pairwise_activation">Pairwise activation</label>
+                        <div id="builder-pairwise-options" class="field-grid" hidden>
+                            <label class="field">Layers<select id="builder-pairwise-layers"><option value="2">L2</option><option value="3">L3</option><option value="2,3">L2 and L3</option><option value="1">Feature layer (L1)</option></select></label>
+                            <label class="field">First half activation<select name="pairwise_left_activation"><option value="crelu">CReLU</option><option value="screlu">SCReLU</option><option value="relu">ReLU</option><option value="identity">Identity</option></select></label>
+                            <label class="field">Second half activation<select name="pairwise_right_activation"><option value="crelu">CReLU</option><option value="screlu">SCReLU</option><option value="relu">ReLU</option><option value="identity">Identity</option></select></label>
+                        </div>
                         <label class="choice"><input type="checkbox" name="skip_connection">Skip connection</label>
                         <div class="field"><label for="builder-activation">Activation</label><select id="builder-activation" name="activation"><option value="screlu">SCReLU</option><option value="crelu">CReLU</option></select></div>
                     </div>
@@ -64,7 +69,9 @@
                 <dialog id="builder-bucket-dialog" class="builder-bucket-dialog" aria-labelledby="builder-bucket-title">
                     <div class="builder-group-heading"><h2 id="builder-bucket-title">King bucket assignments</h2><button type="button" class="button" id="builder-close-buckets">Done</button></div>
                     <div class="builder-group">
-                        <div class="builder-board-toolbar"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
+                        <div class="builder-board-toolbar"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select><button class="button" id="builder-flip-layout" type="button">Flip vertically</button><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
+                        <p class="builder-note">Click a square to cycle its bucket. Drag across squares to paint the selected bucket.</p>
+                        <p class="builder-note">Square indexing uses a1 = 0. If you entered assignments using a8 = 0, flip vertically to swap ranks 1 and 8, 2 and 7, 3 and 6, and 4 and 5.</p>
                         <div class="builder-board" id="builder-board" role="group" aria-label="King square input buckets"></div>
                         <p class="builder-note" id="builder-layout-status" aria-live="polite"></p>
                     </div>

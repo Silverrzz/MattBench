@@ -26,11 +26,13 @@ import psutil
 import requests
 
 try:
+    from .training_gpu import detect_gpu
     from .training_checkpoints import CheckpointUploader, download_checkpoint
     from .training_data import prepare_and_publish
     from .training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
     from .training_runtime import identity, isolated_command, native_command, remove_container, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 except ImportError:
+    from training_gpu import detect_gpu
     from training_checkpoints import CheckpointUploader, download_checkpoint
     from training_data import prepare_and_publish
     from training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
@@ -854,7 +856,7 @@ class WorkerSession:
         return True
 
 
-def main(argv=None, worker_config=None):
+def main(argv=None, worker_config=None, gpu_info=None):
     parser = argparse.ArgumentParser(description='MattBench single-worker NNUE training. Runs schedules belonging to your account; use a dedicated worker account on the GPU host.')
     server = os.environ.pop('OPENBENCH_SERVER', None)
     parser.add_argument('--server', default=server, required=not server)
@@ -865,10 +867,10 @@ def main(argv=None, worker_config=None):
     parser.add_argument('--pawnocchio-ref', default=os.environ.pop('MATTBENCH_PAWNOCCHIO_REF', PAWNOCCHIO_REF), help='Pinned Pawnocchio commit to fetch and build.')
     parser.add_argument('--combiner-repo', default=os.environ.pop('MATTBENCH_COMBINER_REPO', COMBINER_REPO))
     parser.add_argument('--combiner-ref', default=os.environ.pop('MATTBENCH_COMBINER_REF', COMBINER_REF), help='Pinned Pawnocchio Viriformat combiner commit to fetch and build.')
-    parser.add_argument('--backend', choices=('cuda', 'rocm'), default='cuda')
-    parser.add_argument('--device', help='GPU index or UUID; defaults to the first visible GPU')
-    parser.add_argument('--gpu-name')
-    parser.add_argument('--vram-gb', type=float)
+    parser.add_argument('--backend', choices=('cuda', 'rocm'), default=os.environ.get('MATTBENCH_TRAINING_BACKEND'))
+    parser.add_argument('--device', default=os.environ.get('MATTBENCH_TRAINING_DEVICE'), help='GPU index or UUID; defaults to the first visible GPU')
+    parser.add_argument('--gpu-name', default=os.environ.get('MATTBENCH_TRAINING_GPU_NAME'))
+    parser.add_argument('--vram-gb', type=float, default=os.environ.get('MATTBENCH_TRAINING_VRAM_GB'))
     parser.add_argument('--threads', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker')
@@ -877,6 +879,8 @@ def main(argv=None, worker_config=None):
     parser.add_argument('--execution-image', default='', help='Optional Linux execution image pinned as repository@sha256:digest. Omit to run natively. Include Rust, GPU libraries and cached Cargo dependencies.')
     parser.add_argument('--memory-gb', type=int, default=max(1, int(psutil.virtual_memory().total / 1024 ** 3 * 0.8)))
     args = parser.parse_args(argv)
+    if args.backend not in (None, 'cuda', 'rocm'):
+        parser.error('MATTBENCH_TRAINING_BACKEND must be cuda or rocm.')
     args.unified = worker_config is not None
     parsed = urlsplit(args.server)
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1')):
@@ -900,22 +904,27 @@ def main(argv=None, worker_config=None):
             parser.error('%s is required on this worker.' % tool)
     gpu_name, vram = args.gpu_name, args.vram_gb
     driver_version = 'kernel-' + platform.release()
+    if gpu_info is None:
+        try:
+            gpu_info = detect_gpu(args.backend, args.device)
+        except RuntimeError as error:
+            if not args.backend or not gpu_name or not vram:
+                parser.error(str(error))
+            print('%s Using explicitly supplied GPU details.' % error)
+    if gpu_info:
+        args.backend = gpu_info['backend']
+        args.device = gpu_info['device']
+        gpu_name = gpu_name if gpu_name is not None else gpu_info['gpu']
+        vram = vram if vram is not None else gpu_info['vram_gb']
+        driver_version = gpu_info['driver']
+        print('Detected %s GPU: %s (%.2f GB VRAM).' % (args.backend.upper(), gpu_info['gpu'], gpu_info['vram_gb']))
     visibility = 'CUDA_VISIBLE_DEVICES' if args.backend == 'cuda' else 'HIP_VISIBLE_DEVICES'
     args.device = args.device or os.environ.get(visibility, '0').split(',')[0].strip()
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', args.device):
         parser.error('Choose a single GPU index or UUID.')
     os.environ[visibility] = args.device
-    if args.backend == 'cuda':
-        try:
-            output = subprocess.check_output(['nvidia-smi', '--query-gpu=name,memory.total,uuid,driver_version', '--format=csv,noheader,nounits', '-i', args.device], text=True, timeout=10)
-            detected_name, memory, detected_uuid, driver_version = output.strip().split(',')
-            gpu_name, vram = gpu_name or detected_name.strip(), vram or float(memory) / 1024
-            args.device = detected_uuid.strip()
-            os.environ[visibility] = args.device
-        except (OSError, ValueError, subprocess.SubprocessError):
-            parser.error('CUDA GPU detection failed. Check nvidia-smi and the NVIDIA driver.')
     if not gpu_name or not vram or vram <= 0 or args.threads <= 0:
-        parser.error('ROCm workers require --gpu-name and --vram-gb; threads must be positive.')
+        parser.error('GPU name, positive VRAM and positive threads are required.')
     if args.high_performance_downloads:
         os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
     for name in ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'):

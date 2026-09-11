@@ -68,6 +68,7 @@ def worker_rows(user, identifier=None):
             row = rows[-1]
             row['capabilities'].extend(['Training', 'Data preparation'])
             row['gpu_memory'] = capability.info.get('vram_gb')
+            row['accept_any_owner'] = capability.accept_any_owner
             row['details'].append(('GPU', capability.info.get('gpu', '')))
             training_job = active_training.get(capability.pk)
             if training_job:
@@ -91,6 +92,7 @@ def worker_rows(user, identifier=None):
         rows.append({
             'id': str(worker.pk), 'url': '/workers/%s/' % worker.pk, 'name': worker.name,
             'mode': worker.mode, 'mode_label': worker.get_mode_display(), 'online': online,
+            'accept_any_owner': worker.accept_any_owner,
             'manage': worker.enabled and not info.get('demo') and (user.pk == worker.owner_id or user.is_superuser),
             'current_workload': 'training:%s' % job.pk if job else '',
             'activity': 'Training' if job else 'Idle',
@@ -105,9 +107,11 @@ def worker_rows(user, identifier=None):
             'disconnect': worker.enabled and not info.get('demo') and (user.pk == worker.owner_id or user.is_superuser),
             'details': [('Backend', info.get('backend', '').upper()), ('GPU', info.get('gpu', '')), ('Free storage', '%s GB' % round(info.get('disk_gb', 0))), ('Device', info.get('device', '')), ('Protocol', info.get('protocol', ''))],
         })
-    reservations = TrainingRun.objects.filter(requested_worker__isnull=False, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False).exclude(snapshot__has_key='demo').select_related('requested_worker').order_by('created')
+    reservations = TrainingRun.objects.filter(requested_worker__isnull=False, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo').select_related('requested_worker').order_by('created')
     reserved = {}
     for run in reservations:
+        if run.owner_id != run.requested_worker.owner_id and not run.requested_worker.accept_any_owner:
+            continue
         identifier = str(run.requested_worker.machine_id or run.requested_worker_id)
         reserved.setdefault(identifier, run)
     for row in rows:
@@ -167,12 +171,15 @@ def detail(request, pk):
                     return redirect(request, worker['url'], error='Worker name must contain 1 to 128 characters.')
                 if mode not in dict(WORKER_MODES):
                     return redirect(request, worker['url'], error='Choose a valid worker mode.')
+                training_scope = request.POST.get('training_scope', 'any' if capability and capability.accept_any_owner else 'own')
+                if training_scope not in ('own', 'any'):
+                    return redirect(request, worker['url'], error='Choose whose training workloads this worker accepts.')
                 if machine:
                     info = {**machine.info, 'machine_name': name, 'custom_name': name}
                     Machine.objects.filter(pk=machine.pk).update(info=info, mode=mode)
                 if capability:
                     info = {**capability.info, 'custom_name': name}
-                    TrainingWorker.objects.filter(pk=capability.pk).update(name=name, info=info, mode=mode)
+                    TrainingWorker.objects.filter(pk=capability.pk).update(name=name, info=info, mode=mode, accept_any_owner=training_scope == 'any')
                 return redirect(request, worker['url'], status='Worker settings saved.')
             if action in ('mode', 'stop'):
                 mode = request.POST.get('mode') if action == 'mode' else 'paused'
