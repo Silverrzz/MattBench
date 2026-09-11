@@ -173,7 +173,7 @@ class TrainingForm(forms.Form):
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
         cutoff = timezone.now() - timedelta(minutes=2)
-        self.fields['worker'].queryset = TrainingWorker.objects.filter(owner=user, enabled=True).exclude(info__has_key='demo').select_related('machine')
+        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), owner=user, enabled=True).exclude(info__has_key='demo').select_related('machine')
         busy_workers = set(TrainingRun.objects.filter(state__in=TRAINING_ACTIVE).values_list('worker_id', flat=True))
         self.fields['worker'].label_from_instance = lambda row: '%s / %s (%s; %s)' % (row.name, row.info.get('gpu', 'GPU'), 'Offline' if max(row.updated, row.machine.updated if row.machine_id else row.updated) < cutoff else 'Busy' if row.pk in busy_workers or row.machine_id and row.machine.workload else 'Online', row.machine.get_mode_display() if row.machine_id else row.get_mode_display())
         for name, field in self.fields.items():
