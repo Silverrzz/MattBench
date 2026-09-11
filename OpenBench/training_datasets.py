@@ -123,6 +123,8 @@ def publish_dataset(request, pk):
     files = data.get('files')
     statistics = data.get('statistics', {})
     validate_manifest({'version': 1, 'files': files, 'statistics': statistics})
+    if isinstance(statistics.get('analysis'), str):
+        statistics['analysis'] = '\n'.join(line for line in statistics['analysis'].splitlines() if not line.lstrip().lower().startswith('progress:'))
     changed = any(step in plan['steps'] for step in ('convert', 'extract', 'shuffle', 'interleave'))
     original = {file['path']: file for file in source['files']}
     shuffled = 'shuffle' in plan['steps'] or all(file.get('shuffled', False) for file in source['files'])
@@ -191,7 +193,7 @@ def publish_dataset(request, pk):
             json.dumps({key: value for key, value in statistics.items() if key != 'analysis'}, indent=2, sort_keys=True), statistics['analysis'])
         for path in (report, 'analysis.txt'):
             lines.append({'key': 'file', 'value': {'path': path, 'encoding': 'base64', 'content': base64.b64encode(text.encode()).decode()}})
-    lines.append({'key': 'file', 'value': {'path': MANIFEST_PATH, 'encoding': 'base64', 'content': base64.b64encode(json.dumps(manifest).encode()).decode()}})
+    lines.append({'key': 'file', 'value': {'path': MANIFEST_PATH, 'encoding': 'base64', 'content': base64.b64encode((json.dumps(manifest, indent=2) + '\n').encode()).decode()}})
     response = requests.post('https://huggingface.co/api/datasets/%s/commit/%s' % (source['repo'], quote(plan['branch'], safe='')), headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/x-ndjson'}, data='\n'.join(json.dumps(line) for line in lines).encode(), timeout=120)
     response.raise_for_status()
     revision = response.json()['commitOid']

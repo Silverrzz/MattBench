@@ -233,7 +233,7 @@ def download_opening_book(book_sha, book_source, book_name):
         os.remove(book_path)
         raise OpenBenchCorruptedBookException('Invalid sha for %s' % (book_name))
 
-def download_network(server, username, password, engine, net_name, net_sha, net_path):
+def download_network(server, username, password, engine, net_name, net_sha, net_path, machine_id=None, secret=None):
 
     # Avoid redownloading Network files
     if not os.path.isfile(net_path):
@@ -241,7 +241,11 @@ def download_network(server, username, password, engine, net_name, net_sha, net_
         # Format the API request, including credentials
         print ('Fetching %s (%s) for %s' % (net_name, net_sha, engine))
         endpoint = 'api/networks/%s/%s' % (engine, net_sha)
-        request  = credentialed_request(server, username, password, endpoint)
+        if machine_id is not None:
+            request = requests.post(url_join(server, endpoint), data={'machine_id': machine_id, 'secret': secret}, timeout=30)
+        else:
+            request = credentialed_request(server, username, password, endpoint)
+        request.raise_for_status()
 
         # Write the content out to the net_path in kb chunks
         with open(net_path, 'wb') as fout:

@@ -22,13 +22,11 @@ DEFAULT_SETTINGS = {
     'example_source': 'examples/mattbench.rs',
     'backend': 'cuda',
     'threads': 4,
-    'min_vram_gb': 8,
-    'min_disk_gb': 100,
     'max_hours': 72,
     'network_glob': '**/quantised.bin',
     'network_min_bytes': 64,
     'network_max_bytes': 1073741824,
-    'skip_broken_games': False,
+    'skip_broken_games': True,
     'fill_missing_evals': '',
     'delete_uploaded_checkpoints': True,
     'checkpoint_keep_last': 3,
@@ -45,6 +43,17 @@ DEFAULT_SETTINGS = {
     'execution_image': '',
 }
 DATA_SUFFIXES = ('.pgn.tar', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst', '.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst', '.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst')
+
+
+def worker_requirement_errors(info, config, disk_required=None):
+    errors = []
+    if info.get('backend') != config['backend']:
+        errors.append('GPU backend: worker reports %s; schedule requires %s.' % (info.get('backend', 'unknown'), config['backend']))
+    disk = info.get('disk_gb', 0)
+    required = disk_required or 0
+    if disk < required:
+        errors.append('Free disk: worker reports %.2f GiB; training requires %.2f GiB.' % (disk, required))
+    return errors
 
 
 def vault():
@@ -122,6 +131,8 @@ def validate_schedule(files, config):
             raise ValidationError('Supported schedule files: Rust, TOML, JSON, Python, shell and text.')
     if not any(name.endswith('.rs') and source.strip() for name, source in files.items()):
         raise ValidationError('Add your Rust training schedule before saving.')
+    if isinstance(config, dict):
+        config = {key: value for key, value in config.items() if key not in ('min_vram_gb', 'min_disk_gb')}
     if not isinstance(config, dict) or set(config) - set(DEFAULT_SETTINGS):
         raise ValidationError('Unknown schedule settings.')
     config = {**DEFAULT_SETTINGS, **config}
@@ -143,7 +154,7 @@ def validate_schedule(files, config):
         if not isinstance(command, list) or not 1 <= len(command) <= 64 or any(not isinstance(arg, str) or not arg or len(arg) > 1024 or '\x00' in arg for arg in command):
             raise ValidationError('%s must be a JSON array of command arguments.' % name.capitalize())
     for name, minimum, maximum in (
-        ('threads', 1, 512), ('min_vram_gb', 1, 2048), ('min_disk_gb', 1, 1000000),
+        ('threads', 1, 512),
         ('max_hours', 1, 8760), ('network_min_bytes', 1, 8 * 1024 ** 3), ('network_max_bytes', 1, 8 * 1024 ** 3),
         ('checkpoint_keep_last', 0, 10000),
         ('shuffle_memory_mb', 16, 65536), ('interleave_fan_in', 2, 256),

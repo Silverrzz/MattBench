@@ -144,7 +144,7 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
             request.live_payload['networks'] = data['networks']
         if template == 'training_detail.html':
             run = data['run']
-            request.live_payload['training'] = {'state': run.state, 'metrics': run.metrics, 'history': run.history, 'log': run.log_tail, 'checkpoint_count': run.checkpoints.count(), 'checkpoint_latest': data['latest_checkpoint'].pk if data['latest_checkpoint'] else None}
+            request.live_payload['training'] = {'state': run.state, 'updated': run.updated.isoformat(), 'metrics': run.metrics, 'history': run.history}
 
     for key in ['status_message', 'warning_message', 'error_message']:
         if key in request.session: del request.session[key]
@@ -698,8 +698,20 @@ def client_get_build_info(request):
 @csrf_exempt
 def client_worker_info(request):
 
+    persistent_worker = None
     # Verify the User's credentials
-    try: user = authenticate(request, True)
+    try:
+        if request.POST.get('worker_id'):
+            import hashlib
+            worker = TrainingWorker.objects.select_related('owner').get(pk=request.POST['worker_id'], enabled=True, owner__is_active=True)
+            if not secrets.compare_digest(worker.secret_hash, hashlib.sha256(request.POST.get('worker_token', '').encode()).hexdigest()) or worker.owner.username != request.POST.get('username') or not Profile.objects.filter(user=worker.owner, enabled=True).exists():
+                raise UnableToAuthenticate()
+            user = worker.owner
+            persistent_worker = worker
+        else:
+            user = authenticate(request, True)
+    except (TrainingWorker.DoesNotExist, ValueError, django.core.exceptions.ValidationError):
+        return JsonResponse({'error': 'Bad worker credentials'})
     except UnableToAuthenticate:
         return JsonResponse({ 'error' : 'Bad Credentials' })
 
@@ -711,7 +723,7 @@ def client_worker_info(request):
         return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
     # Create a new Machine for this session
-    machine = Machine(user=user, info=info)
+    machine = persistent_worker.machine if persistent_worker and persistent_worker.machine_id else Machine(user=user, info=info)
 
     # Save the machine's latest information and Secret Token for this session
     machine.info   = info
@@ -762,6 +774,10 @@ def client_get_network(request, engine, name):
 @csrf_exempt
 @verify_worker
 def client_get_workload(request, machine):
+    from OpenBench.models import TrainingRun
+    from OpenBench.training_models import TRAINING_ACTIVE
+    if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():
+        return JsonResponse({})
     return JsonResponse(get_workload(request, machine))
 
 @csrf_exempt
@@ -977,10 +993,11 @@ def api_networks(request, engine):
 @csrf_exempt
 def api_network_download(request, engine, identifier):
 
-    if not api_authenticate(request):
-        return api_response({ 'error' : 'API requires authentication for this server' })
-
-    if not api_authenticate(request, require_enabled=True):
+    machine_authenticated = False
+    if request.POST.get('machine_id', '').isdigit():
+        machine = Machine.objects.select_related('user').filter(pk=request.POST['machine_id'], user__is_active=True).first()
+        machine_authenticated = bool(machine and secrets.compare_digest(machine.secret, request.POST.get('secret', '')) and Profile.objects.filter(user=machine.user, enabled=True).exists())
+    if not machine_authenticated and not api_authenticate(request, require_enabled=True):
         return api_response({ 'error' : 'API requires authentication for this endpoint' })
 
     if (network := Network.objects.filter(engine=engine, sha256=identifier).first()):

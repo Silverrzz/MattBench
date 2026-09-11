@@ -11,6 +11,7 @@
 
     <script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script>
     {% if workload.test_mode == 'SPRT' %}
+        <link rel="stylesheet" href="{% static 'history_chart.css' %}?{{ static_version }}">
         <link rel="stylesheet" href="{% static 'llr_history.css' %}?{{ static_version }}">
         <script src="{% static 'llr_history.js' %}?{{ static_version }}" defer></script>
     {% endif %}

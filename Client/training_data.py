@@ -1,6 +1,7 @@
 import hashlib
 import mmap
 import random
+from concurrent.futures import ThreadPoolExecutor
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import requests
@@ -65,7 +66,7 @@ def game_ranges(data):
 def merge_games(runs, destination, seed, combiner, environment, reporter, command):
     inputs = [path for path, _ in runs]
     expected_size = sum(path.stat().st_size for path in inputs)
-    command([str(combiner), '--interleave', '--seed', str(seed), str(destination), *map(str, inputs)], destination.parent, environment, reporter)
+    command([str(combiner), '--interleave', '--seed', str(seed), str(destination), *map(str, inputs)], destination.parent, environment, reporter, cpu_threads=1)
     if not destination.is_file() or destination.stat().st_size != expected_size:
         raise RuntimeError('Pawnocchio interleaving did not preserve dataset size. Check the inputs for invalid games.')
 
@@ -135,17 +136,26 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
             if len(groups) == 1:
                 break
             merged = []
-            for start, group in enumerate(groups):
+            def merge_group(item):
+                start, group, seed = item
                 if len(group) == 1:
-                    merged.extend(group)
-                    continue
+                    return group[0]
                 reporter.update(current_file='Interleaving merge pass %d, group %d' % (generation + 1, start + 1))
                 target = work / ('merge-%d-%d.vf' % (generation, start))
-                merge_games(group, target, rng.getrandbits(64), combiner, environment, reporter, command)
-                merged.append((target, sum(count for _, count in group)))
+                merge_games(group, target, seed, combiner, environment, reporter, command)
                 for path, _ in group:
                     if path.parent == work:
                         path.unlink()
+                return target, sum(count for _, count in group)
+            jobs = [(index, group, rng.getrandbits(64)) for index, group in enumerate(groups)]
+            with ThreadPoolExecutor(max_workers=max(1, int(reporter.job['worker_info']['threads']))) as executor:
+                try:
+                    merged = list(executor.map(merge_group, jobs))
+                except BaseException as error:
+                    if not reporter.stop.is_set():
+                        reporter.abort_reason = str(error)
+                    reporter.stop.set()
+                    raise
             runs = merged
             generation += 1
         reporter.update(current_file='Interleaving complete Viriformat games into output shards')
@@ -176,11 +186,22 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
     if 'analyse' in steps:
         analysis = directory / 'analysis'
         analysis.mkdir()
-        start = reporter.log_path.stat().st_size
-        command([str(pawnocchio), 'analyse', '--inputs', *[str(path) for path in selected], '--approximate'], analysis, environment, reporter)
-        with reporter.log_path.open('rb') as log:
-            log.seek(start)
-            statistics['analysis'] = log.read(48000).decode('utf-8', errors='replace')
+        def analyse_file(item):
+            index, path = item
+            target = analysis / str(index)
+            target.mkdir()
+            result = command([str(pawnocchio), 'analyse', '--inputs', str(path), '--approximate'], target, environment, reporter, cpu_threads=1)
+            result = '\n'.join(line for line in result.splitlines() if not line.lstrip().lower().startswith('progress:'))
+            return '%s:\n%s' % (path.name, result)
+        with ThreadPoolExecutor(max_workers=max(1, int(job['worker_info']['threads']))) as executor:
+            try:
+                statistics['analysis'] = '\n'.join(executor.map(analyse_file, enumerate(selected)))[:48000]
+            except BaseException as error:
+                if not reporter.stop.is_set():
+                    reporter.abort_reason = str(error)
+                reporter.stop.set()
+                raise
+    statistics.update({key: reporter.metrics.get(key, 0) for key in ('sanitised_games', 'skipped_games', 'skipped_bytes')})
     job['dataset_statistics'] = statistics
     if plan['mode'] != 'prepare':
         return selected

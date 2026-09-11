@@ -11,7 +11,7 @@
         <article class="schedule-card" data-search-row="{{ row.name }} {% if row.scope == 'engine' %}{{ row.engine.name }}{% endif %} {{ row.scope_label }}" data-engine="{% if row.scope == 'engine' %}{{ row.engine.name }}{% else %}*{% endif %}" data-scope="{{ row.scope }}">
             <div class="schedule-card-heading"><span>{% if row.scope == 'engine' %}{{ row.engine.name }}{% else %}All engines{% endif %}</span><span class="workspace-tag">{{ row.scope_label }}</span></div>
             <h2><a href="/training/schedules/{{ row.pk }}/">{{ row.name }}</a></h2>
-            <div class="schedule-card-meta"><span>{{ row.settings.backend|upper }}</span><span>{{ row.settings.min_vram_gb }} GB VRAM</span><span>{{ row.settings.threads }} threads</span></div>
+            <div class="schedule-card-meta"><span>{{ row.settings.backend|upper }}</span><span>{{ row.settings.threads }} training threads</span></div>
             <div class="schedule-card-actions"><a href="/training/schedules/{{ row.pk }}/">{% if row.owner_id == user.pk or user.is_superuser %}Edit{% else %}View{% endif %} · v{{ row.version }}</a><a class="button" href="/training/new/?schedule={{ row.pk }}{% if row.scope == 'engine' %}&amp;engine={{ row.engine_id }}{% endif %}">Use schedule</a></div>
         </article>
         {% empty %}<div class="empty-block">No saved schedules</div>{% endfor %}

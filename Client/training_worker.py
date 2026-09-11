@@ -16,7 +16,7 @@ import threading
 import time
 import tomllib
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -28,12 +28,12 @@ try:
     from .training_checkpoints import CheckpointUploader, download_checkpoint
     from .training_data import prepare_and_publish
     from .training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from .training_runtime import identity, isolated_command, remove_container, runtime_info, stop_previous, worker_lock, write_json
+    from .training_runtime import identity, isolated_command, native_command, remove_container, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 except ImportError:
     from training_checkpoints import CheckpointUploader, download_checkpoint
     from training_data import prepare_and_publish
     from training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from training_runtime import identity, isolated_command, remove_container, runtime_info, stop_previous, worker_lock, write_json
+    from training_runtime import identity, isolated_command, native_command, remove_container, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 
 
 class Stopped(Exception):
@@ -218,12 +218,13 @@ class Reporter:
 def child_environment(directory, job):
     keep = ('PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'CUDA_PATH', 'CUDA_HOME', 'CUDA_VISIBLE_DEVICES', 'HIP_PATH', 'ROCM_PATH', 'HIP_VISIBLE_DEVICES', 'RUSTUP_HOME', 'INCLUDE', 'LIB', 'LIBPATH', 'VCToolsInstallDir', 'VSINSTALLDIR', 'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion')
     environment = {key: value for key, value in os.environ.items() if key in keep}
+    environment = windows_build_environment(environment)
     home = directory / 'home'
     home.mkdir(exist_ok=True)
     temporary = directory / 'tmp'
     temporary.mkdir(exist_ok=True)
     environment.setdefault('RUSTUP_HOME', str(Path.home() / '.rustup'))
-    environment.update(HOME=str(home), USERPROFILE=str(home), CARGO_HOME=str(home / '.cargo'), CARGO_TARGET_DIR=str(directory / 'bullet' / 'target'), TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary), GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, CARGO_BUILD_JOBS=str(job['snapshot']['settings']['threads']), MATTBENCH_JOB=str(directory / 'job.json'), MATTBENCH_OUTPUT_DIR=str(directory / 'outputs'), MATTBENCH_DATA_DIR=str(directory / 'data'), MATTBENCH_NET_NAME=job['name'])
+    environment.update(HOME=str(home), USERPROFILE=str(home), CARGO_HOME=str(home / '.cargo'), CARGO_TARGET_DIR=str(directory / 'bullet' / 'target'), TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary), GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, CARGO_BUILD_JOBS=str(job['worker_info']['threads']), MATTBENCH_JOB=str(directory / 'job.json'), MATTBENCH_OUTPUT_DIR=str(directory / 'outputs'), MATTBENCH_DATA_DIR=str(directory / 'data'), MATTBENCH_NET_NAME=job['name'])
     return environment
 
 
@@ -242,10 +243,11 @@ def kill_tree(process):
     process.wait(timeout=10)
 
 
-def command(args, cwd, environment, reporter, trusted=False):
+def command(args, cwd, environment, reporter, trusted=False, cpu_threads=None):
     reporter.check()
-    arguments, child_env, container = (args, environment, None) if trusted else isolated_command(args, cwd, environment, reporter)
-    process_record = reporter.directory.parent / ('.process-' + reporter.directory.name + '.json')
+    arguments, child_env, container = (args, environment, None) if trusted else isolated_command(args, cwd, environment, reporter, cpu_threads)
+    arguments = native_command(arguments, cwd, child_env)
+    process_record = reporter.directory.parent / ('.process-' + reporter.directory.name + '-' + uuid.uuid4().hex + '.json')
     write_json(process_record, {'pid': None, 'created': None, 'container': container})
     process = subprocess.Popen(arguments, cwd=cwd, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
     write_json(process_record, {'pid': process.pid, 'created': psutil.Process(process.pid).create_time(), 'container': container})
@@ -259,6 +261,7 @@ def command(args, cwd, environment, reporter, trusted=False):
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
     command_started = time.monotonic()
+    tail = ''
     try:
         while True:
             reporter.check()
@@ -271,13 +274,15 @@ def command(args, cwd, environment, reporter, trusted=False):
             if line is None:
                 break
             reporter.write(line)
+            tail = (tail + line)[-48000:]
         while process.poll() is None:
             reporter.check()
             reporter.stop.wait(0.2)
         if process.returncode != 0:
-            raise RuntimeError('%s failed with exit code %d. See the build and training log.' % (Path(args[0]).name, process.returncode))
+            raise RuntimeError('%s %s failed with exit code %d. %s' % (Path(args[0]).name, ' '.join(map(str, args[1:])), process.returncode, tail[-2000:]))
         if reporter.state == 'TRAINING' and reporter.job['snapshot'].get('resume') and not reporter.resumed:
             raise RuntimeError('The schedule exited without acknowledging its resume checkpoint.')
+        return tail
     finally:
         if process.poll() is None:
             kill_tree(process)
@@ -404,67 +409,139 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
     data = directory / 'data'
     data.mkdir()
     config = reporter.job['snapshot']['settings']
-    outputs = []
-    def convert_stream(source, name):
+    workers = max(1, int(reporter.job['worker_info']['threads']))
+    pending = {}
+    outputs = {}
+    completed_bytes = 0
+    count = 0
+    reporter.write('Preparing dataset with %d assigned CPU threads.\n' % workers)
+    reporter.update(preparation_threads=workers)
+
+    def convert_file(source_path, name, expected_format, number, staged):
         reporter.check()
-        if not name.lower().endswith(('.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst', '.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst')):
-            raise RuntimeError('Unsupported archive member: %s' % name)
-        number = len(outputs)
         target = data / ('%05d.vf' % number)
-        is_viri = any(name.lower().endswith(suffix) for suffix in ('.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst'))
+        lower = name.lower()
+        is_viri = lower.endswith(('.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst'))
+        if not is_viri and not lower.endswith(('.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst')):
+            raise RuntimeError('Unsupported archive member: %s' % name)
         if expected_format == 'vf' and not is_viri:
             raise RuntimeError('Dataset declares Viriformat but contains PGN: %s' % name)
         temporary = target if is_viri else data / ('%05d.pgn' % number)
         reporter.update(current_file=name[-256:])
         with ExitStack() as stack:
-            stream = decompressed(stack, source, name)
+            raw = stack.enter_context(source_path.open('rb'))
+            stream = decompressed(stack, raw, lower)
             with temporary.open('xb') as output:
                 while chunk := stream.read(4 * 1024 * 1024):
                     reporter.check()
-                    reporter.expanded_bytes += len(chunk)
-                    if reporter.expanded_bytes > reporter.job['dataset']['size'] * config.get('dataset_expansion_factor', 8):
-                        raise RuntimeError('Expanded dataset exceeds the schedule expansion budget. Increase dataset_expansion_factor and worker storage before retrying.')
+                    with reporter.lock:
+                        reporter.expanded_bytes += len(chunk)
+                        expanded_bytes = reporter.expanded_bytes
+                    if expanded_bytes > reporter.job['dataset']['size'] * config.get('dataset_expansion_factor', 8):
+                        raise RuntimeError('Expanded dataset exceeds the schedule expansion budget. Increase dataset_expansion_factor before retrying.')
                     output.write(chunk)
+        if staged:
+            source_path.unlink()
+        parsed_games = None
+        broken_games = 0
         if not is_viri:
             arguments = [str(pawnocchio), 'pgntovf', '--input', str(temporary), '--output', str(target)]
             if config['skip_broken_games']:
                 arguments.append('--skip-broken-games')
             if config['fill_missing_evals'] != '':
                 arguments.extend(['--fill-missing-evals', config['fill_missing_evals']])
-            command(arguments, directory, environment, reporter)
+            conversion = command(arguments, directory, environment, reporter, cpu_threads=1)
+            parsed = re.findall(r'parsed games: (\d+)', conversion)
+            broken = re.findall(r'broken games: (\d+)', conversion)
+            parsed_games = int(parsed[-1]) if parsed else None
+            broken_games = int(broken[-1]) if broken else 0
             temporary.unlink()
         if not target.is_file() or target.stat().st_size == 0:
-            raise RuntimeError('Conversion produced an empty dataset.')
-        command([str(pawnocchio), 'sanitise', '--input', str(target), '--check-only'], directory, environment, reporter)
-        outputs.append(target)
-        reporter.update(converted_files=len(outputs), converted_bytes=sum(path.stat().st_size for path in outputs))
-    for index, path in enumerate(paths):
-        expected_format = source_files[index].get('format')
-        name = path.name.lower()
-        if name.endswith(('.vf', '.viri')):
-            outputs.append(path)
-            continue
-        if any(name.endswith(suffix) for suffix in ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst')):
-            with ExitStack() as stack:
-                raw = stack.enter_context(path.open('rb'))
-                source = decompressed(stack, raw, name)
-                archive = stack.enter_context(tarfile.open(fileobj=source, mode='r|'))
-                for member in archive:
-                    if member.isdir():
-                        continue
-                    if not member.isfile():
-                        raise RuntimeError('Dataset archives may contain regular files only.')
-                    if len(outputs) >= 100000:
-                        raise RuntimeError('Dataset archive contains too many members.')
-                    with archive.extractfile(member) as stream:
-                        convert_stream(stream, member.name)
+            raise RuntimeError('Conversion produced an empty dataset for %s.' % name)
+        if config['skip_broken_games']:
+            cleaned = target.with_suffix('.clean.vf')
+            result = command([str(pawnocchio), 'sanitise', '--input', str(target), '--output', str(cleaned)], directory, environment, reporter, cpu_threads=1)
+            matches = re.findall(r'parsed (\d+) games and skipped (\d+) bytes', result)
+            if not matches or not cleaned.is_file():
+                raise RuntimeError('Sanitisation did not report its result for %s.' % name)
+            games, skipped = map(int, matches[-1])
+            with reporter.lock:
+                reporter.metrics['sanitised_games'] = reporter.metrics.get('sanitised_games', 0) + games
+                reporter.metrics['skipped_bytes'] = reporter.metrics.get('skipped_bytes', 0) + skipped
+                reporter.metrics['skipped_games'] = reporter.metrics.get('skipped_games', 0) + broken_games + (max(0, parsed_games - games) if parsed_games is not None else 0)
+            if skipped:
+                discarded = '%d games, ' % max(0, parsed_games - games) if parsed_games is not None else ''
+                reporter.write('%s: excluded %s%d invalid bytes; retained %d valid games.\n' % (name, discarded, skipped, games))
+            cleaned.replace(target)
+            if not games:
+                target.unlink()
+                return None
         else:
-            with path.open('rb') as source:
-                convert_stream(source, name)
-        reporter.update(progress=100 * (index + 1) / len(paths))
+            try:
+                command([str(pawnocchio), 'sanitise', '--input', str(target), '--check-only'], directory, environment, reporter, cpu_threads=1)
+            except RuntimeError as error:
+                raise RuntimeError('Dataset validation failed for %s. Enable Skip invalid games to sanitise the dataset. %s' % (name, error)) from error
+        return target
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dataset-prep') as executor:
+        def drain(all_pending=False):
+            nonlocal completed_bytes
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            if all_pending:
+                done = set(pending)
+            for future in done:
+                number = pending.pop(future)
+                target = future.result()
+                if target:
+                    outputs[number] = target
+                    completed_bytes += target.stat().st_size
+                reporter.update(converted_files=len(outputs), converted_bytes=completed_bytes)
+
+        def submit(source_path, name, expected_format, staged=False):
+            nonlocal count
+            if count >= 100000:
+                raise RuntimeError('Dataset archive contains too many members.')
+            pending[executor.submit(convert_file, source_path, name, expected_format, count, staged)] = count
+            count += 1
+            if len(pending) >= workers * 2:
+                drain()
+
+        try:
+            for index, path in enumerate(paths):
+                expected_format = source_files[index].get('format')
+                name = path.name.lower()
+                if name.endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst')):
+                    with ExitStack() as stack:
+                        raw = stack.enter_context(path.open('rb'))
+                        stream = decompressed(stack, raw, name)
+                        archive = stack.enter_context(tarfile.open(fileobj=stream, mode='r|'))
+                        for member in archive:
+                            reporter.check()
+                            if member.isdir():
+                                continue
+                            if not member.isfile():
+                                raise RuntimeError('Dataset archives may contain regular files only.')
+                            staged = data / ('source-%05d' % count)
+                            with archive.extractfile(member) as source, staged.open('xb') as output:
+                                while chunk := source.read(4 * 1024 * 1024):
+                                    reporter.check()
+                                    output.write(chunk)
+                            submit(staged, member.name, expected_format, True)
+                else:
+                    submit(path, name, expected_format)
+                reporter.update(progress=100 * (index + 1) / len(paths))
+            while pending:
+                drain()
+        except BaseException as error:
+            if not isinstance(error, Stopped):
+                reporter.abort_reason = str(error)
+            reporter.stop.set()
+            for future in pending:
+                future.cancel()
+            raise
     if not outputs:
-        raise RuntimeError('No training games were found in the dataset.')
-    return outputs
+        raise RuntimeError('No valid training games were found in the dataset.')
+    return [outputs[number] for number in sorted(outputs)]
 
 
 def save_outputs(connection, job, directory, reporter):
@@ -553,6 +630,8 @@ def execute(connection, job, root, pawnocchio):
         previous_handlers[signum] = signal.signal(signum, interrupt)
     try:
         environment = child_environment(directory, job)
+        if environment.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'):
+            reporter.write('Using Microsoft linker: %s\n' % environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'])
         source_dataset = job['dataset']
         resume_directory = download_checkpoint(connection, job, directory, reporter)
         stage_data = []
@@ -634,6 +713,7 @@ def execute(connection, job, root, pawnocchio):
             command(['sh', '-c', 'mkdir -p "$1" && cp -a /opt/cargo/. "$1"/', 'cache', environment['CARGO_HOME']], repository, environment, reporter)
         if build[0] == 'cargo' and '--locked' not in build and '--frozen' not in build:
             build.append('--frozen' if job['worker_info'].get('execution_image') else '--locked')
+        environment.update(snapshot.get('environment', {}))
         command(build, repository, environment, reporter)
         if sha256_file(lockfile) != job['build_provenance']['cargo_lock_sha256']:
             raise RuntimeError('The build changed Cargo.lock. Pin the resolved dependency lockfile in the schedule before retrying.')
@@ -671,7 +751,40 @@ def execute(connection, job, root, pawnocchio):
     return interrupted.is_set()
 
 
-def main():
+class WorkerSession:
+    def __init__(self, args, connection, registration, identity_path, directory_lock):
+        self.args = args
+        self.connection = connection
+        self.registration = registration
+        self.identity_path = identity_path
+        self.directory_lock = directory_lock
+
+    def close(self):
+        self.directory_lock.close()
+
+    def poll(self):
+        result = self.connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(self.args.directory).free / 1024 ** 3, 'claim_id': self.registration['claim_id']}).json()
+        if not result['run']:
+            return False
+        job = result['run']
+        directory = self.args.directory / str(job['id'])
+        interrupted = False
+        if directory.exists():
+            stop_previous(directory)
+            if job['state'] not in ('COMPLETED', 'CANCELLED') and not finalize_saved(self.connection, job, directory):
+                self.connection.request('POST', '%d/recover/' % job['id'], json={})
+        elif job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+            interrupted = execute(self.connection, job, self.args.directory, self.args.pawnocchio)
+        elif job['state'] not in ('COMPLETED', 'CANCELLED'):
+            self.connection.request('POST', '%d/recover/' % job['id'], json={})
+        self.registration['claim_id'] = str(uuid.uuid4())
+        write_json(self.identity_path, self.registration)
+        if interrupted:
+            raise SystemExit()
+        return True
+
+
+def main(argv=None, worker_config=None):
     parser = argparse.ArgumentParser(description='MattBench single-worker NNUE training. Runs schedules belonging to your account; use a dedicated worker account on the GPU host.')
     server = os.environ.pop('OPENBENCH_SERVER', None)
     parser.add_argument('--server', default=server, required=not server)
@@ -692,7 +805,7 @@ def main():
     parser.add_argument('--high-performance-transfers', '--high-performance-downloads', dest='high_performance_downloads', action='store_true', help='Enable Xet high-performance uploads and downloads; intended for high bandwidth and at least 64 GB RAM.')
     parser.add_argument('--execution-image', default='', help='Linux execution image pinned as repository@sha256:digest; required for remote servers. Include Rust, GPU libraries and cached Cargo dependencies.')
     parser.add_argument('--memory-gb', type=int, default=max(1, int(psutil.virtual_memory().total / 1024 ** 3 * 0.8)))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     parsed = urlsplit(args.server)
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1')):
         parser.error('Use HTTPS for the server URL (HTTP is allowed on localhost).')
@@ -748,10 +861,14 @@ def main():
     info['combiner_path'] = str(dataset_tools['combiner'])
     info['runtime']['dataset_tools'] = tool_provenance
     info['runtime']['gpu_driver'] = driver_version.strip()
-    if not registration['registered']:
-        password = os.environ.pop('OPENBENCH_PASSWORD', None) or getpass.getpass('MattBench password: ')
-        response = requests.post(args.server.rstrip('/') + '/api/training/register/', data={'username': username, 'password': password, 'name': args.name, 'info': json.dumps(info), 'worker': registration['worker'], 'token': registration['token']}, timeout=30)
-        del password
+    if not registration['registered'] or worker_config is not None:
+        payload = {'username': username, 'name': args.name, 'info': json.dumps(info), 'worker': registration['worker'], 'token': registration['token']}
+        if worker_config is not None:
+            payload.update(machine_id=worker_config.machine_id, machine_secret=worker_config.secret_token)
+        else:
+            payload['password'] = os.environ.pop('OPENBENCH_PASSWORD', None) or getpass.getpass('MattBench password: ')
+        response = requests.post(args.server.rstrip('/') + '/api/training/register/', data=payload, timeout=30)
+        payload.clear()
         response.request.body = None
         response.raise_for_status()
         registration.update(registered=True, username=username, info=info)
@@ -763,6 +880,8 @@ def main():
         if previous != current:
             parser.error('Worker capabilities changed. Use a new worker directory to register this runtime.')
     connection = Connection(args.server, registration['worker'], registration['token'])
+    if worker_config is not None:
+        return WorkerSession(args, connection, registration, identity_path, directory_lock)
     if args.register_only:
         print('Worker credentials saved in %s.' % identity_path)
         return

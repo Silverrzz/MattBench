@@ -10,6 +10,22 @@ from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
 
 
+def training_telemetry(job):
+    if not job:
+        return []
+    fields = [
+        ('gpu_percent', 'GPU use', '%'), ('gpu_used_mb', 'GPU memory', ' MB'),
+        ('cpu_percent', 'CPU use', '%'), ('ram_used_gb', 'RAM used', ' GB'),
+        ('disk_free_gb', 'Storage free', ' GB'),
+        ('checkpoints_saved', 'Checkpoints stored', ''),
+        ('last_checkpoint_superbatch', 'Latest checkpoint SB', ''),
+        ('dataset_games', 'Dataset games', ''),
+        ('preparation_threads', 'Preparation threads', ''),
+        ('skipped_games', 'Invalid games skipped', ''),
+        ('skipped_bytes', 'Invalid bytes skipped', ''),
+    ]
+    return [(label, '%s%s' % (format(job.metrics[key], ',.6g') if isinstance(job.metrics[key], (int, float)) else job.metrics[key], unit)) for key, label, unit in fields if key in job.metrics]
+
 def worker_rows(user, identifier=None):
     now = timezone.now()
     cutoff = now - timedelta(minutes=2)
@@ -17,6 +33,8 @@ def worker_rows(user, identifier=None):
     if identifier is not None:
         machines = machines.filter(pk=identifier) if str(identifier).isdigit() else machines.none()
     machines = list(machines[:250])
+    capabilities = {worker.machine_id: worker for worker in TrainingWorker.objects.filter(machine__in=machines, enabled=True)}
+    active_training = {run.worker_id: run for run in TrainingRun.objects.filter(worker__in=capabilities.values(), state__in=TRAINING_ACTIVE).only('id', 'name', 'worker_id', 'metrics')}
     jobs = {row.pk: row for row in Test.objects.filter(pk__in=[machine.workload for machine in machines]).select_related('dev')}
     rows = []
     for machine in machines:
@@ -36,7 +54,17 @@ def worker_rows(user, identifier=None):
             'rate': '%s MNPS' % round(machine.dev_mnps + machine.base_mnps, 1) if machine.mnps else '',
             'details': [('Operating system', info.get('os_name', '')), ('CPU', info.get('cpu_name', '')), ('Instruction set', info.get('isa_name', '')), ('Logical cores', info.get('logical_cores', '')), ('Python', info.get('python_ver', '')), ('Client', info.get('client_ver', ''))],
         })
-    gpu_workers = TrainingWorker.objects.select_related('owner').order_by('pk')
+        capability = capabilities.get(machine.pk)
+        if capability:
+            row = rows[-1]
+            row['capabilities'].extend(['Training', 'Data preparation'])
+            row['gpu_memory'] = capability.info.get('vram_gb')
+            row['details'].append(('GPU', capability.info.get('gpu', '')))
+            training_job = active_training.get(capability.pk)
+            if training_job and (user.pk == machine.user_id or user.is_superuser):
+                row['telemetry'] = training_telemetry(training_job)
+                row.update(state='Busy' if online else 'Offline', job=training_job.name, job_url='/training/%s/' % training_job.pk, rate='%s M pos/s' % round(training_job.metrics.get('positions_per_second', 0) / 1000000, 2))
+    gpu_workers = TrainingWorker.objects.filter(machine__isnull=True).select_related('owner').order_by('pk')
     if identifier is not None:
         gpu_workers = gpu_workers.none() if str(identifier).isdigit() else gpu_workers.filter(pk=identifier)
     if not user.is_authenticated:
@@ -58,6 +86,7 @@ def worker_rows(user, identifier=None):
             'state': 'Disconnected' if not worker.enabled else 'Busy' if online and job else 'Available' if online else 'Offline',
             'job': job.name if online and job else '', 'job_url': '/training/%s/' % job.pk if job else '',
             'rate': '%s M pos/s' % round(job.metrics.get('positions_per_second', 0) / 1000000, 2) if job else '',
+            'telemetry': training_telemetry(job),
             'disconnect': worker.enabled and not info.get('demo') and (user.pk == worker.owner_id or user.is_superuser),
             'details': [('Backend', info.get('backend', '').upper()), ('GPU', info.get('gpu', '')), ('Free storage', '%s GB' % round(info.get('disk_gb', 0))), ('Device', info.get('device', '')), ('Protocol', info.get('protocol', ''))],
         })
@@ -79,6 +108,10 @@ def index(request):
 @require_http_methods(['GET', 'POST'])
 def detail(request, pk):
     from OpenBench.views import render, redirect
+    if not str(pk).isdigit():
+        linked = TrainingWorker.objects.filter(pk=pk, machine__isnull=False).first()
+        if linked:
+            return redirect(request, '/workers/%s/' % linked.machine_id)
     rows = worker_rows(request.user, pk)
     worker = next((row for row in rows if row['id'] == str(pk)), None)
     if worker is None:

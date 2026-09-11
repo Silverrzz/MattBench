@@ -64,6 +64,8 @@
     element('bullet-repo').value = data.settings.bullet_repo;
     element('bullet-ref').value = data.settings.bullet_ref;
     const advanced = {...data.settings};
+    delete advanced.min_vram_gb;
+    delete advanced.min_disk_gb;
     delete advanced.bullet_repo;
     delete advanced.bullet_ref;
     for (const field of ['checkpoint_keep_last', 'delete_uploaded_checkpoints']) delete advanced[field];

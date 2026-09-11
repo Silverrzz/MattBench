@@ -61,6 +61,7 @@ class OpenBenchConfig(django.apps.AppConfig):
 
     def ready(self):
 
+        from OpenBench import credential_checks
         import sys
         if os.environ.get('OPENBENCH_DISABLE_WATCHERS') == '1':
             return

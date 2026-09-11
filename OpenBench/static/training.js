@@ -1,6 +1,44 @@
 (() => {
     const form = document.getElementById('training-new-form');
     if (form) {
+        const environmentInput = document.getElementById('train-environment');
+        const environmentRows = document.getElementById('training-environment-rows');
+        const addEnvironment = document.getElementById('training-add-environment');
+        const initialEnvironment = environmentInput.value.split('\n').map(value => value.replace(/\r$/, ''));
+        environmentInput.hidden = true;
+        addEnvironment.hidden = false;
+        function persistEnvironment() {
+            environmentInput.value = Array.from(environmentRows.querySelectorAll('input'), input => input.value).join('\n');
+        }
+        function addEnvironmentRow(value = '', focus = false) {
+            const row = document.createElement('div');
+            row.className = 'training-environment-row';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = value;
+            input.placeholder = 'KEY=value';
+            input.autocomplete = 'off';
+            input.spellcheck = false;
+            input.setAttribute('aria-label', 'Environment variable, KEY=value');
+            input.setAttribute('aria-describedby', 'training-environment-note');
+            input.addEventListener('input', persistEnvironment);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'button';
+            remove.textContent = '\u00d7';
+            remove.setAttribute('aria-label', 'Remove environment variable');
+            remove.addEventListener('click', () => {
+                row.remove();
+                persistEnvironment();
+                addEnvironment.focus();
+            });
+            row.append(input, remove);
+            environmentRows.append(row);
+            if (focus) input.focus();
+        }
+        initialEnvironment.forEach(value => addEnvironmentRow(value));
+        addEnvironment.addEventListener('click', () => addEnvironmentRow('', true));
+        form.addEventListener('submit', persistEnvironment);
         const options = JSON.parse(document.getElementById('training-schedule-options').textContent);
         const datasets = JSON.parse(document.getElementById('training-dataset-options').textContent);
         const engine = document.getElementById('train-engine');
@@ -258,159 +296,167 @@
     const metrics = document.getElementById('long-statblock');
     if (!metrics) return;
     const detail = document.querySelector('.training-detail');
-    const checkpointDetails = document.getElementById('checkpoint-details');
-    const checkpointList = document.getElementById('checkpoint-list');
-    const checkpointCount = document.getElementById('checkpoint-count');
-    const checkpointFeedback = document.getElementById('checkpoint-feedback');
-    const loadCheckpoints = document.getElementById('load-checkpoints');
-    const finishCheckpoints = document.getElementById('finish-checkpoints');
-    const checkpointRows = new Map();
-    let checkpointCursor = null;
-    let checkpointLoading = false;
-    let loadedCount = -1;
-    let loadedLatest = null;
-    let latestCheckpoint = detail.dataset.checkpointLatest || '';
-    const checkpointsChanged = () => loadedCount !== Number(checkpointCount.textContent) || loadedLatest !== latestCheckpoint;
-    const terminal = () => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(detail.dataset.runState);
-    function checkpointActions() {
-        if (finishCheckpoints) finishCheckpoints.disabled = !terminal() || !checkpointRows.size;
-        for (const row of checkpointRows.values()) {
-            row.querySelector('button')?.toggleAttribute('disabled', !terminal());
-        }
+    let lossPoints = [];
+    const lossChart = document.getElementById('training-chart');
+    const lossSvg = lossChart.querySelector('svg');
+    const lossPlot = lossChart.querySelector('.history-chart-plot');
+    const lossTooltip = document.getElementById('training-loss-tooltip');
+    const lossReadout = document.getElementById('training-loss-readout');
+    let lossCoordinates = [];
+    let selectedLoss = -1;
+    let lossCrosshair;
+    let lossMarker;
+    const clampLoss = (value, low, high) => Math.max(low, Math.min(high, value));
+    function hideLoss() {
+        selectedLoss = -1;
+        lossTooltip.hidden = true;
+        lossCrosshair?.setAttribute('visibility', 'hidden');
+        lossMarker?.setAttribute('visibility', 'hidden');
     }
-    async function fetchCheckpoints(older = false) {
-        if (checkpointLoading) return;
-        checkpointLoading = true;
-        loadCheckpoints.disabled = true;
-        checkpointFeedback.textContent = 'Loading checkpoints…';
-        try {
-            const suffix = older && checkpointCursor ? `?before=${checkpointCursor}` : '';
-            const response = await fetch(`/training/${detail.dataset.runId}/checkpoints/${suffix}`, {headers: {Accept: 'application/json'}});
-            if (!response.ok || response.redirected) throw new Error('Unable to load checkpoints. Check your connection and try again.');
-            const data = await response.json();
-            const selected = new Set([...checkpointRows.entries()].filter(([, row]) => row.querySelector('input').checked).map(([id]) => id));
-            if (!older) {
-                checkpointRows.clear();
-                checkpointList.replaceChildren();
-            }
-            for (const item of data.checkpoints) {
-                if (checkpointRows.has(item.id)) continue;
-                const row = document.createElement('div');
-                row.className = 'checkpoint-row';
-                row.dataset.superbatch = item.superbatch;
-                const label = document.createElement('label');
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.name = 'keep';
-                checkbox.value = item.id;
-                checkbox.checked = item.imported || selected.has(item.id);
-                checkbox.disabled = item.imported || !finishCheckpoints;
-                label.append(checkbox, document.createTextNode(`SB ${item.superbatch}${item.imported ? ' · imported' : ''}`));
-                const size = document.createElement('span');
-                size.textContent = `${(item.size / 1024 ** 2).toLocaleString(undefined, {maximumFractionDigits: 1})} MB`;
-                size.title = `SHA-256 ${item.sha256}`;
-                row.append(label, size);
-                for (const [id, title] of [[item.archive, 'Checkpoint'], [item.network, 'Network']]) {
-                    const link = document.createElement('a');
-                    link.href = `/training/${detail.dataset.runId}/artifacts/${id}/`;
-                    link.textContent = title;
-                    link.setAttribute('aria-label', `Download ${title.toLowerCase()} for superbatch ${item.superbatch}`);
-                    row.append(link);
-                }
-                if (finishCheckpoints && detail.dataset.resumable === 'true') {
-                    const resume = document.createElement('button');
-                    resume.className = 'button';
-                    resume.type = 'submit';
-                    resume.name = 'action';
-                    resume.value = 'resume';
-                    resume.textContent = 'Resume';
-                    resume.setAttribute('aria-label', `Resume from superbatch ${item.superbatch}`);
-                    resume.addEventListener('click', () => { document.getElementById('resume-checkpoint-id').value = item.id; });
-                    row.append(resume);
-                }
-                checkpointRows.set(item.id, row);
-            }
-            const sorted = [...checkpointRows.values()].sort((a, b) => Number(b.dataset.superbatch) - Number(a.dataset.superbatch));
-            for (const row of sorted) checkpointList.append(row);
-            checkpointCursor = data.next;
-            loadedCount = data.total;
-            if (!older) loadedLatest = String(data.latest || '');
-            checkpointCount.textContent = data.total;
-            loadCheckpoints.hidden = checkpointRows.size >= data.total;
-            loadCheckpoints.textContent = 'Load older checkpoints';
-            checkpointFeedback.textContent = data.total ? `${checkpointRows.size} of ${data.total} checkpoints` : 'No checkpoints yet';
-            checkpointActions();
-        } catch (error) {
-            checkpointFeedback.textContent = error.message;
-            loadCheckpoints.hidden = false;
-            loadCheckpoints.textContent = 'Retry loading checkpoints';
-        } finally {
-            checkpointLoading = false;
-            loadCheckpoints.disabled = false;
-        }
+    function showLoss(index, announce = false) {
+        if (!lossCoordinates.length) return;
+        selectedLoss = clampLoss(index, 0, lossCoordinates.length - 1);
+        const point = lossCoordinates[selectedLoss];
+        lossCrosshair.setAttribute('x1', point.x);
+        lossCrosshair.setAttribute('x2', point.x);
+        lossCrosshair.setAttribute('visibility', 'visible');
+        lossMarker.setAttribute('cx', point.x);
+        lossMarker.setAttribute('cy', point.y);
+        lossMarker.setAttribute('visibility', 'visible');
+        const text = `Superbatch ${point.step.toLocaleString()}\nLoss ${point.loss}`;
+        lossTooltip.textContent = text;
+        lossTooltip.hidden = false;
+        const matrix = lossSvg.getScreenCTM();
+        const bounds = lossPlot.getBoundingClientRect();
+        const position = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+        const x = position.x - bounds.left;
+        const y = position.y - bounds.top;
+        const left = x + 12 + lossTooltip.offsetWidth > bounds.width ? x - lossTooltip.offsetWidth - 12 : x + 12;
+        lossTooltip.style.left = `${clampLoss(left, 0, bounds.width - lossTooltip.offsetWidth)}px`;
+        lossTooltip.style.top = `${clampLoss(y - lossTooltip.offsetHeight - 12, 0, bounds.height - lossTooltip.offsetHeight)}px`;
+        if (announce) lossReadout.textContent = text.replace('\n', ', ');
     }
-    checkpointDetails.addEventListener('toggle', () => {
-        if (checkpointDetails.open && checkpointsChanged()) fetchCheckpoints();
+    function drawLoss() {
+        const selectedStep = lossCoordinates[selectedLoss]?.step;
+        lossChart.hidden = lossPoints.length === 0;
+        if (!lossPoints.length) {
+            lossCoordinates = [];
+            hideLoss();
+            return;
+        }
+        const width = Math.max(180, lossSvg.clientWidth);
+        const height = lossSvg.clientHeight;
+        const left = 56;
+        const right = width - 12;
+        const top = 10;
+        const bottom = height - 22;
+        const low = Math.min(...lossPoints.map(point => point.loss));
+        const high = Math.max(...lossPoints.map(point => point.loss));
+        const padding = (high - low || Math.abs(low) || 1) * 0.15;
+        const minimum = low - padding;
+        const maximum = high + padding;
+        const first = lossPoints[0].step;
+        const last = lossPoints[lossPoints.length - 1].step;
+        const x = step => first === last ? (left + right) / 2 : left + (right - left) * (step - first) / (last - first);
+        const y = loss => top + (bottom - top) * (maximum - loss) / (maximum - minimum);
+        lossCoordinates = lossPoints.map(point => ({...point, x: x(point.step), y: y(point.loss)}));
+        const content = document.createDocumentFragment();
+        const element = (tag, attributes, text) => {
+            const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+            if (text !== undefined) node.textContent = text;
+            return node;
+        };
+        lossSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        for (const value of [minimum, (minimum + maximum) / 2, maximum]) {
+            content.append(element('line', {x1: left, x2: right, y1: y(value), y2: y(value), class: 'history-chart-grid'}));
+            content.append(element('text', {x: left - 9, y: y(value), 'text-anchor': 'end', 'dominant-baseline': 'middle'}, value.toPrecision(3)));
+        }
+        const ticks = Math.min(last - first, width < 340 ? 2 : 4);
+        for (let i = 0; i <= ticks; i++) {
+            const step = ticks ? Math.round(first + (last - first) * i / ticks) : first;
+            content.append(element('line', {x1: x(step), x2: x(step), y1: top, y2: bottom, class: 'history-chart-grid'}));
+            content.append(element('text', {x: x(step), y: height - 6, 'text-anchor': !ticks ? 'middle' : i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}, step.toLocaleString(undefined, {notation: step >= 10000 ? 'compact' : 'standard'})));
+        }
+        const points = lossPoints.map(point => `${x(point.step)},${y(point.loss)}`).join(' ');
+        if (lossPoints.length > 1) {
+            content.append(element('polygon', {points: `${x(first)},${bottom} ${points} ${x(last)},${bottom}`, fill: 'var(--brand)', class: 'history-chart-area'}));
+            content.append(element('polyline', {points, stroke: 'var(--brand)', class: 'history-chart-path'}));
+        }
+        const end = lossPoints[lossPoints.length - 1];
+        content.append(element('circle', {cx: x(end.step), cy: y(end.loss), r: 4, fill: 'var(--brand)', class: 'history-chart-endpoint'}));
+        lossCrosshair = element('line', {y1: top, y2: bottom, class: 'history-chart-crosshair', visibility: 'hidden'});
+        lossMarker = element('circle', {r: 4, class: 'history-chart-hover-point', visibility: 'hidden'});
+        content.append(lossCrosshair, lossMarker);
+        lossSvg.replaceChildren(content);
+        const previous = lossCoordinates.findIndex(point => point.step === selectedStep);
+        if (previous >= 0) showLoss(previous);
+        else hideLoss();
+        document.getElementById('training-loss-range').textContent = `${low.toPrecision(4)} – ${high.toPrecision(4)}`;
+    }
+    function inspectLoss(event) {
+        if (!lossCoordinates.length) return;
+        const matrix = lossSvg.getScreenCTM();
+        if (!matrix) return;
+        const position = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()).x;
+        let low = 0;
+        let high = lossCoordinates.length - 1;
+        while (low < high) {
+            const middle = (low + high) >> 1;
+            if (lossCoordinates[middle].x < position) low = middle + 1;
+            else high = middle;
+        }
+        const index = low > 0 && position - lossCoordinates[low - 1].x < lossCoordinates[low].x - position ? low - 1 : low;
+        showLoss(index);
+    }
+    lossPlot.addEventListener('pointermove', inspectLoss);
+    lossPlot.addEventListener('pointerdown', inspectLoss);
+    lossPlot.addEventListener('pointerleave', event => {
+        if (event.pointerType === 'mouse') hideLoss();
     });
-    loadCheckpoints.addEventListener('click', () => fetchCheckpoints(loadedCount >= 0));
-    document.getElementById('checkpoint-form').addEventListener('submit', event => {
-        if (event.submitter?.value === 'finish-checkpoints' && !window.confirm('Import selected networks and delete all remaining checkpoint archives and unimported checkpoint networks?')) event.preventDefault();
+    lossPlot.addEventListener('pointercancel', hideLoss);
+    lossPlot.addEventListener('blur', hideLoss);
+    lossPlot.addEventListener('focus', () => {
+        if (selectedLoss < 0) showLoss(lossCoordinates.length - 1, true);
     });
+    lossPlot.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(event.key)) return;
+        event.preventDefault();
+        if (event.key === 'Escape') return hideLoss();
+        const index = selectedLoss < 0 ? lossCoordinates.length - 1 : selectedLoss;
+        if (event.key === 'Home') showLoss(0, true);
+        else if (event.key === 'End') showLoss(lossCoordinates.length - 1, true);
+        else showLoss(index + (event.key === 'ArrowLeft' ? -1 : 1), true);
+    });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(drawLoss).observe(lossPlot);
+    else window.addEventListener('resize', drawLoss);
     const labels = {
-        loss: ['Loss', ''], superbatch: ['Superbatch', ''], positions_per_second: ['Positions / second', ''], elapsed_seconds: ['Elapsed', ''],
-    };
-    const resourceLabels = {
-        gpu_percent: ['GPU use', '%'], gpu_used_mb: ['GPU memory', ' MB'], cpu_percent: ['CPU use', '%'],
-        ram_used_gb: ['RAM', ' GB'], disk_free_gb: ['Storage free', ' GB'], learning_rate: ['Learning rate', ''],
         downloaded_bytes: ['Downloaded', ''], converted_files: ['Converted files', ''],
-        checkpoints_saved: ['Checkpoints stored', ''], last_checkpoint_superbatch: ['Latest checkpoint SB', ''], dataset_games: ['Dataset games', ''],
+        loss: ['Loss', ''], superbatch: ['Superbatch', ''], positions_per_second: ['Positions / second', ''], elapsed_seconds: ['Elapsed', ''], remaining_seconds: ['Estimated remaining', ''],
     };
     function update(data) {
         if (data.state) detail.dataset.runState = data.state;
-        if (data.checkpoint_count !== undefined) checkpointCount.textContent = data.checkpoint_count;
-        if (data.checkpoint_latest !== undefined) latestCheckpoint = String(data.checkpoint_latest || '');
-        checkpointActions();
-        if (checkpointDetails.open && checkpointsChanged()) fetchCheckpoints();
-        const states = {VALIDATING: 'Checking inputs', PREPARING: 'Checking inputs', QUEUED: 'Waiting for worker', DOWNLOADING: 'Downloading', CONVERTING: 'Converting', COMPILING: 'Compiling', TRAINING: 'Training', SAVING: 'Saving outputs', COMPLETED: 'Completed', FAILED: 'Failed', CANCELLED: 'Cancelled'};
-        const lines = [`${detail.dataset.runName} · ${detail.dataset.engine}`, states[detail.dataset.runState] || detail.dataset.runState, `Progress: ${Number(data.metrics.progress || 0).toFixed(1)}%`];
-        for (const [key, [label, unit]] of Object.entries({...labels, ...resourceLabels})) {
+        const lines = [`${detail.dataset.runState === 'TRAINING' ? 'Training progress' : 'Progress'}: ${Number(data.metrics.progress || 0).toFixed(1)}%`];
+        for (const [key, [label, unit]] of Object.entries(labels)) {
             const value = data.metrics[key];
             if (value === undefined) continue;
+            if (key === 'downloaded_bytes' && detail.dataset.runState !== 'DOWNLOADING') continue;
             let text = typeof value === 'number' ? value.toLocaleString(undefined, {maximumSignificantDigits: 6}) + unit : String(value);
-            if (key === 'elapsed_seconds') text = `${Math.floor(value / 3600)}h ${Math.floor(value / 60) % 60}m`;
+            if (key === 'elapsed_seconds' || key === 'remaining_seconds') text = `${Math.floor(value / 3600)}h ${Math.floor(value / 60) % 60}m ${Math.floor(value % 60)}s`;
+            if (key === 'superbatch') {
+                text = `${value}${data.metrics.end_superbatch ? ` / ${data.metrics.end_superbatch}` : ''}`;
+                if (data.metrics.superbatch_progress !== undefined) text += ` (${Number(data.metrics.superbatch_progress).toFixed(1)}%)`;
+            }
             if (key === 'downloaded_bytes') text = `${(value / 1024 ** 3).toFixed(2)} GB`;
-            if (key in labels || ['learning_rate', 'downloaded_bytes', 'converted_files'].includes(key)) {
-                lines.push(`${label}: ${text}`);
-                continue;
-            }
-            const container = document.getElementById('training-resources');
-            let item = container.querySelector(`[data-metric="${key}"]`);
-            if (!item) {
-                item = document.createElement('div');
-                item.dataset.metric = key;
-                const title = document.createElement('dt');
-                title.textContent = label;
-                item.append(title, document.createElement('dd'));
-                container.append(item);
-            }
-            item.lastElementChild.textContent = text;
+            lines.push(`${label}: ${text}`);
         }
         metrics.textContent = lines.join('\n');
-        const points = (data.history || []).filter(point => Number.isFinite(point.loss));
-        if (points.length > 1) {
-            document.getElementById('training-chart').hidden = false;
-            const low = Math.min(...points.map(point => point.loss));
-            const high = Math.max(...points.map(point => point.loss));
-            const range = high - low || 1;
-            document.getElementById('training-loss-line').setAttribute('d', points.map((point, index) => `${index ? 'L' : 'M'}${(index * 796 / (points.length - 1) + 2).toFixed(1)},${(190 - 180 * (point.loss - low) / range).toFixed(1)}`).join(' '));
-            document.getElementById('training-loss-range').textContent = `${low.toPrecision(4)} – ${high.toPrecision(4)}`;
-        }
-        const log = document.getElementById('training-log');
-        if (data.log !== undefined && log.textContent !== data.log) {
-            const scroll = log.scrollTop;
-            log.textContent = data.log;
-            log.scrollTop = document.getElementById('training-follow-log').checked ? log.scrollHeight : scroll;
-        }
+        if (data.updated) detail.dataset.updated = data.updated;
+        const reportTime = new Date(detail.dataset.updated);
+        if (!Number.isNaN(reportTime.getTime())) document.getElementById('training-last-report').textContent = `Last worker report: ${reportTime.toLocaleTimeString()}`;
+        lossPoints = (data.history || []).filter(point => Number.isFinite(point.loss) && Number.isFinite(point.step)).sort((a, b) => a.step - b.step);
+        drawLoss();
+
     }
     update({metrics: JSON.parse(document.getElementById('training-initial-metrics').textContent), history: JSON.parse(document.getElementById('training-initial-history').textContent)});
     window.addEventListener('live-training', event => update(event.detail));

@@ -170,11 +170,7 @@ TRAINING_ROOT = os.environ.get('MATTBENCH_TRAINING_ROOT', os.path.join(BASE_DIR,
 TRAINING_CREDENTIAL_KEY = os.environ.get('MATTBENCH_CREDENTIAL_KEY', '')
 TRAINING_CREDENTIAL_KEY_FILE = os.environ.get('MATTBENCH_CREDENTIAL_KEY_FILE', '')
 if DEBUG and not TRAINING_CREDENTIAL_KEY and not TRAINING_CREDENTIAL_KEY_FILE:
-    local_app_data = os.environ.get('LOCALAPPDATA')
-    if local_app_data:
-        local_credential_key_file = os.path.join(local_app_data, 'MattBench', 'credential.key')
-        if os.path.isfile(local_credential_key_file):
-            TRAINING_CREDENTIAL_KEY_FILE = local_credential_key_file
+    TRAINING_CREDENTIAL_KEY_FILE = os.path.join(BASE_DIR, 'Deploy', 'credential.key')
 TRAINING_WORKER_TIMEOUT = 600
 TRAINING_VALIDATION_TIMEOUT = int(os.environ.get('MATTBENCH_VALIDATION_TIMEOUT', '600'))
 TRAINING_UPLOAD_TIMEOUT = int(os.environ.get('MATTBENCH_UPLOAD_TIMEOUT', '86400'))

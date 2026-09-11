@@ -75,6 +75,7 @@ class TrainingDataset(models.Model):
 
 class TrainingWorker(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    machine = models.OneToOneField('OpenBench.Machine', on_delete=models.SET_NULL, null=True, blank=True, related_name='training_capability')
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='training_workers')
     name = models.CharField(max_length=128)
     secret_hash = models.CharField(max_length=64)

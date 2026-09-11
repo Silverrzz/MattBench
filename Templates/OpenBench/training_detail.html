@@ -1,9 +1,9 @@
 {% extends 'OpenBench/base.html' %}
 {% load static live %}
 {% block page_heading %}{% endblock %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script><script src="{% static 'training.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'history_chart.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script><script src="{% static 'training.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block content %}
-<div class="workload-container training-detail" data-run-id="{{ run.id }}" data-run-name="{{ run.name }}" data-engine="{{ run.engine.name }}" data-run-state="{{ run.state }}" data-checkpoint-latest="{{ latest_checkpoint.pk|default:'' }}" data-resumable="{{ run.snapshot.settings.resume_supported|yesno:'true,false' }}">
+<div class="workload-container training-detail" data-updated="{{ run.updated|date:'c' }}" data-run-id="{{ run.id }}" data-run-name="{{ run.name }}" data-engine="{{ run.engine.name }}" data-run-state="{{ run.state }}" data-checkpoint-latest="{{ latest_checkpoint.pk|default:'' }}" data-resumable="{{ run.snapshot.settings.resume_supported|yesno:'true,false' }}">
     <div id="config">
         <div id="training-config" data-live>{% live_region 'training-config' %}
             <h2>Configuration</h2>
@@ -22,30 +22,14 @@
                 <tr><td class="td-label">Worker</td><td>{% if run.worker %}<a href="/workers/{{ run.worker_id }}/">{{ run.worker.name }}</a>{% else %}Unassigned{% endif %}</td></tr>
                 <tr><td class="td-label">Hardware</td><td>{{ run.worker.info.gpu|default:'—' }}</td></tr>
                 <tr><td class="td-label">Backend</td><td>{{ run.snapshot.settings.backend|upper }}</td></tr>
-                <tr><td class="td-label">CPU threads</td><td>{{ run.snapshot.settings.threads }}</td></tr>
-                <tr><td class="td-label">Minimum VRAM</td><td>{{ run.snapshot.settings.min_vram_gb }} GB</td></tr>
-                <tr><td class="td-label">Minimum disk</td><td>{{ run.snapshot.settings.min_disk_gb }} GB</td></tr>
+                <tr><td class="td-label">Assigned worker threads</td><td>{{ run.worker.info.threads|default:run.snapshot.settings.threads }}</td></tr>
+                <tr><td class="td-label">Invalid games</td><td>{{ run.snapshot.settings.skip_broken_games|yesno:'Skip and report,Stop training' }}</td></tr>
+                {% if run.metrics.skipped_bytes or run.metrics.skipped_games %}<tr><td class="td-label">Discarded data</td><td>{{ run.metrics.skipped_games|default:0 }} games · {{ run.metrics.skipped_bytes|default:0 }} invalid bytes</td></tr>{% endif %}
                 <tr><td class="td-label">Time limit</td><td>{{ run.snapshot.settings.max_hours }} hours</td></tr>
                 <tr><td class="td-label">Checkpoints</td><td>{% if run.snapshot.settings.checkpoint_keep_last %}Keep latest {{ run.snapshot.settings.checkpoint_keep_last }}{% else %}Keep all{% endif %}</td></tr>
                 <tr><td class="td-label">Local copies</td><td>{{ run.snapshot.settings.delete_uploaded_checkpoints|yesno:'Delete after upload,Keep on worker' }}</td></tr>
                 <tr><td class="td-label">Dataset preparation</td><td>Shuffle {{ run.snapshot.settings.shuffle|yesno:'on,off' }} · Analysis {{ run.snapshot.settings.analyse_dataset|yesno:'on,off' }}</td></tr>
             </table>
-        {% endlive_region %}</div>
-        <div id="training-artifacts" class="mt-3" data-live>{% live_region 'training-artifacts' %}
-            <h2>Outputs</h2>
-            <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Network</th></tr></thead><tbody>
-                {% for item in output_artifacts %}<tr><td><a href="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{{ item.name }}</a></td><td>{{ item.size|filesizeformat }}</td><td>
-                    {% if item.network_id %}<a href="/networks/{{ run.engine.name }}/">Imported</a>{% elif item.kind == 'network' and can_register %}<details class="artifact-import"><summary>Import</summary><form method="post" action="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{% csrf_token %}<label class="sr-only" for="net-name-{{ item.pk }}">Network name</label><input id="net-name-{{ item.pk }}" name="name" data-preserve-live value="{{ run.name }}-{{ item.pk }}" required maxlength="64" pattern="[A-Za-z0-9_.-]+"><button class="button" type="submit">Import</button></form></details>{% else %}—{% endif %}
-                </td></tr>{% empty %}<tr><td colspan="3">No outputs yet</td></tr>{% endfor %}
-            </tbody></table>
-        {% endlive_region %}</div>
-        <div id="training-dataset-preparation" class="mt-3" data-live>{% live_region 'training-dataset-preparation' %}
-            {% for stage, preparation in run.preparation.items %}{% if preparation.statistics %}
-            <details class="training-options"><summary>Dataset analysis &middot; {{ stage }}</summary>
-                {% if preparation.statistics.analysis %}<pre class="training-code">{{ preparation.statistics.analysis }}</pre>{% endif %}
-                {% if preparation.published and preparation.analysis_report %}<a href="https://huggingface.co/datasets/{{ preparation.repo }}/blob/{{ preparation.published }}/{{ preparation.analysis_report }}" rel="noreferrer">Analysis on Hugging Face &nearr;</a> &middot; {% endif %}
-                {% if preparation.published %}<a href="https://huggingface.co/datasets/{{ preparation.repo }}/tree/{{ preparation.published }}" rel="noreferrer">Open dataset &nearr;</a>{% endif %}
-            </details>{% endif %}{% endfor %}
         {% endlive_region %}</div>
     </div>
     <div id="actions">
@@ -57,18 +41,27 @@
         <div class="anchor-container"><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/configuration/">Download config</a><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/log/">Download log</a></div>
         <p id="workload-feedback" class="field-note" role="status"></p>
         <div id="training-status" data-live>{% live_region 'training-status' %}{% if run.error %}<p class="training-error" role="alert">{{ run.error }}</p>{% endif %}{% if run.cancel_requested and not run.terminal %}<p class="training-notice">Stopping…</p>{% endif %}{% endlive_region %}</div>
-        <pre class="long-statblock" id="long-statblock">{{ run.name }} · {{ run.engine.name }}
-{{ run.get_state_display }}
-Progress: {{ run.metrics.progress|default:0 }}%</pre>
-        <div id="training-chart" hidden><h2>Training loss</h2><span id="training-loss-range" class="field-note"></span><svg viewBox="0 0 800 200" role="img" aria-label="Training loss over time" preserveAspectRatio="none"><path id="training-loss-line" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"></path></svg></div>
-        <details class="training-options mt-3"><summary>Worker telemetry</summary><dl id="training-resources" class="training-resources"></dl></details>
+        <pre class="long-statblock" id="long-statblock">Progress: {{ run.metrics.progress|default:0 }}%</pre>
+        <section id="training-chart" class="history-chart" aria-labelledby="training-loss-heading" hidden>
+            <div class="history-chart-heading"><h2 id="training-loss-heading">Training loss</h2><span id="training-loss-range" class="history-chart-feedback"></span></div>
+            <div class="history-chart-plot" tabindex="0" role="group" aria-labelledby="training-loss-heading" aria-describedby="training-loss-help">
+                <svg class="history-chart-graph" role="img" aria-label="Training loss by superbatch"></svg>
+                <div id="training-loss-tooltip" class="history-chart-tooltip" aria-hidden="true" hidden></div>
+            </div>
+            <span id="training-loss-help" class="history-chart-sr-only">Hover or touch to inspect loss. Use Left and Right arrows to move between superbatches, Home and End to jump to the first and last, and Escape to dismiss.</span>
+            <span id="training-loss-readout" class="history-chart-sr-only" aria-live="polite" aria-atomic="true"></span>
+        </section>
+        <div id="training-artifacts" class="mt-3" data-live>{% live_region 'training-artifacts' %}
+            <h2>Outputs</h2>
+            <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">Network</th></tr></thead><tbody>
+                {% for item in output_artifacts %}<tr><td><a href="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{{ item.name }}</a></td><td>{{ item.size|filesizeformat }}</td><td>{{ item.output_label }}</td><td>
+                    {% if item.network_id %}<a href="/networks/{{ run.engine.name }}/">Imported</a>{% elif item.kind == 'network' and can_register %}<details class="artifact-import"><summary>Import</summary><form method="post" action="/training/{{ run.id }}/artifacts/{{ item.pk }}/">{% csrf_token %}<label class="sr-only" for="net-name-{{ item.pk }}">Network name</label><input id="net-name-{{ item.pk }}" name="name" data-preserve-live value="{{ run.name }}-{{ item.pk }}" required maxlength="64" pattern="[A-Za-z0-9_.-]+"><button class="button" type="submit">Import</button></form></details>{% else %}—{% endif %}
+                </td></tr>{% empty %}<tr><td colspan="4">No outputs yet</td></tr>{% endfor %}
+            </tbody></table>
+        {% endlive_region %}</div>
+        <p class="field-note" id="training-last-report"></p>
     </div>
-    <div class="workload-section">
-        <details class="training-options" id="checkpoint-details"><summary>Checkpoints <span id="checkpoint-count">{{ run.checkpoints.count }}</span></summary>
-            <form method="post" id="checkpoint-form">{% csrf_token %}<input type="hidden" name="checkpoint" id="resume-checkpoint-id"><div id="checkpoint-list" class="checkpoint-list"></div><p id="checkpoint-feedback" role="status"></p><div class="anchor-container"><button class="anchorbutton" id="load-checkpoints" type="button">Load checkpoints</button>{% if can_manage %}<button class="anchorbutton btn-blue" id="finish-checkpoints" type="submit" name="action" value="finish-checkpoints" {% if not run.terminal %}disabled{% endif %}>Import selected &amp; clean up</button>{% endif %}</div></form>
-        </details>
-        <details class="training-options mt-3"><summary>Log</summary><label class="choice"><input id="training-follow-log" type="checkbox" checked>Follow output</label><pre id="training-log" class="training-log" tabindex="0">{{ run.log_tail }}</pre></details>
-    </div>
+
 </div>
 {{ run.metrics|json_script:'training-initial-metrics' }}
 {{ run.history|json_script:'training-initial-history' }}

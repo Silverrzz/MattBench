@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import subprocess
 import sys
 import uuid
@@ -11,6 +12,56 @@ from pathlib import Path
 
 import psutil
 from packaging.requirements import Requirement
+
+
+def native_command(args, cwd, environment):
+    arguments = list(map(str, args))
+    executable = arguments[0]
+    if '/' in executable or '\\' in executable:
+        candidate = Path(executable)
+        if not candidate.is_absolute():
+            candidate = Path(cwd) / candidate
+        if os.name == 'nt' and not candidate.is_file() and candidate.suffix.lower() != '.exe':
+            candidate = candidate.with_name(candidate.name + '.exe')
+        if not candidate.is_file():
+            raise RuntimeError('Command executable was not found: %s (working directory: %s).' % (candidate, cwd))
+        arguments[0] = str(candidate.resolve())
+    else:
+        resolved = shutil.which(executable, path=environment.get('PATH', ''))
+        if not resolved:
+            raise RuntimeError('Command executable %s was not found on the worker PATH.' % executable)
+        arguments[0] = resolved
+    return arguments
+
+
+def windows_build_environment(environment):
+    if os.name != 'nt':
+        return environment
+    locator = Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'Microsoft Visual Studio' / 'Installer' / 'vswhere.exe'
+    if not locator.is_file():
+        raise RuntimeError('Windows training requires Visual Studio C++ Build Tools and the Windows SDK.')
+    installation = subprocess.check_output([str(locator), '-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'], text=True, timeout=30).strip()
+    script = Path(installation) / 'VC' / 'Auxiliary' / 'Build' / 'vcvarsall.bat'
+    if not installation or not script.is_file():
+        raise RuntimeError('Install the Visual Studio Desktop development with C++ workload before starting training.')
+    shell = os.environ.get('COMSPEC', r'C:\Windows\System32\cmd.exe')
+    result = subprocess.run('"%s" /d /s /c ""%s" x64 >nul && set"' % (shell, script), env=environment, capture_output=True, text=True, errors='replace', timeout=60)
+    if result.returncode:
+        raise RuntimeError('Visual Studio could not initialise its x64 compiler environment. Repair the C++ Build Tools and Windows SDK installation.')
+    selected = ('PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'VCTOOLSINSTALLDIR', 'VSINSTALLDIR', 'WINDOWSSDKDIR', 'WINDOWSSDKVERSION', 'UNIVERSALCRTSDKDIR', 'UCRTVERSION')
+    configured = dict(environment)
+    for line in result.stdout.splitlines():
+        name, separator, value = line.partition('=')
+        if separator and name.upper() in selected:
+            configured[name.upper()] = value
+    linker = Path(configured.get('VCTOOLSINSTALLDIR', '')) / 'bin' / 'Hostx64' / 'x64' / 'link.exe'
+    compiler = linker.with_name('cl.exe')
+    if not linker.is_file() or not compiler.is_file() or not configured.get('LIB') or not configured.get('INCLUDE'):
+        raise RuntimeError('The Microsoft x64 compiler, linker or Windows SDK paths are missing.')
+    configured['PATH'] = str(linker.parent) + os.pathsep + configured.get('PATH', '')
+    configured['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'] = str(linker)
+    configured['CUDAHOSTCXX'] = str(compiler)
+    return configured
 
 
 def dependency_versions():
@@ -92,11 +143,22 @@ def runtime_info(pawnocchio, image):
     with pawnocchio.open('rb') as source:
         pawnocchio_hash = hashlib.file_digest(source, 'sha256').hexdigest()
     packages = dependency_versions()
-    return {'worker_sha256': digest.hexdigest(), 'python': platform.python_version(), 'platform': sys.platform, 'packages': packages, 'execution_image': image, 'rust': 'image-pinned' if image else version(['rustc', '--version']), 'cargo': 'image-pinned' if image else version(['cargo', '--version']), 'pawnocchio_sha256': pawnocchio_hash}
+    runtime = {'worker_sha256': digest.hexdigest(), 'python': platform.python_version(), 'platform': sys.platform, 'packages': packages, 'execution_image': image, 'rust': 'image-pinned' if image else version(['rustc', '--version']), 'cargo': 'image-pinned' if image else version(['cargo', '--version']), 'pawnocchio_sha256': pawnocchio_hash}
+    if os.name == 'nt' and not image:
+        configured = windows_build_environment(dict(os.environ))
+        runtime['msvc'] = Path(configured['VCTOOLSINSTALLDIR']).name
+        runtime['windows_sdk'] = configured.get('WINDOWSSDKVERSION', '').rstrip('\\/')
+    return runtime
 
 
 def stop_previous(directory):
+    for path in directory.parent.glob('.process-' + directory.name + '-*.json'):
+        stop_process_record(path)
     path = directory.parent / ('.process-' + directory.name + '.json')
+    stop_process_record(path)
+
+
+def stop_process_record(path):
     if not path.exists():
         return
     record = json.loads(path.read_text(encoding='utf-8'))
@@ -127,14 +189,14 @@ def remove_container(name):
         raise RuntimeError('Cannot confirm the previous execution container stopped. Restore Docker connectivity before restarting this worker.')
 
 
-def isolated_command(args, cwd, environment, reporter):
+def isolated_command(args, cwd, environment, reporter, cpu_threads=None):
     info = reporter.job['worker_info']
     image = info.get('execution_image')
     if not image:
         return args, environment, None
     directory = reporter.directory
     name = 'mattbench-%s-%s' % (reporter.job['id'], uuid.uuid4().hex[:12])
-    command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '1024', '--user', '%d:%d' % (os.getuid(), os.getgid()), '--cpus', str(reporter.job['snapshot']['settings']['threads']), '--memory', '%sg' % info['memory_gb'], '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '--mount', 'type=bind,src=%s,dst=%s' % (directory, directory), '--workdir', str(cwd)]
+    command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '1024', '--user', '%d:%d' % (os.getuid(), os.getgid()), '--cpus', str(cpu_threads or info['threads']), '--memory', '%sg' % info['memory_gb'], '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '--mount', 'type=bind,src=%s,dst=%s' % (directory, directory), '--workdir', str(cwd)]
     for key in ('pawnocchio_path', 'combiner_path'):
         executable = info[key]
         command.extend(['--mount', 'type=bind,src=%s,dst=%s,readonly' % (executable, executable)])
@@ -144,7 +206,7 @@ def isolated_command(args, cwd, environment, reporter):
         else:
             command.extend(['--device', '/dev/kfd', '--device', '/dev/dri', '--group-add', 'video', '--group-add', 'render'])
     for key, value in environment.items():
-        if key.startswith('MATTBENCH_') or key in ('HOME', 'TMPDIR', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS'):
+        if key.startswith('MATTBENCH_') or key in ('HOME', 'TMPDIR', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS') or key in reporter.job['snapshot'].get('environment', {}):
             command.extend(['--env', key + '=' + value])
     command.extend([image, *args])
     return command, dict(os.environ), name

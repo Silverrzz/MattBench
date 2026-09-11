@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenBench GPU training worker
+Description=OpenBench worker
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -10,8 +10,9 @@ Group=training
 StateDirectory=openbench-worker
 SupplementaryGroups=docker
 WorkingDirectory=/var/lib/openbench-worker
+Environment=OPENBENCH_WORKER_ROOT=/var/lib/openbench-worker
 EnvironmentFile=/etc/openbench/worker.env
-ExecStart=/opt/openbench/venv/bin/python /opt/openbench/Client/training_worker.py --directory /var/lib/openbench-worker --execution-image ${MATTBENCH_EXECUTION_IMAGE}
+ExecStart=/opt/openbench/venv/bin/python /opt/openbench/Client/client.py --no-client-downloads --threads ${OPENBENCH_THREADS} --nsockets 1 --training-directory /var/lib/openbench-worker --training-execution-image ${MATTBENCH_EXECUTION_IMAGE}
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=360

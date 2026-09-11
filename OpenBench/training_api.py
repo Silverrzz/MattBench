@@ -23,8 +23,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
-from OpenBench.models import Profile, TrainingArtifact, TrainingRun, TrainingWorker
+from OpenBench.models import Machine, Profile, TrainingArtifact, TrainingRun, TrainingWorker
 from OpenBench.training import download_access, hf_token, xet_access
+from OpenBench.training import worker_requirement_errors
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
 from OpenBench.lifecycle import record_event
 from OpenBench.training_storage import make_directory, storage_lock, sync_directory, verify_artifact
@@ -50,6 +51,8 @@ def worker_endpoint(view):
             if not worker or not secrets.compare_digest(worker.secret_hash, hashlib.sha256(key.encode()).hexdigest()) or not Profile.objects.filter(user=worker.owner, enabled=True).exists():
                 return JsonResponse({'error': 'Worker authentication failed.'}, status=403)
             request.training_worker = worker
+            if worker.machine_id:
+                Machine.objects.filter(pk=worker.machine_id).update(updated=timezone.now())
             response = view(request, *args, **kwargs)
         except (ValueError, TypeError, KeyError, IndexError, ValidationError) as error:
             message = '; '.join(error.messages) if isinstance(error, ValidationError) else 'Invalid worker request.'
@@ -62,14 +65,23 @@ def worker_endpoint(view):
 
 
 @csrf_exempt
-@sensitive_post_parameters('password')
+@sensitive_post_parameters('password', 'token', 'machine_secret')
 @require_POST
 def register(request):
-    user = authenticate(username=request.POST.get('username'), password=request.POST.get('password'))
+    machine = None
+    if request.POST.get('machine_id'):
+        machine = Machine.objects.select_related('user').filter(pk=request.POST['machine_id']).first()
+        if not machine or not secrets.compare_digest(machine.secret, request.POST.get('machine_secret', '')):
+            return JsonResponse({'error': 'Worker authentication failed.'}, status=403)
+        user = machine.user
+    else:
+        user = authenticate(username=request.POST.get('username'), password=request.POST.get('password'))
     if not user or not user.is_active or not Profile.objects.filter(user=user, enabled=True).exists():
         return JsonResponse({'error': 'Enabled account credentials required.'}, status=403)
     try:
         info = json.loads(request.POST.get('info', '{}'))
+        if machine and isinstance(info, dict):
+            info['threads'] = machine.info['concurrency']
         if not isinstance(info, dict) or len(json.dumps(info)) > 8192:
             raise ValueError
         if info.get('protocol') != 3 or info.get('backend') not in ('cuda', 'rocm'):
@@ -93,14 +105,21 @@ def register(request):
     except (ValueError, TypeError):
         return JsonResponse({'error': 'Invalid persistent worker identity.'}, status=400)
     with transaction.atomic():
+        if machine:
+            machine = Machine.objects.select_for_update().get(pk=machine.pk)
         worker, created = TrainingWorker.objects.get_or_create(pk=worker_id, defaults={'owner': user, 'name': name, 'info': info, 'secret_hash': hashlib.sha256(secret.encode()).hexdigest()})
         if not created:
             if worker.owner_id != user.pk or not worker.enabled or not secrets.compare_digest(worker.secret_hash, hashlib.sha256(secret.encode()).hexdigest()):
                 return JsonResponse({'error': 'Worker identity is revoked or belongs to another account.'}, status=403)
+            if TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).exists() and worker.info.get('runtime') != info.get('runtime'):
+                return JsonResponse({'error': 'Finish or cancel the active training run before changing this worker runtime.'}, status=409)
             worker.info = info
             worker.name = name
             worker.updated = timezone.now()
             worker.save(update_fields=['info', 'name', 'updated'])
+        if machine:
+            worker.machine = machine
+            worker.save(update_fields=['machine'])
         record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', '')})
     response = JsonResponse({'worker': str(worker.pk), 'token': secret, 'protocol': 3})
     response['Cache-Control'] = 'no-store'
@@ -130,10 +149,10 @@ def claim(request):
     for run in candidates:
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
-        disk_required = max(config['min_disk_gb'], required_disk_bytes(run.dataset, config) / 1024 ** 3 + config.get('disk_reserve_gb', 10))
+        disk_required = required_disk_bytes(run.dataset, config) / 1024 ** 3 + config.get('disk_reserve_gb', 10)
         if config.get('execution_image') and config['execution_image'] != info.get('execution_image'):
             continue
-        if config['backend'] != info['backend'] or config['min_vram_gb'] > info['vram_gb'] or config['threads'] > info['threads'] or disk_required > free_disk:
+        if worker_requirement_errors(info, config, disk_required):
             continue
         try:
             with transaction.atomic():
@@ -144,6 +163,8 @@ def claim(request):
                 snapshot = {**run.snapshot, 'runtime': runtime, 'resume_semantics': 'optimiser-continuation; dataset reader restarts at the selected stage'}
                 claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=now, updated=now)
                 if claimed:
+                    if worker.machine_id:
+                        Machine.objects.filter(pk=worker.machine_id).update(workload=0, updated=now)
                     record_event('training.started', run, run.owner_id, {'worker_id': str(worker.pk)})
         except IntegrityError:
             return JsonResponse({'run': None})
@@ -232,10 +253,19 @@ def report(request, pk):
         raise ValueError
     log = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', log)
     history = run.history
-    step = clean_metrics.get('step', clean_metrics.get('superbatch', sequence))
-    if 'loss' in metrics and (not history or history[-1]['loss'] != clean_metrics['loss'] or history[-1]['step'] != step):
-        history = (history + [{'time': timezone.now().timestamp(), 'loss': clean_metrics['loss'], 'step': step}])[-600:]
     now = timezone.now()
+    if state == 'TRAINING' or run.state == 'TRAINING':
+        from OpenBench.training_telemetry import bullet_telemetry, merge_loss_history
+        context = run.log_tail
+        if not clean_metrics.get('end_superbatch'):
+            path = Path(settings.TRAINING_ROOT) / str(pk) / 'worker.log'
+            if path.is_file():
+                with path.open(encoding='utf-8', errors='replace') as source:
+                    context = source.read(65536) + '\n' + context
+        clean_metrics, samples = bullet_telemetry(context + log, clean_metrics)
+        if 'loss' in metrics and not samples:
+            samples.append({'loss': metrics['loss'], 'step': metrics.get('step', metrics.get('superbatch', sequence))})
+        history = merge_loss_history(history, samples, now.timestamp())
     changes = {'state': state, 'updated': now, 'metrics': clean_metrics, 'history': history, 'log_tail': (run.log_tail + log)[-32768:], 'report_sequence': sequence}
     if error:
         changes['error'] = error

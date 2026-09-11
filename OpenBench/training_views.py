@@ -20,6 +20,7 @@ from OpenBench.models import Test, TrainingArtifact, TrainingRun, TrainingSchedu
 from OpenBench.models import LifecycleEvent, TrainingDataset
 from OpenBench.lifecycle import record_event
 from OpenBench.training import DEFAULT_SETTINGS, hf_token, relative_path, repo_id, save_credential, validate_schedule
+from OpenBench.training import worker_requirement_errors
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
 
 
@@ -151,12 +152,14 @@ from OpenBench.schedule_builder import schedule_dataset_stages
 
 
 class TrainingForm(forms.Form):
+    skip_broken_games = forms.BooleanField(label='Skip invalid games and report discarded data', initial=True, required=False)
     name = forms.RegexField(label='Network name', regex=r'\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z', max_length=64, error_messages={'invalid': 'Use letters, numbers, dots, dashes or underscores, starting with a letter or number.'})
     engine = forms.ModelChoiceField(queryset=EngineConfig.objects.filter(enabled=True).order_by('name'))
     dataset = forms.ModelChoiceField(queryset=TrainingDataset.objects.none(), widget=forms.HiddenInput, required=False)
     stage_datasets = forms.JSONField(required=False, widget=forms.HiddenInput)
     schedule = forms.ModelChoiceField(queryset=TrainingSchedule.objects.none())
     worker = forms.ModelChoiceField(queryset=TrainingWorker.objects.none(), required=False, empty_label='Any of my compatible workers')
+    environment = forms.CharField(label='Environment variables', required=False, strip=False, max_length=32768, widget=forms.Textarea(attrs={'rows': 3, 'placeholder': 'KEY=value'}))
     checkpoint_retention = forms.ChoiceField(choices=[('latest', 'Keep latest'), ('all', 'Keep all checkpoints')], initial='latest')
     checkpoint_keep_last = forms.IntegerField(label='Checkpoints to keep', min_value=1, max_value=10000, initial=DEFAULT_SETTINGS['checkpoint_keep_last'], required=False)
     delete_uploaded_checkpoints = forms.BooleanField(label='Delete local copies after upload', initial=DEFAULT_SETTINGS['delete_uploaded_checkpoints'], required=False)
@@ -165,12 +168,29 @@ class TrainingForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
-        self.fields['worker'].queryset = TrainingWorker.objects.filter(owner=user, enabled=True, updated__gte=timezone.now() - timedelta(minutes=2)).exclude(info__has_key='demo')
+        cutoff = timezone.now() - timedelta(minutes=2)
+        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), owner=user, enabled=True).exclude(info__has_key='demo')
         self.fields['worker'].label_from_instance = lambda row: '%s / %s' % (row.name, row.info.get('gpu', 'GPU'))
         for name, field in self.fields.items():
             field.widget.attrs.update({'id': 'train-' + name})
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
         self.fields['name'].widget.attrs['placeholder'] = 'Network name'
+
+    def clean_environment(self):
+        environment = {}
+        for index, line in enumerate(self.cleaned_data['environment'].split('\n'), 1):
+            line = line.removesuffix('\r')
+            if not line.strip():
+                continue
+            key, separator, value = line.partition('=')
+            if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or '\x00' in value or '\r' in value:
+                raise ValidationError('Row %d must use KEY=value with a valid variable name.' % index)
+            if key.upper().startswith('MATTBENCH_'):
+                raise ValidationError('Row %d uses a reserved MATTBENCH_ variable name.' % index)
+            if key in environment:
+                raise ValidationError('Row %d repeats a variable name.' % index)
+            environment[key] = value
+        return environment
 
     def clean(self):
         data = super().clean()
@@ -205,6 +225,7 @@ class TrainingForm(forms.Form):
             elif data.get('checkpoint_keep_last') is not None:
                 config['checkpoint_keep_last'] = data['checkpoint_keep_last']
         config['delete_uploaded_checkpoints'] = data.get('delete_uploaded_checkpoints', False)
+        config['skip_broken_games'] = data.get('skip_broken_games', True)
         data['run_settings'] = config
         if schedule and 'mattbench-demo.json' in schedule.files:
             self.add_error('schedule', 'This is a demo schedule. Choose a runnable schedule to start training.')
@@ -212,8 +233,8 @@ class TrainingForm(forms.Form):
             self.add_error('schedule', 'Choose a schedule for this engine.')
         worker = data.get('worker')
         if schedule and worker:
-            if worker.info.get('backend') != config['backend'] or worker.info.get('vram_gb', 0) < config['min_vram_gb'] or worker.info.get('threads', 0) < config['threads'] or worker.info.get('disk_gb', 0) < config['min_disk_gb']:
-                self.add_error('worker', 'This worker does not meet the schedule requirements.')
+            for error in worker_requirement_errors(worker.info, config):
+                self.add_error('worker', error)
         return data
 
 
@@ -234,7 +255,7 @@ def new_training(request):
             run = TrainingRun.objects.create(
                 owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
                 requested_worker=data['worker'],
-                snapshot={'name': schedule.name, 'version': schedule.version, 'files': schedule.files, 'settings': config},
+                snapshot={'name': schedule.name, 'version': schedule.version, 'files': schedule.files, 'settings': config, 'environment': data['environment']},
                 dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
             )
             record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name})
@@ -290,11 +311,21 @@ def training_detail(request, pk):
             record_event('training.created', copy, request.user.pk, {'restart_of': run.pk})
             return redirect(request, '/training/%d/' % copy.pk)
         return redirect(request, '/training/%d/' % pk)
+    output_artifacts = list(run.artifacts.select_related('checkpoint_network', 'checkpoint_archive'))
+    for item in output_artifacts:
+        checkpoint = getattr(item, 'checkpoint_network', None) or getattr(item, 'checkpoint_archive', None)
+        match = re.fullmatch(r'sb-(\d+)\.bin', item.name)
+        item.output_superbatch = checkpoint.superbatch if checkpoint else int(match[1]) if match else 0
+        item.output_label = {'network': 'Network', 'checkpoint': 'Resume checkpoint', 'manifest': 'Manifest', 'log': 'Log'}.get(item.kind, item.kind)
+        if item.kind == 'network' and item.output_superbatch:
+            final = run.state == 'COMPLETED' and item.output_superbatch == run.metrics.get('end_superbatch', run.metrics.get('superbatch'))
+            item.output_label = '%s · SB %d' % ('Final network' if final else 'Network', item.output_superbatch)
+    output_artifacts.sort(key=lambda item: (item.kind != 'network', item.kind != 'checkpoint', -item.output_superbatch, item.name))
     return render(request, 'training_detail.html', {
         'page_title': run.name, 'training_tab': 'runs', 'run': run, 'can_manage': manage and not run.snapshot.get('demo'),
         'can_register': manage and not run.snapshot.get('demo'),
         'latest_checkpoint': run.checkpoints.first(),
-        'output_artifacts': run.artifacts.filter(checkpoint_archive__isnull=True, checkpoint_network__isnull=True),
+        'output_artifacts': output_artifacts,
     })
 
 

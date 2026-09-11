@@ -100,6 +100,8 @@ class Configuration:
         self.blacklist      = []
 
         self.process_args(args)   # Rest of the command line settings
+        self.training_args = args
+        self.training_session = None
         self.check_requirements() # Checks for Make, and g++ or clang++
         self.init_client()        # Create folder structure and verify Syzygy
         self.validate_setup()     # Check the threads and sockets values provided
@@ -1048,6 +1050,7 @@ def server_configure_worker(config):
         'password'    : config.password,
         'system_info' : json.dumps(system_info),
     }
+    payload.update(getattr(config.training_args, 'worker_identity', None) or {})
 
     # Send all of this to the server, and get a Machine Id + Secret Token
     target   = utils.url_join(config.server, 'clientWorkerInfo')
@@ -1064,6 +1067,27 @@ def server_configure_worker(config):
     # Store machine_id, and the secret for this session
     config.machine_id   = response['machine_id']
     config.secret_token = response['secret']
+    configure_training(config)
+
+
+def configure_training(config):
+    if config.training_session:
+        config.training_session.close()
+        config.training_session = None
+    args = config.training_args
+    if args.no_training:
+        return
+    if not args.training_backend and not shutil.which('nvidia-smi'):
+        return
+    import training_worker
+    arguments = ['--server', config.server, '--username', config.username, '--threads', str(config.threads), '--directory', args.training_directory]
+    if config.identity and config.identity != 'None':
+        arguments.extend(['--name', config.identity])
+    for name in ('backend', 'device', 'gpu_name', 'vram_gb', 'execution_image'):
+        value = getattr(args, 'training_' + name)
+        if value is not None:
+            arguments.extend(['--' + name.replace('_', '-'), str(value)])
+    config.training_session = training_worker.main(arguments, worker_config=config)
 
 def server_request_workload(config):
 
@@ -1184,7 +1208,7 @@ def safe_download_network_weights(config, branch):
         return None
 
     credentials = (config.server, config.username, config.password)
-    utils.download_network(*credentials, engine, net_name, net_sha, net_path)
+    utils.download_network(*credentials, engine, net_name, net_sha, net_path, machine_id=config.machine_id, secret=config.secret_token)
 
     return net_path
 
@@ -1359,6 +1383,13 @@ def parse_arguments(client_args):
     p.add_argument(      '--focus'   , help='Prefer certain engine(s)'    , nargs='+'          )
     p.add_argument(      '--only'    , help='Only help certain engine(s)' , nargs='+'          )
     p.add_argument(      '--force'   , help='Prefer engine(s) over priority', nargs='+'         )
+    p.add_argument('--training-directory', default=os.environ.get('MATTBENCH_WORKER_DIRECTORY', os.path.abspath('training-work')))
+    p.add_argument('--no-training', action='store_true', help='Disable GPU training on this worker')
+    p.add_argument('--training-backend', choices=('cuda', 'rocm'))
+    p.add_argument('--training-device')
+    p.add_argument('--training-gpu-name')
+    p.add_argument('--training-vram-gb', type=float)
+    p.add_argument('--training-execution-image', default=os.environ.get('MATTBENCH_EXECUTION_IMAGE'))
 
     # Ignore unknown arguments ( from client )
     worker_args, unknown    = p.parse_known_args()
@@ -1411,6 +1442,9 @@ def run_openbench_worker(client_args):
             # Cleanup on each workload request
             cleanup_client()
 
+            if config.training_session and config.training_session.poll():
+                continue
+
             # Keep asking for a workload until we get a response
             try_forever(server_request_workload, [config], connection_error)
 
@@ -1431,6 +1465,8 @@ def run_openbench_worker(client_args):
         except utils.OpenBenchFatalWorkerException:
             traceback.print_exc()
             time.sleep(TIMEOUT_ERROR)
+            if config.training_session:
+                config.training_session.close()
             config = Configuration(args)
 
             try_forever(server_configure_fastchess, [config], fastchess_error)

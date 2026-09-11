@@ -20,6 +20,7 @@
 
 import argparse
 import importlib
+import json
 import os
 import requests
 import shutil
@@ -97,10 +98,11 @@ def parse_arguments():
 
     # Create and parse all arguments into a raw format
     p.add_argument('-U', '--username'           , help=help_user                , required=req_user  )
-    p.add_argument('-P', '--password'           , help=help_pass                , required=req_pass  )
+    p.add_argument('-P', '--password'           , help=help_pass                , required=False     )
     p.add_argument('-S', '--server'             , help=help_server              , required=req_server)
     p.add_argument(      '--clean'              , help='Force New Client'       , action='store_true')
     p.add_argument(      '--no-client-downloads', help='NEVER download a client', action='store_true')
+    p.add_argument('--training-directory', default=os.environ.get('MATTBENCH_WORKER_DIRECTORY', os.path.abspath('training-work')))
 
     # Override, to possibly print worker.py's help as well as client.py's
     p.print_help = lambda: custom_help(p.format_help())
@@ -108,8 +110,18 @@ def parse_arguments():
     # Replace with ENV variables if needed
     args, unknown = p.parse_known_args()
     args.username = args.username if args.username else os.environ['OPENBENCH_USERNAME']
-    args.password = args.password if args.password else os.environ['OPENBENCH_PASSWORD']
+    args.password = args.password or os.environ.get('OPENBENCH_PASSWORD')
     args.server   = args.server   if args.server   else os.environ['OPENBENCH_SERVER'  ]
+    args.worker_identity = None
+    identity_path = os.path.join(args.training_directory, 'identity.json')
+    if os.path.isfile(identity_path):
+        with open(identity_path, encoding='utf-8') as source:
+            identity = json.load(source)
+        if identity.get('registered') and identity.get('server') == args.server.rstrip('/') and identity.get('username') == args.username:
+            args.worker_identity = {'worker_id': identity['worker'], 'worker_token': identity['token']}
+    if not args.password and not args.worker_identity:
+        import getpass
+        args.password = getpass.getpass('MattBench password: ')
 
     return args
 
@@ -148,7 +160,7 @@ def download_client_files(args):
                 for root, dirs, files in os.walk(client_dir):
                     for file in files:
                         if file != 'client.py':
-                            shutil.copy2(os.path.join(root, file), os.path.join(os.getcwd(), file))
+                            shutil.copy2(os.path.join(root, file), os.path.join(os.path.dirname(os.path.abspath(__file__)), file))
 
     except:
         raise Exception('Unable to extract .zip archive contents')
@@ -157,7 +169,9 @@ def download_client_files(args):
 if __name__ == '__main__':
 
     # Use client.py's path as the base pathway
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    worker_root = os.environ.get('OPENBENCH_WORKER_ROOT', os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs(worker_root, exist_ok=True)
+    os.chdir(worker_root)
 
     args = parse_arguments()
 

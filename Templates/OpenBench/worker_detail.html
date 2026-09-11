@@ -16,5 +16,11 @@
             {% if worker.disconnect %}<form method="post">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect</button></form>{% endif %}
         </section>
     </div>
+    {% if worker.telemetry %}
+    <section class="workspace-panel workspace-stack">
+        <h2>Worker telemetry</h2>
+        <dl class="workspace-facts">{% for label, value in worker.telemetry %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl>
+    </section>
+    {% endif %}
 {% endlive_region %}</div>
 {% endblock %}

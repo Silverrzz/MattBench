@@ -1,0 +1,38 @@
+:is(.llr-history, .history-chart) {
+    min-width: 0;
+    margin: 0 0 20px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    background: var(--sidebar);
+}
+:is(.llr-heading, .history-chart-heading) { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+:is(.llr-heading, .history-chart-heading) h2 { margin: 0; font-size: 12px; letter-spacing: 0; }
+:is(.llr-feedback, .history-chart-feedback) { color: var(--subtle); font-size: 10px; }
+:is(.llr-plot, .history-chart-plot) { position: relative; min-width: 0; touch-action: pan-y; }
+:is(.llr-graph, .history-chart-graph) { display: block; width: 100%; height: 136px; overflow: visible; }
+:is(.llr-graph, .history-chart-graph) text { fill: var(--subtle); font: 10px var(--mono); }
+:is(.llr-grid, .history-chart-grid) { stroke: var(--line); stroke-opacity: .45; stroke-width: 1; }
+:is(.llr-zero, .history-chart-zero) { stroke: var(--line-strong); stroke-width: 1; }
+:is(.llr-path, .history-chart-path) { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:is(.llr-area, .history-chart-area) { opacity: .07; }
+:is(.llr-endpoint, .history-chart-endpoint) { stroke: var(--sidebar); stroke-width: 2; }
+:is(.llr-crosshair, .history-chart-crosshair) { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; pointer-events: none; }
+:is(.llr-hover-point, .history-chart-hover-point) { fill: var(--sidebar); stroke: var(--text); stroke-width: 2; pointer-events: none; }
+:is(.llr-tooltip, .history-chart-tooltip) {
+    position: absolute;
+    z-index: 2;
+    max-width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-raised);
+    box-shadow: 0 5px 18px #0005;
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.7;
+    white-space: pre-line;
+    pointer-events: none;
+}
+:is(.llr-sr-only, .history-chart-sr-only) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 600px) {
+    :is(.llr-history, .history-chart) { padding: 12px 10px; }
+}
