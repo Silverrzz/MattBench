@@ -11,7 +11,7 @@ from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
 
 
-WORKER_MODES = [('automatic', 'Automatic'), ('training-only', 'Training only'), ('paused', 'Paused')]
+WORKER_MODES = [('automatic', 'Automatic'), ('testing-only', 'Testing only'), ('training-only', 'Training only'), ('paused', 'Paused')]
 
 
 def training_telemetry(job):
@@ -107,19 +107,10 @@ def worker_rows(user, identifier=None):
             'disconnect': worker.enabled and not info.get('demo') and (user.pk == worker.owner_id or user.is_superuser),
             'details': [('Backend', info.get('backend', '').upper()), ('GPU', info.get('gpu', '')), ('Free storage', '%s GB' % round(info.get('disk_gb', 0))), ('Device', info.get('device', '')), ('Protocol', info.get('protocol', ''))],
         })
-    reservations = TrainingRun.objects.filter(requested_worker__isnull=False, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo').select_related('requested_worker').order_by('created')
-    reserved = {}
-    for run in reservations:
-        if run.owner_id != run.requested_worker.owner_id and not run.requested_worker.accept_any_owner:
-            continue
-        identifier = str(run.requested_worker.machine_id or run.requested_worker_id)
-        reserved.setdefault(identifier, run)
     for row in rows:
         row['modes'] = WORKER_MODES
         if row['mode'] == 'paused' and row['online'] and row['activity'] == 'Idle':
             row['state'] = 'Paused'
-        if row['manage'] and row['id'] in reserved:
-            row['reservation'] = reserved[row['id']]
     return sorted(rows, key=lambda row: (row['name'].lower(), row['id']))
 
 
@@ -137,7 +128,7 @@ def index(request):
         ],
         'online_count': len(connected),
         'busy_count': sum(row['state'] == 'Busy' for row in rows),
-        'thread_count': sum(row['threads'] for row in connected if row['activity'] in ('Testing', 'Datagen') or row['activity'] == 'Idle' and row['mode'] == 'automatic' and 'Tests' in row['capabilities'] and not row.get('reservation')),
+        'thread_count': sum(row['threads'] for row in connected if row['activity'] in ('Testing', 'Datagen') or row['activity'] == 'Idle' and row['mode'] in ('automatic', 'testing-only') and 'Tests' in row['capabilities']),
         'activity_counts': [(label, sum(row['activity'] == label for row in connected)) for label in ('Testing', 'Datagen', 'Training', 'Idle')],
     })
 

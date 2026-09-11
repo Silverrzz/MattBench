@@ -99,7 +99,7 @@ def resume_download(request, pk):
     return response
 
 
-def resume_training(user, source, checkpoint_id=None, worker=None):
+def resume_training(user, source, checkpoint_id=None):
     from OpenBench.training_datasets import effective_dataset
     if not source.terminal:
         raise ValidationError('Stop the current run before resuming it on another worker.')
@@ -107,8 +107,6 @@ def resume_training(user, source, checkpoint_id=None, worker=None):
         raise ValidationError('This schedule has not enabled the checkpoint resume contract.')
     if checkpoint_id is not None and (not str(checkpoint_id).isdigit() or len(str(checkpoint_id)) > 18):
         raise ValidationError('Invalid checkpoint selection.')
-    if worker and (not worker.enabled or worker.owner_id != user.pk and not worker.accept_any_owner):
-        raise ValidationError('Choose an enabled worker accepting workloads from this account.')
     with storage_lock():
         checkpoints = source.checkpoints.select_for_update().select_related('archive')
         checkpoint = checkpoints.filter(pk=checkpoint_id).first() if checkpoint_id else checkpoints.first()
@@ -117,7 +115,7 @@ def resume_training(user, source, checkpoint_id=None, worker=None):
         validate_checkpoint_schedule(checkpoint, source.engine, source.snapshot['files'], source.snapshot['settings'])
         verify_artifact(checkpoint.archive)
         provenance = {'checkpoint_id': checkpoint.pk, 'run_id': source.pk, 'superbatch': checkpoint.superbatch, 'sha256': checkpoint.archive.sha256, 'size': checkpoint.archive.size, 'metadata': checkpoint.metadata}
-        run = TrainingRun.objects.create(owner=user, engine=source.engine, name=source.name, schedule=source.schedule, snapshot={**source.snapshot, 'resume': provenance}, dataset=effective_dataset(source), parameters=source.parameters, requested_worker=worker, resume_from=checkpoint, state='QUEUED')
+        run = TrainingRun.objects.create(owner=user, engine=source.engine, name=source.name, schedule=source.schedule, snapshot={**source.snapshot, 'resume': provenance}, dataset=effective_dataset(source), parameters=source.parameters, resume_from=checkpoint, state='QUEUED')
         record_event('training.resumed', run, user.pk, {'source_run_id': source.pk, **provenance})
         return run
 

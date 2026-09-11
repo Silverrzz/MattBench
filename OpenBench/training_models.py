@@ -11,7 +11,7 @@ TRAINING_STATES = (
     ('VALIDATING', 'Checking inputs'), ('PREPARING', 'Checking inputs'),
     ('QUEUED', 'Waiting for worker'), ('DOWNLOADING', 'Downloading'),
     ('CONVERTING', 'Converting'), ('COMPILING', 'Compiling'),
-    ('TRAINING', 'Training'), ('SAVING', 'Saving outputs'),
+    ('TRAINING', 'Training'), ('SAVING', 'Uploading'),
     ('COMPLETED', 'Completed'), ('FAILED', 'Failed'), ('CANCELLED', 'Cancelled'),
 )
 
@@ -83,7 +83,7 @@ class TrainingWorker(models.Model):
     info = models.JSONField(default=dict)
     updated = models.DateTimeField(default=timezone.now, db_index=True)
     enabled = models.BooleanField(default=True)
-    mode = models.CharField(max_length=16, default='automatic', choices=[('automatic', 'Automatic'), ('training-only', 'Training only'), ('paused', 'Paused')])
+    mode = models.CharField(max_length=16, default='automatic', choices=[('automatic', 'Automatic'), ('testing-only', 'Testing only'), ('training-only', 'Training only'), ('paused', 'Paused')])
 
 
 class TrainingRun(models.Model):

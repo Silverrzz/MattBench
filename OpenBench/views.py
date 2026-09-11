@@ -725,7 +725,7 @@ def client_worker_info(request):
 
     # Create a new Machine for this session
     mode = request.POST.get('mode', 'automatic')
-    if mode not in ('automatic', 'training-only', 'paused'):
+    if mode not in ('automatic', 'testing-only', 'training-only', 'paused'):
         return JsonResponse({'error': 'Invalid worker mode'})
     machine = Machine.objects.select_for_update().get(pk=persistent_worker.machine_id) if persistent_worker and persistent_worker.machine_id else None
     if machine is None and request.POST.get('previous_machine_id', '').isdigit():
@@ -796,8 +796,7 @@ def client_get_workload(request, machine):
     machine.save(update_fields=['updated'])
     if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():
         return JsonResponse({})
-    reserved = TrainingRun.objects.filter(Q(owner_id=F('requested_worker__owner_id')) | Q(requested_worker__accept_any_owner=True), requested_worker__machine=machine, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo').exists()
-    if machine.mode != 'automatic' or reserved:
+    if machine.mode not in ('automatic', 'testing-only'):
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
         return JsonResponse({})
     result = get_workload(request, machine)

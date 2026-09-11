@@ -873,7 +873,7 @@ def main(argv=None, worker_config=None, gpu_info=None):
     parser.add_argument('--vram-gb', type=float, default=os.environ.get('MATTBENCH_TRAINING_VRAM_GB'))
     parser.add_argument('--threads', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--once', action='store_true')
-    parser.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker')
+    parser.add_argument('--mode', choices=('automatic', 'testing-only', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker')
     parser.add_argument('--register-only', action='store_true', help='Persist worker credentials, then exit without claiming a run.')
     parser.add_argument('--high-performance-transfers', '--high-performance-downloads', dest='high_performance_downloads', action='store_true', help='Enable Xet high-performance uploads and downloads; intended for high bandwidth and at least 64 GB RAM.')
     parser.add_argument('--execution-image', default='', help='Optional Linux execution image pinned as repository@sha256:digest. Omit to run natively. Include Rust, GPU libraries and cached Cargo dependencies.')

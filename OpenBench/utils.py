@@ -226,8 +226,7 @@ def getMachineStatus(username=None):
         gpu_workers = gpu_workers.filter(owner__username=username)
     training = TrainingRun.objects.filter(state__in=TRAINING_ACTIVE)
     training_machines = set(training.filter(worker__machine__in=machines).values_list('worker__machine_id', flat=True))
-    reserved = set(TrainingRun.objects.filter(requested_worker__machine__in=machines, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo').values_list('requested_worker__machine_id', flat=True))
-    capacity = [machine for machine in machines if machine.pk not in training_machines and (machine.workload or machine.mode == 'automatic' and machine.pk not in reserved)]
+    capacity = [machine for machine in machines if machine.pk not in training_machines and (machine.workload or machine.mode in ('automatic', 'testing-only'))]
     training_count = len(training_machines) + training.filter(worker__in=gpu_workers).count()
     return ': %d Workers / %d Training / %d Test threads / %s MNPS' % (
         len(machines) + gpu_workers.count(), training_count,

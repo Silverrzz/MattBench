@@ -13,8 +13,8 @@
                 <td class="statblock {% if run.state == 'COMPLETED' %}statblock-green{% elif run.state == 'FAILED' %}statblock-red{% elif run.state == 'TRAINING' or run.state == 'SAVING' %}statblock-blue{% elif not run.terminal %}statblock-yellow{% endif %}">
                     <div>{{ run.get_state_display }}{% if run.state == 'COMPLETED' %} · 100.0%{% elif run.metrics.progress != None %} · {{ run.metrics.progress|floatformat:1 }}%{% endif %}</div>
                     {% if run.metrics.superbatch != None %}<div>SB {{ run.metrics.superbatch }}{% if run.metrics.loss != None %} · Loss {{ run.metrics.loss|floatformat:5 }}{% endif %}</div>{% endif %}
-                    {% if run.metrics.positions_per_second != None %}<div>{{ run.metrics.positions_per_second|floatformat:'0g' }} positions/s</div>{% elif run.state == 'DOWNLOADING' and run.metrics.downloaded_bytes != None %}<div>Downloaded {{ run.metrics.downloaded_bytes|filesizeformat }}</div>{% elif run.metrics.converted_files != None %}<div>{{ run.metrics.converted_files }} files converted</div>{% endif %}
-                    {% if run.state == 'QUEUED' %}<div>{{ run.requested_worker.name|default:'Any compatible worker' }}</div>{% endif %}
+                    {% if run.metrics.positions_per_second != None %}{% if not run.terminal %}<div>{{ run.metrics.positions_per_second|floatformat:'0g' }} positions/s</div>{% endif %}{% elif run.state == 'DOWNLOADING' and run.metrics.downloaded_bytes != None %}<div>Downloaded {{ run.metrics.downloaded_bytes|filesizeformat }}</div>{% elif run.metrics.converted_files != None %}<div>{{ run.metrics.converted_files }} files converted</div>{% endif %}
+                    {% if run.state == 'QUEUED' %}<div>Any compatible worker</div>{% endif %}
                 </td>
             </tr>
         {% endfor %}

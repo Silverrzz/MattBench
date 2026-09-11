@@ -503,12 +503,14 @@
     function update(data) {
         if (data.state) detail.dataset.runState = data.state;
         const progress = detail.dataset.runState === 'COMPLETED' ? 100 : Number(data.metrics.progress || 0);
-        const stage = detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
+        const stage = detail.dataset.runState === 'SAVING' ? ' (Uploading)' : detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
         const lines = [`Progress: ${progress.toFixed(1)}%${stage}`];
         for (const [key, [label, unit]] of Object.entries(labels)) {
             const value = data.metrics[key];
             if (value === undefined) continue;
             if (key === 'downloaded_bytes' && detail.dataset.runState !== 'DOWNLOADING') continue;
+            if (key === 'remaining_seconds' && detail.dataset.runState !== 'TRAINING') continue;
+            if (key === 'positions_per_second' && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(detail.dataset.runState)) continue;
             let text = typeof value === 'number' ? value.toLocaleString(undefined, {maximumSignificantDigits: 6}) + unit : String(value);
             if (key === 'elapsed_seconds' || key === 'remaining_seconds') text = `${Math.floor(value / 3600)}h ${Math.floor(value / 60) % 60}m ${Math.floor(value % 60)}s`;
             if (key === 'superbatch') {

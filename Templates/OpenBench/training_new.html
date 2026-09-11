@@ -23,10 +23,10 @@
             <label class="choice training-local-cleanup">{{ form.skip_broken_games }}{{ form.skip_broken_games.label }}</label>
             {% if not dataset_options %}<p class="field-note"><a href="/training/datasets/new/">Register dataset</a></p>{% endif %}
         </section>
-        <details class="training-run-settings" id="training-run-settings" {% if form.worker.errors or form.checkpoint_retention.errors or form.checkpoint_keep_last.errors or form.delete_uploaded_checkpoints.errors or form.environment.errors %}open{% endif %}>
+        <details class="training-run-settings" id="training-run-settings" {% if form.checkpoint_retention.errors or form.checkpoint_keep_last.errors or form.delete_uploaded_checkpoints.errors or form.environment.errors %}open{% endif %}>
             <summary>Run settings <span id="training-settings-summary"></span></summary>
             <div class="training-settings-grid">
-            <div class="field">{{ form.worker.label_tag }}{{ form.worker }}{{ form.worker.errors }}</div>
+            <p>Any compatible worker accepting your account's workloads can pick up this run.</p>
             <div class="field"><label for="train-checkpoint_retention">Checkpoints</label>
                 <div class="training-retention">
                     {{ form.checkpoint_retention }}

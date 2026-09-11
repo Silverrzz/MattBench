@@ -1,6 +1,5 @@
 import json
 import re
-from datetime import timedelta
 from pathlib import Path
 
 from django import forms
@@ -16,11 +15,10 @@ from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.debug import sensitive_post_parameters
 
 from OpenBench.models import DatasetUpload, EngineConfig, HuggingFaceCredential, Network, PGN, Profile
-from OpenBench.models import Machine, Test, TrainingArtifact, TrainingRun, TrainingSchedule, TrainingWorker
+from OpenBench.models import Test, TrainingArtifact, TrainingRun, TrainingSchedule, TrainingWorker
 from OpenBench.models import LifecycleEvent, TrainingDataset, TrainingCheckpoint
 from OpenBench.lifecycle import record_event
 from OpenBench.training import DEFAULT_SETTINGS, hf_token, relative_path, repo_id, save_credential, validate_schedule
-from OpenBench.training import worker_requirement_errors
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
 
 
@@ -159,7 +157,6 @@ class TrainingForm(forms.Form):
     dataset = forms.ModelChoiceField(queryset=TrainingDataset.objects.none(), widget=forms.HiddenInput, required=False)
     stage_datasets = forms.JSONField(required=False, widget=forms.HiddenInput)
     schedule = forms.ModelChoiceField(queryset=TrainingSchedule.objects.none())
-    worker = forms.ModelChoiceField(queryset=TrainingWorker.objects.none(), required=False, empty_label='Any compatible worker accepting my workloads')
     environment = forms.CharField(label='Environment variables', required=False, strip=False, max_length=32768, widget=forms.Textarea(attrs={'rows': 3, 'placeholder': 'KEY=value'}))
     checkpoint_retention = forms.ChoiceField(choices=[('latest', 'Keep latest'), ('all', 'Keep all checkpoints')], initial='latest')
     checkpoint_keep_last = forms.IntegerField(label='Checkpoints to keep', min_value=1, max_value=10000, initial=DEFAULT_SETTINGS['checkpoint_keep_last'], required=False)
@@ -171,10 +168,6 @@ class TrainingForm(forms.Form):
         self.fields['checkpoint'].label_from_instance = lambda row: '%s · Run #%d · SB %d → %d' % (row.run.name, row.run_id, row.superbatch, row.superbatch + 1)
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
-        cutoff = timezone.now() - timedelta(minutes=2)
-        self.fields['worker'].queryset = TrainingWorker.objects.filter(Q(updated__gte=cutoff) | Q(machine__updated__gte=cutoff), Q(owner=user) | Q(accept_any_owner=True), enabled=True).exclude(info__has_key='demo').select_related('machine')
-        busy_workers = set(TrainingRun.objects.filter(state__in=TRAINING_ACTIVE).values_list('worker_id', flat=True))
-        self.fields['worker'].label_from_instance = lambda row: '%s / %s (%s; %s)' % (row.name, row.info.get('gpu', 'GPU'), 'Offline' if max(row.updated, row.machine.updated if row.machine_id else row.updated) < cutoff else 'Busy' if row.pk in busy_workers or row.machine_id and row.machine.workload else 'Online', row.machine.get_mode_display() if row.machine_id else row.get_mode_display())
         for name, field in self.fields.items():
             field.widget.attrs.update({'id': 'train-' + name})
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
@@ -235,10 +228,6 @@ class TrainingForm(forms.Form):
             self.add_error('schedule', 'This is a demo schedule. Choose a runnable schedule to start training.')
         if schedule and schedule.scope == 'engine' and data.get('engine') and schedule.engine_id != data['engine'].pk:
             self.add_error('schedule', 'Choose a schedule for this engine.')
-        worker = data.get('worker')
-        if schedule and worker:
-            for error in worker_requirement_errors(worker.info, config):
-                self.add_error('worker', error)
         checkpoint = data.get('checkpoint')
         if data.get('wdl') is not None and not checkpoint:
             self.add_error('wdl', 'Select a checkpoint to change WDL for the remaining training.')
@@ -303,17 +292,8 @@ def new_training(request):
                 if data.get('wdl') is not None:
                     snapshot['wdl_override'] = data['wdl']
             with transaction.atomic():
-                if data['worker']:
-                    if data['worker'].machine_id:
-                        Machine.objects.select_for_update().get(pk=data['worker'].machine_id)
-                    data['worker'] = TrainingWorker.objects.select_for_update().get(pk=data['worker'].pk)
-                    if not data['worker'].enabled:
-                        raise ValidationError('This worker was disconnected. Select another worker.')
-                    if data['worker'].owner_id != request.user.pk and not data['worker'].accept_any_owner:
-                        raise ValidationError('This worker no longer accepts workloads from other accounts.')
                 run = TrainingRun.objects.create(
                     owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
-                    requested_worker=data['worker'],
                     snapshot=snapshot, resume_from=checkpoint,
                     dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
                 )

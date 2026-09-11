@@ -109,7 +109,7 @@ def register(request):
         if machine:
             machine = Machine.objects.select_for_update().get(pk=machine.pk)
         mode = request.POST.get('mode', 'automatic')
-        if mode not in ('automatic', 'training-only', 'paused'):
+        if mode not in ('automatic', 'testing-only', 'training-only', 'paused'):
             return JsonResponse({'error': 'Invalid worker mode.'}, status=400)
         worker, created = TrainingWorker.objects.get_or_create(pk=worker_id, defaults={'owner': user, 'name': name, 'info': info, 'secret_hash': hashlib.sha256(secret.encode()).hexdigest(), 'mode': machine.mode if machine else mode})
         if not created:
@@ -158,14 +158,12 @@ def claim(request):
     existing = TrainingRun.objects.filter(worker=worker, claim_id=claim_id).first() or TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).first()
     if existing:
         return JsonResponse({'run': assignment(existing, info)})
-    if (machine.mode if machine else worker.mode) == 'paused' or machine and machine.workload:
+    if (machine.mode if machine else worker.mode) not in ('automatic', 'training-only') or machine and machine.workload:
         return JsonResponse({'run': None})
-    reservations = TrainingRun.objects.filter(requested_worker=worker, state__in=('VALIDATING', 'PREPARING', 'QUEUED'), cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo')
     candidates = TrainingRun.objects.filter(state='QUEUED', worker=None, cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo')
     if not worker.accept_any_owner:
-        reservations = reservations.filter(owner=worker.owner)
         candidates = candidates.filter(owner=worker.owner)
-    candidates = candidates.filter(Q(requested_worker=worker) if reservations.exists() else Q(requested_worker=None) | Q(requested_worker=worker)).annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created')[:100]
+    candidates = candidates.annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created').iterator()
     for run in candidates:
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
@@ -177,9 +175,6 @@ def claim(request):
         try:
             with transaction.atomic():
                 runtime = info.get('runtime', {})
-                pinned = run.snapshot.get('runtime')
-                if pinned and pinned != runtime:
-                    continue
                 snapshot = {**run.snapshot, 'runtime': runtime, 'resume_semantics': 'optimiser-continuation; dataset reader restarts at the selected stage'}
                 claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False, deleted=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=now, updated=now)
                 if claimed:
@@ -218,14 +213,14 @@ def recover(request, pk):
             run.save(update_fields=['state', 'finished', 'updated', 'error'])
         if not run.cancel_requested:
             if run.snapshot['settings'].get('resume_supported') and run.checkpoints.exists():
-                resumed = resume_training(run.owner, run, worker=request.training_worker)
+                resumed = resume_training(run.owner, run)
             else:
                 from OpenBench.training_datasets import effective_dataset
                 if run.snapshot.get('resume'):
                     if not run.resume_from_id:
                         raise ValidationError('The starting checkpoint was removed. Create a new train from an available checkpoint.')
                     verify_artifact(run.resume_from.archive)
-                resumed = TrainingRun.objects.create(owner=run.owner, engine=run.engine, name=run.name, schedule=run.schedule, snapshot=run.snapshot, dataset=effective_dataset(run), parameters=run.parameters, requested_worker=request.training_worker, resume_from=run.resume_from, state='QUEUED')
+                resumed = TrainingRun.objects.create(owner=run.owner, engine=run.engine, name=run.name, schedule=run.schedule, snapshot=run.snapshot, dataset=effective_dataset(run), parameters=run.parameters, resume_from=run.resume_from, state='QUEUED')
             resumed.snapshot = {**resumed.snapshot, 'automatic_recovery': True, 'recovery_source': run.pk}
             resumed.save(update_fields=['snapshot'])
             run.recovery_run = resumed
@@ -304,6 +299,8 @@ def report(request, pk):
                 with path.open(encoding='utf-8', errors='replace') as source:
                     context = source.read(65536) + '\n' + context
         clean_metrics, samples = bullet_telemetry(context + log, clean_metrics)
+        if state == 'SAVING':
+            clean_metrics['progress'] = metrics.get('progress', 0)
         if 'loss' in metrics and not samples and clean_metrics.get('superbatch'):
             samples.append({'loss': metrics['loss'], 'step': clean_metrics['superbatch'], 'superbatch': clean_metrics['superbatch']})
         history = merge_loss_history(history, samples, now.timestamp())

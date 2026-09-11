@@ -1416,7 +1416,7 @@ def parse_arguments(client_args):
     p.add_argument(      '--only'    , help='Only help certain engine(s)' , nargs='+'          )
     p.add_argument(      '--force'   , help='Prefer engine(s) over priority', nargs='+'         )
     p.add_argument('--training-directory', default=os.environ.get('MATTBENCH_WORKER_DIRECTORY', os.path.abspath('training-work')))
-    p.add_argument('--mode', choices=('automatic', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker; manage registered workers on their worker page')
+    p.add_argument('--mode', choices=('automatic', 'testing-only', 'training-only', 'paused'), default='automatic', help='Initial mode for a new worker; manage registered workers on their worker page')
     p.add_argument('--no-training', action='store_true', help='Disable GPU training on this worker')
     p.add_argument('--training-backend', '--backend', choices=('cuda', 'rocm'), default=os.environ.get('MATTBENCH_TRAINING_BACKEND'))
     p.add_argument('--training-device', '--device', default=os.environ.get('MATTBENCH_TRAINING_DEVICE'))
