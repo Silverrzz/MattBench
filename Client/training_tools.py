@@ -34,6 +34,16 @@ def digest(path):
 
 
 def zig_toolchain(root, version, target):
+    system_zig = shutil.which('zig')
+    if system_zig:
+        executable = Path(system_zig).resolve()
+        try:
+            installed_version = subprocess.check_output([str(executable), 'version'], text=True, stderr=subprocess.DEVNULL, timeout=10).strip()
+        except (OSError, subprocess.SubprocessError):
+            installed_version = None
+        if installed_version == version:
+            print('Using system Zig %s: %s' % (version, executable), flush=True)
+            return executable
     checksum = ZIG_HASHES.get((version, target))
     if checksum is None:
         raise RuntimeError('No pinned Zig toolchain for ' + target)
