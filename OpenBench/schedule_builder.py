@@ -342,7 +342,7 @@ def generate_schedule(value):
                                     'activation': {'score': 'sigmoid', 'wdl': 'softmax', 'uncertainty': 'identity'}[name],
                                     'weights': name + '/w', 'biases': name + '/b'} for name, width in heads},
                    'hidden_layers_bucketed': False, 'head_order': [name for name, _ in heads],
-                   'threat_features': 60144 if spec['threat_inputs'] else 0,
+                   'threat_features': (59808 if spec['pawn_pair_inputs'] else 60144) if spec['threat_inputs'] else 0,
                    'feature_activation': 'pairwise' if 1 in pairwise_layers else spec['activation'],
                    'feature_outputs_per_perspective': sizes[0] // 2 if 1 in pairwise_layers else sizes[0],
                    'pairwise': {'layers': pairwise_layers, 'left_activation': spec['pairwise_left_activation'], 'right_activation': spec['pairwise_right_activation'], 'operation': 'multiply_activated_halves'},

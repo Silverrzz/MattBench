@@ -1,7 +1,7 @@
 {% extends 'OpenBench/base.html' %}
 {% load static %}
 {% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'training_schedules.js' %}?{{ static_version }}" defer></script>{% endblock %}
-{% block page_actions %}{% if builder_available %}<a class="button" href="/training/schedules/{{ selected.pk }}/builder/">Open builder</a>{% endif %}{% if selected %}<a class="button" href="?copy=1">Save a copy</a>{% endif %}<a id="train-with-schedule" class="button button-primary" href="/training/new/?schedule={{ schedule_data.id }}&amp;engine={{ schedule_data.engine }}" {% if not schedule_data.id %}hidden{% endif %}>Use schedule</a>{% endblock %}
+{% block page_actions %}{% if builder_available %}<a id="open-schedule-builder" class="button" href="/training/schedules/{{ selected.pk }}/builder/{% if not schedule_data.id %}?copy=1{% endif %}">Open builder</a>{% endif %}{% if selected %}<a class="button" href="?copy=1">Save a copy</a>{% endif %}<a id="train-with-schedule" class="button button-primary" href="/training/new/?schedule={{ schedule_data.id }}&amp;engine={{ schedule_data.engine }}" {% if not schedule_data.id %}hidden{% endif %}>Use schedule</a>{% endblock %}
 {% block content %}
 {% include 'OpenBench/Blocks/training_nav.html' %}
 <div class="schedule-layout" id="schedule-workspace" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">

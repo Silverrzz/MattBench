@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -189,6 +190,10 @@ def remove_container(name):
         raise RuntimeError('Cannot confirm the previous execution container stopped. Restore Docker connectivity before restarting this worker.')
 
 
+def rocm_environment_variable(key):
+    return key in ('HIP_VISIBLE_DEVICES', 'ROCR_VISIBLE_DEVICES') or re.fullmatch(r'HSA_OVERRIDE_GFX_VERSION(?:_\d+)?', key) is not None
+
+
 def isolated_command(args, cwd, environment, reporter, cpu_threads=None):
     info = reporter.job['worker_info']
     image = info.get('execution_image')
@@ -206,7 +211,7 @@ def isolated_command(args, cwd, environment, reporter, cpu_threads=None):
         else:
             command.extend(['--device', '/dev/kfd', '--device', '/dev/dri', '--group-add', 'video', '--group-add', 'render'])
     for key, value in environment.items():
-        if key.startswith('MATTBENCH_') or key in ('HOME', 'TMPDIR', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS') or key in reporter.job['snapshot'].get('environment', {}):
+        if key.startswith('MATTBENCH_') or rocm_environment_variable(key) or key in ('HOME', 'TMPDIR', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS') or key in reporter.job['snapshot'].get('environment', {}):
             command.extend(['--env', key + '=' + value])
     command.extend([image, *args])
     return command, dict(os.environ), name

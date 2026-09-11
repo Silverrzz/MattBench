@@ -111,7 +111,7 @@
         if (field('half_move_clock').checked) kingInputs.push('11 HMC');
         const featureGroups = [];
         if (kingInputs.length) featureGroups.push('(' + kingInputs.join(' + ') + ')x' + count('input_buckets') + (field('mirrored').checked ? 'hm' : ''));
-        if (field('threat_inputs').checked) featureGroups.push('60144 TIhm');
+        if (field('threat_inputs').checked) featureGroups.push((field('pawn_pair_inputs').checked ? '59808' : '60144') + ' TIhm');
         if (field('pawn_pair_inputs').checked) featureGroups.push('4560 PPhm');
         const inputs = featureGroups.join(' + ') || 'no inputs';
         const heads = [];

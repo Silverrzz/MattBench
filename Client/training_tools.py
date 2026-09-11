@@ -118,7 +118,7 @@ def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_rep
     outputs = {}
     provenance = {}
     for name, repository, revision, version, flags, binary in (
-        ('pawnocchio', pawnocchio_repo, pawnocchio_ref, '0.16.0', ['-Deval=hce', '-Dtools_only=true', '-Dname=pawnocchio'], 'pawnocchio'),
+        ('pawnocchio', pawnocchio_repo, pawnocchio_ref, '0.16.0', ['-Deval=material', '-Dtools_only=true', '-Duse_tbs=false', '-Dname=pawnocchio'], 'pawnocchio'),
         ('combiner', combiner_repo, combiner_ref, '0.15.2', [], 'viriformat_combiner'),
     ):
         if not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or not re.fullmatch(r'[a-f0-9]{40}', revision):

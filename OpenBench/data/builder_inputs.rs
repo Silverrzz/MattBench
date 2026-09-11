@@ -38,7 +38,7 @@ impl AuxiliaryInputs {
     const MAX_PAIRS: usize = 16 * 15 / 2;
 
     pub fn new(threats: bool, pairs: bool) -> Self {
-        Self { threats: threats.then(|| Arc::new(Threats::new())), pairs, masks: three_file_band_mask() }
+        Self { threats: threats.then(|| Arc::new(Threats::new(!pairs))), pairs, masks: three_file_band_mask() }
     }
 
     pub fn _total_threats(&self) -> usize {
@@ -109,7 +109,7 @@ pub struct Threats {
 impl Threats {
     const MAX_ACTIVE: usize = 128;
 
-    pub fn new() -> Self {
+    pub fn new(pawn_to_pawn: bool) -> Self {
         const DIAGS: [u64; 15] = [
             0x0100_0000_0000_0000,
             0x0201_0000_0000_0000,
@@ -158,13 +158,18 @@ impl Threats {
             |sq| bishop.attacks[sq] | rook.attacks[sq],
         );
 
-        let mut offsets = [6 * 84; 5];
+        let pawn_map = if pawn_to_pawn {
+            make_targets([Piece::PAWN, Piece::KNIGHT, Piece::ROOK])
+        } else {
+            make_targets([Piece::KNIGHT, Piece::ROOK])
+        };
+        let mut offsets = [if pawn_to_pawn { 6 * 84 } else { 4 * 84 }; 5];
         for (i, &cnt) in [10 * knight.count, 8 * bishop.count, 8 * rook.count, 10 * queen.count].iter().enumerate() {
             offsets[i + 1] = offsets[i] + cnt;
         }
 
         Self {
-            pawn_map: make_targets([Piece::PAWN, Piece::KNIGHT, Piece::ROOK]),
+            pawn_map,
             non_pk_data: [knight, bishop, rook, queen],
             offsets,
         }

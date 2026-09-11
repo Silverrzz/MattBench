@@ -223,6 +223,8 @@
             data.version = result.version;
             data.id = result.url.split('/').filter(Boolean).pop();
             history.replaceState(null, '', result.url);
+            const builderLink = element('open-schedule-builder');
+            if (builderLink) builderLink.href = `/training/schedules/${data.id}/builder/`;
             element('train-with-schedule').href = `/training/new/?schedule=${data.id}&engine=${payload.engine}`;
             element('train-with-schedule').hidden = false;
             element('delete-schedule').hidden = false;

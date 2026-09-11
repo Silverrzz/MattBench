@@ -62,6 +62,21 @@ function format_live_content(root) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.status-message').forEach(message => {
+        setTimeout(() => {
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                message.remove();
+                return;
+            }
+            const fade = message.animate([{ opacity: 1 }, { opacity: 0 }], {
+                duration: 300,
+                easing: 'ease-out',
+                fill: 'forwards'
+            });
+            fade.finished.then(() => message.remove());
+        }, 8000);
+    });
+
     const sidebar = document.getElementById('sidebar');
     const toggle = document.getElementById('sidebar-toggle');
     const close = document.getElementById('sidebar-close');

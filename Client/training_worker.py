@@ -30,13 +30,13 @@ try:
     from .training_checkpoints import CheckpointUploader, download_checkpoint
     from .training_data import prepare_and_publish
     from .training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from .training_runtime import identity, isolated_command, native_command, remove_container, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
+    from .training_runtime import identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 except ImportError:
     from training_gpu import detect_gpu
     from training_checkpoints import CheckpointUploader, download_checkpoint
     from training_data import prepare_and_publish
     from training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from training_runtime import identity, isolated_command, native_command, remove_container, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
+    from training_runtime import identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 
 
 class Stopped(Exception):
@@ -262,7 +262,7 @@ class Reporter:
 
 def child_environment(directory, job):
     keep = ('PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'CUDA_PATH', 'CUDA_HOME', 'CUDA_VISIBLE_DEVICES', 'HIP_PATH', 'ROCM_PATH', 'HIP_VISIBLE_DEVICES', 'RUSTUP_HOME', 'INCLUDE', 'LIB', 'LIBPATH', 'VCToolsInstallDir', 'VSINSTALLDIR', 'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion')
-    environment = {key: value for key, value in os.environ.items() if key in keep}
+    environment = {key: value for key, value in os.environ.items() if key in keep or rocm_environment_variable(key)}
     environment = windows_build_environment(environment)
     home = directory / 'home'
     home.mkdir(exist_ok=True)
@@ -771,6 +771,13 @@ def execute(connection, job, root, pawnocchio):
         if build[0] == 'cargo' and '--locked' not in build and '--frozen' not in build:
             build.append('--frozen' if job['worker_info'].get('execution_image') else '--locked')
         environment.update(snapshot.get('environment', {}))
+        if snapshot['settings']['backend'] == 'rocm':
+            overrides = {key: value for key, value in environment.items() if key.startswith('HSA_OVERRIDE_GFX_VERSION') and rocm_environment_variable(key)}
+            if platform.system() == 'Linux' and not overrides and re.search(r'\b(?:gfx1032|RX\s*6600(?:\s*XT)?)\b', job['worker_info']['gpu'], re.I):
+                environment['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'
+                overrides['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'
+            for key, value in sorted(overrides.items()):
+                reporter.write('ROCm architecture override for %s: %s=%s\n' % (job['worker_info']['gpu'], key, value))
         command(build, repository, environment, reporter)
         if sha256_file(lockfile) != job['build_provenance']['cargo_lock_sha256']:
             raise RuntimeError('The build changed Cargo.lock. Pin the resolved dependency lockfile in the schedule before retrying.')

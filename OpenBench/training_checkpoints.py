@@ -147,7 +147,7 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
             before_threats = before_manifest.get('export', {}).get('threat_features', 59808 if before['threat_inputs'] else 0)
             after_threats = after_manifest.get('export', {}).get('threat_features', 59808 if after['threat_inputs'] else 0)
             if before_threats != after_threats:
-                raise ValidationError('The checkpoint requires the same threat features. Pawn-to-pawn TI requires a new training run.')
+                raise ValidationError('The checkpoint requires the same threat features. Changing pawn-to-pawn TI requires a new training run.')
         except (KeyError, TypeError, ValueError):
             raise ValidationError('The checkpoint’s network configuration could not be verified.') from None
         architecture = ('layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
