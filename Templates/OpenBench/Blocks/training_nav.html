@@ -1,0 +1,5 @@
+<nav class="tabs" aria-label="New train">
+    <a href="/training/new/" {% if training_tab == 'new' %}aria-current="page"{% endif %}>Start training</a>
+    <a href="/training/schedules/" {% if training_tab == 'schedules' %}aria-current="page"{% endif %}>Schedules</a>
+    <a href="/training/datasets/" {% if training_tab == 'datasets' %}aria-current="page"{% endif %}>Datasets</a>
+</nav>

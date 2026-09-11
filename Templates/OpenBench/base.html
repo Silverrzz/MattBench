@@ -41,8 +41,9 @@
                     {% endif %}
                 </div>
                 <div class="nav-group">
-                    <span class="nav-label">Testing</span>
+                    <span class="nav-label">Workspace</span>
                     <a data-nav="tests" href="/index/"><i class="fa-solid fa-chess-board fa-fw" aria-hidden="true"></i> Tests</a>
+                    <a data-nav="training" href="/training/"><i class="fa-solid fa-bolt fa-fw" aria-hidden="true"></i> Training</a>
                     <a data-nav="greens" href="/greens/"><i class="fa-solid fa-check fa-fw" aria-hidden="true"></i> Passed tests</a>
                     <a data-nav="search" href="/search/"><i class="fa-solid fa-magnifying-glass fa-fw" aria-hidden="true"></i> Search</a>
                 </div>
@@ -50,12 +51,13 @@
                     <span class="nav-label">Create</span>
                     <a data-nav="new-test" href="/test/new/"><i class="fa-solid fa-plus fa-fw" aria-hidden="true"></i> New test</a>
                     <a data-nav="new-tune" href="/tune/new/"><i class="fa-solid fa-sliders fa-fw" aria-hidden="true"></i> New tune</a>
+                    <a data-nav="new-training" href="/training/new/"><i class="fa-solid fa-bolt fa-fw" aria-hidden="true"></i> New train</a>
                     <a data-nav="new-datagen" href="/datagen/new/"><i class="fa-solid fa-database fa-fw" aria-hidden="true"></i> New datagen</a>
                     <a data-nav="uploadnet" href="/newNetwork/"><i class="fa-solid fa-upload fa-fw" aria-hidden="true"></i> Upload network</a>
                 </div>
                 <div class="nav-group">
                     <span class="nav-label">Network</span>
-                    <a data-nav="machines" href="/machines/"><i class="fa-solid fa-microchip fa-fw" aria-hidden="true"></i> Machines</a>
+                    <a data-nav="workers" href="/workers/"><i class="fa-solid fa-microchip fa-fw" aria-hidden="true"></i> Workers</a>
                     <a data-nav="networks" href="/networks/"><i class="fa-solid fa-circle-nodes fa-fw" aria-hidden="true"></i> Networks</a>
                     <a data-nav="users" href="/users/"><i class="fa-solid fa-users fa-fw" aria-hidden="true"></i> Contributors</a>
                     <a data-nav="events" href="/events/"><i class="fa-solid fa-list fa-fw" aria-hidden="true"></i> Events</a>
@@ -88,7 +90,7 @@
                             <h1>{% block heading %}{{ page_title|default:'Workspace' }}{% endblock %}</h1>
                             {% block description %}{% endblock %}
                         </div>
-                        {% block page_actions %}{% endblock %}
+                        <div class="page-actions">{% block page_actions %}{% endblock %}</div>
                     </div>
                     {% endblock %}
                     {% if request.session.error_message %}

@@ -1,0 +1,27 @@
+{% extends 'OpenBench/base.html' %}
+{% load static live %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}">{% endblock %}
+{% block page_actions %}<a class="button" href="/datagen/{{ workload.id }}/">Datagen #{{ workload.id }}</a>{% endblock %}
+{% block content %}
+{% if form_error %}<p class="training-error" role="alert">{{ form_error }}</p>{% endif %}
+<div class="workspace-columns">
+    <form method="post" class="form workspace-panel workspace-stack">{% csrf_token %}
+        <div class="panel-heading"><h2>Destination</h2>{% if not hf_connected %}<a class="button" href="/profile/">Connect Hugging Face</a>{% endif %}</div>
+        <div class="field"><label for="hf-repo">Dataset repository</label><input id="hf-repo" name="repo" required value="{{ destination }}" placeholder="account/dataset"></div>
+        <div class="field"><label for="hf-path">Archive filename</label><input id="hf-path" name="filename" value="{{ filename }}" required></div>
+        <div class="field"><label for="hf-visibility">Visibility</label><select id="hf-visibility" name="visibility"><option value="private">Private</option><option value="public" {% if request.POST.visibility == 'public' %}selected{% endif %}>Public</option></select></div>
+        <div class="form-actions"><button class="button button-primary" type="submit" {% if not hf_connected or workload.execution.demo %}disabled{% endif %}>Upload archive</button></div>
+    </form>
+    <section class="workspace-panel"><div class="panel-heading"><h2>Recent uploads</h2></div>
+        <div id="dataset-uploads" data-live>{% live_region 'dataset-uploads' %}
+        {% for upload in uploads %}<article class="training-upload">
+            <div class="training-heading"><strong>{{ upload.repo }}</strong><span class="training-badge state-{{ upload.state|lower }}">{{ upload.state|title }}</span></div>
+            <p class="workspace-muted">{{ upload.filename }}</p>
+            {% if upload.state == 'UPLOADING' %}<progress value="{{ upload.progress }}" max="100" aria-label="Upload progress"></progress>{% endif %}
+            {% if upload.error %}<p class="training-error">{{ upload.error }}</p>{% endif %}
+            {% if upload.state == 'COMPLETED' %}<div class="form-actions"><a class="button" href="{{ upload.url }}" rel="noreferrer">Open dataset ↗</a><a class="button button-primary" href="/training/datasets/new/?repo={{ upload.repo|urlencode }}&amp;files={{ upload.filename|urlencode }}&amp;revision={{ upload.revision }}">Register dataset</a></div>{% endif %}
+        </article>{% empty %}<div class="empty-block">No uploads yet</div>{% endfor %}
+        {% endlive_region %}</div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenBench web server
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=openbench
+Group=openbench
+StateDirectory=openbench
+WorkingDirectory=/opt/openbench
+EnvironmentFile=/etc/openbench/production.env
+Environment=OPENBENCH_DEBUG=0
+ExecStart=/opt/openbench/venv/bin/daphne -b 127.0.0.1 -p 8000 OpenSite.asgi:application
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

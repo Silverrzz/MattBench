@@ -1,0 +1,23 @@
+<div class="table-scroll" role="region" aria-label="{{ label }}; scroll horizontally for more columns" tabindex="0">
+    <table class="index-tests hoverable" aria-label="{{ label }}">
+        <colgroup><col class="index-author"><col class="index-engine"><col class="index-revision"><col class="index-tc"><col class="index-code"><col class="index-results"></colgroup>
+        <thead><tr class="table-header"><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Identifier</th><th scope="col">Worker</th><th scope="col">Started</th><th scope="col">Metrics</th></tr></thead>
+        <tbody>
+        {% for run in runs %}
+            <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}" data-search-row="{{ run.name }} {{ run.engine.name }} {{ run.owner.username }} {{ run.worker.name }}" data-engine="{{ run.engine.name }}">
+                <td class="test-author">{{ run.owner.username }}</td>
+                <td class="test-engine">{{ run.engine.name }}</td>
+                <td class="test-revision"><a class="revision-link" href="/training/{{ run.id }}/">{{ run.name }}</a><div class="revision-meta"><a class="workload-id" href="/training/{{ run.id }}/">#{{ run.id }}</a>{% if run.demo %}<span class="test-flag">Demo</span>{% endif %}</div></td>
+                <td class="test-author">{% if run.worker %}<a href="/workers/{{ run.worker_id }}/">{{ run.worker.name }}</a><div class="revision-meta">{{ run.worker.info.gpu }}</div>{% else %}Unassigned<div class="revision-meta">{{ run.backend|upper }} · {{ run.min_vram_gb }} GB VRAM</div>{% endif %}</td>
+                <td class="test-author">{% if run.started %}<time datetime="{{ run.started|date:'c' }}" title="{{ run.started|date:'j M Y, H:i' }}">{{ run.started|date:'j M' }}</time>{% else %}—{% endif %}</td>
+                <td class="statblock {% if run.state == 'COMPLETED' %}statblock-green{% elif run.state == 'FAILED' %}statblock-red{% elif run.state == 'TRAINING' or run.state == 'SAVING' %}statblock-blue{% elif not run.terminal %}statblock-yellow{% endif %}">
+                    <div>{{ run.get_state_display }}{% if run.metrics.progress != None %} · {{ run.metrics.progress|floatformat:1 }}%{% endif %}</div>
+                    {% if run.metrics.superbatch != None %}<div>SB {{ run.metrics.superbatch }}{% if run.metrics.loss != None %} · Loss {{ run.metrics.loss|floatformat:5 }}{% endif %}</div>{% endif %}
+                    {% if run.metrics.positions_per_second != None %}<div>{{ run.metrics.positions_per_second|floatformat:'0g' }} positions/s</div>{% elif run.metrics.downloaded_bytes != None %}<div>Downloaded {{ run.metrics.downloaded_bytes|filesizeformat }}</div>{% elif run.metrics.converted_files != None %}<div>{{ run.metrics.converted_files }} files converted</div>{% endif %}
+                    {% if run.state == 'QUEUED' %}<div>{{ run.requested_worker.name|default:'Any compatible worker' }}</div>{% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>

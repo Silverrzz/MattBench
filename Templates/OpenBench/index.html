@@ -1,12 +1,19 @@
 {% extends "OpenBench/base.html" %}
 
 {% load live %}
-
 {% block page_actions %}
     <a class="button button-primary" href="/test/new/"><span aria-hidden="true">+</span> New test</a>
 {% endblock %}
 
 {% block content %}
+    {% if is_test_index %}
+    <nav class="test-filters" aria-label="Test type">
+        <a href="/index/" {% if not test_kind %}aria-current="page"{% endif %}>All</a>
+        <a href="/index/?kind=tests" {% if test_kind == 'tests' %}aria-current="page"{% endif %}>Tests</a>
+        <a href="/index/?kind=tunes" {% if test_kind == 'tunes' %}aria-current="page"{% endif %}>Tunes</a>
+        <a href="/index/?kind=datagen" {% if test_kind == 'datagen' %}aria-current="page"{% endif %}>Datagen</a>
+    </nav>
+    {% endif %}
     <div class="tests-page" id="live-tests" data-live>
     {% live_region "live-tests" %}
         {% if paging.page == 1 %}
@@ -16,7 +23,7 @@
                     {% include "OpenBench/Blocks/index_tests.html" with tests=pending label="Tests awaiting approval" %}
                 </section>
             {% endif %}
-            {% if status %}
+            {% if status or active %}
                 <section class="tests-section" aria-labelledby="active-heading">
                     <h2 id="active-heading">Active <span class="tests-compute">{{ status|cut:": " }}</span></h2>
                     {% if active %}

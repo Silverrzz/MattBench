@@ -1,0 +1,12 @@
+training.example.com {
+    request_body {
+        max_size 8GB
+    }
+    handle_path /static/* {
+        root * /var/lib/openbench/static
+        file_server
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8000
+    }
+}

@@ -144,6 +144,7 @@
         {% if workload.upload_pgns != "FALSE" %}
             <div class="anchor-container">
                 <a class="mt-1 anchorbutton" href="/api/pgns/{{workload.id}}/">Download PGN archive</a>
+                {% if type == 'DATAGEN' and user.is_authenticated %}<a class="mt-1 anchorbutton" href="/datagen/{{workload.id}}/huggingface/">Upload to Hugging Face</a>{% endif %}
             </div>
         {% endif %}
 

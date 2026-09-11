@@ -1,9 +1,17 @@
 *.pyc
+__pycache__/
 Client/*
 
 credentials
 credentials.*
-db.sqlite3
+*.sqlite3
+*.sqlite3-*
+*.log
+*.log.*
+.env
+.env.*
+!.env.example
+!.env.*.example
 
 Scripts/Engines/*
 Scripts/Networks/*
@@ -11,6 +19,10 @@ Scripts/Networks/*
 Media/*
 
 !Client/*.py
+!Client/cleanup.sh
+!Client/requirements.txt
+!Client/training-requirements.txt
+!Client/training-lock.txt
 !Client/cutechess-ob
 !Client/cutechess-ob.exe
 
@@ -19,11 +31,27 @@ Media/Networks/*
 Media/Events/*
 
 venv/*
+.venv/
 .idea/*
 
 *.lock
-.idea/*
 *.iml
+TrainingData/
+TrainingReplica/
+StaticFiles/
+training-work/
+Deploy/*.env
+Deploy/database.json
+Deploy/*.key
+node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.DS_Store
+Thumbs.db
 *.epd
 bin/
 lib/

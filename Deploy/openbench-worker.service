@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenBench GPU training worker
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=training
+Group=training
+StateDirectory=openbench-worker
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/openbench-worker
+EnvironmentFile=/etc/openbench/worker.env
+ExecStart=/opt/openbench/venv/bin/python /opt/openbench/Client/training_worker.py --directory /var/lib/openbench-worker --execution-image ${MATTBENCH_EXECUTION_IMAGE}
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=360
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -70,7 +70,7 @@ def fetch_results(workload):
 
     # One minute prior to now
     target = datetime.datetime.utcnow()
-    target = target.replace(tzinfo=timezone.utc)
+    target = target.replace(tzinfo=datetime.timezone.utc)
     target = target - datetime.timedelta(minutes=1)
 
     # Create `active` field for current machines

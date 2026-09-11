@@ -1,0 +1,20 @@
+{% extends 'OpenBench/base.html' %}
+{% load static live %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
+{% block page_actions %}<a class="button" href="/workers/">All workers</a>{% endblock %}
+{% block content %}
+<div id="live-worker" data-live>{% live_region 'live-worker' %}
+    <div class="workspace-columns">
+        <section class="workspace-panel workspace-stack">
+            <div class="worker-device"><i class="fa-solid fa-microchip" aria-hidden="true"></i><div><h2>{{ worker.hardware }}</h2><p>{{ worker.owner.username }} · {{ worker.platform }}{% if worker.demo %} · Demo{% endif %}</p></div></div>
+            <div class="worker-jobs">{% for capability in worker.capabilities %}<span class="workspace-tag">{{ capability }}</span>{% endfor %}</div>
+            <dl class="workspace-facts">{% for label, value in worker.details %}{% if value %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}</dl>
+        </section>
+        <section class="workspace-panel workspace-stack">
+            <div class="panel-heading"><h2>Activity</h2><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span></div>
+            <dl class="workspace-facts"><div><dt>Current job</dt><dd>{% if worker.job %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}—{% endif %}</dd></div><div><dt>Last seen</dt><dd>{{ worker.updated|timesince }} ago</dd></div><div><dt>CPU threads</dt><dd>{{ worker.threads }}</dd></div>{% if worker.gpu_memory %}<div><dt>GPU memory</dt><dd>{{ worker.gpu_memory }} GB</dd></div>{% endif %}{% if worker.memory %}<div><dt>RAM</dt><dd>{{ worker.memory }} GB</dd></div>{% endif %}</dl>
+            {% if worker.disconnect %}<form method="post">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect</button></form>{% endif %}
+        </section>
+    </div>
+{% endlive_region %}</div>
+{% endblock %}

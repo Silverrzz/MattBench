@@ -19,6 +19,7 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import atexit
+import os
 import pathlib
 import platform
 import threading
@@ -27,7 +28,7 @@ import django.apps
 
 # No imports of OpenBench.* are allowed here
 
-LOCKFILE_PATH = 'openbench_watchers.lock'
+LOCKFILE_PATH = os.environ.get('OPENBENCH_WATCHER_LOCK', 'openbench_watchers.lock')
 IS_WINDOWS    = platform.system() == 'Windows'
 
 def acquire_watcher_lockfile():
@@ -61,7 +62,17 @@ class OpenBenchConfig(django.apps.AppConfig):
     def ready(self):
 
         import sys
-        if any(command in sys.argv for command in ('migrate', 'makemigrations', 'check', 'import_config', 'import_engines', 'sync_books', 'shell', 'createsuperuser')):
+        if os.environ.get('OPENBENCH_DISABLE_WATCHERS') == '1':
+            return
+
+        maintenance_commands = (
+            'migrate', 'makemigrations', 'check', 'import_config', 'import_engines',
+            'sync_books', 'shell', 'createsuperuser', 'dumpdata', 'loaddata',
+            'clearsessions', 'showmigrations', 'sqlsequencereset', 'test',
+            'training_key', 'seed_demo_data', 'import_bullet_schedules',
+            'training_tasks', 'training_storage', 'training_backup', 'training_restore',
+        )
+        if any(command in sys.argv for command in maintenance_commands):
             return
 
         # Attempt to spawn the PGN Watcher, globally once

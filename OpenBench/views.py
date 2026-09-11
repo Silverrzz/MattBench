@@ -142,6 +142,9 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
                 request.live_payload['digest'] = OpenBench.spsa_utils.spsa_param_digest(workload)
         if template == 'networks.html':
             request.live_payload['networks'] = data['networks']
+        if template == 'training_detail.html':
+            run = data['run']
+            request.live_payload['training'] = {'state': run.state, 'metrics': run.metrics, 'history': run.history, 'log': run.log_tail, 'checkpoint_count': run.checkpoints.count(), 'checkpoint_latest': data['latest_checkpoint'].pk if data['latest_checkpoint'] else None}
 
     for key in ['status_message', 'warning_message', 'error_message']:
         if key in request.session: del request.session[key]
@@ -310,11 +313,23 @@ def profile_config(request):
 
 def index(request, page=1):
 
+    page = max(1, int(page))
+    if request.GET.get('kind') == 'training':
+        return redirect(request, '/training/' if page == 1 else '/training/page/%d/' % page)
+
     pending   = OpenBench.utils.get_pending_tests()
     active    = OpenBench.utils.get_active_tests()
     completed = OpenBench.utils.get_completed_tests()
 
-    start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'index')
+    kind = request.GET.get('kind', '')
+    modes = {'tests': ('SPRT', 'GAMES'), 'tunes': ('SPSA',), 'datagen': ('DATAGEN',)}
+    if kind not in modes:
+        kind = ''
+    if kind in modes:
+        pending = pending.filter(test_mode__in=modes[kind])
+        active = active.filter(test_mode__in=modes[kind])
+        completed = completed.filter(test_mode__in=modes[kind])
+    start, end, paging = OpenBench.utils.getPaging(completed, page, 'index')
 
     data = {
         'pending'   : pending,
@@ -322,6 +337,8 @@ def index(request, page=1):
         'completed' : completed[start:end],
         'paging'    : paging,
         'status'    : OpenBench.utils.getMachineStatus(),
+        'test_kind': kind,
+        'is_test_index': True,
     }
 
     return render(request, 'index.html', data)
@@ -521,17 +538,7 @@ def events_errors(request, page=1):
     return render(request, 'errors.html', data)
 
 def machines(request, pk=None):
-
-    if pk == None:
-        data = { 'machines' : OpenBench.utils.getRecentMachines() }
-        return render(request, 'machines.html', data)
-
-    try:
-        data = { 'machine' : OpenBench.models.Machine.objects.get(id=int(pk)) }
-        return render(request, 'machine.html', data)
-
-    except:
-        return redirect(request, '/machines/', error='Machine does not exist')
+    return redirect(request, '/workers/%s/' % pk if pk is not None else '/workers/')
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #

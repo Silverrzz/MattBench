@@ -8,6 +8,7 @@
 
     const subscriptions = new Set();
     const regions = new Map();
+    const pendingRegions = new Map();
     let socket;
     let retry;
     let watchdog;
@@ -15,9 +16,28 @@
     let stopped = false;
 
     document.addEventListener('input', event => {
-        if (event.target.matches('#actions input, #actions textarea')) {
+        if (event.target.matches('#actions input, #actions textarea, [data-preserve-live]')) {
             event.target.dataset.liveDirty = 'true';
         }
+    });
+
+    function updateRegion(id, html) {
+        const target = document.getElementById(id);
+        if (!target) return;
+        if (target.contains(document.activeElement) || target.querySelector('[data-preserve-live][data-live-dirty]')) {
+            pendingRegions.set(id, html);
+            return;
+        }
+        pendingRegions.delete(id);
+        if (regions.get(id) === html && id !== 'live-networks') return;
+        target.innerHTML = html;
+        regions.set(id, html);
+        format_live_content(target);
+        window.dispatchEvent(new CustomEvent('live-content', {detail: {id}}));
+    }
+
+    document.addEventListener('focusout', () => {
+        queueMicrotask(() => pendingRegions.forEach((html, id) => updateRegion(id, html)));
     });
 
     window.subscribe_live = name => {
@@ -53,16 +73,13 @@
             status.textContent = 'Live';
             delay = 1000;
             Object.entries(data.regions || {}).forEach(([id, html]) => {
-                const target = document.getElementById(id);
-                if (!target || (regions.get(id) === html && id !== 'live-networks')) return;
-                target.innerHTML = html;
-                regions.set(id, html);
-                format_live_content(target);
+                updateRegion(id, html);
             });
             if (data.summary) populate_summary(data.summary);
             if (data.results) populate_results(data.results);
             if (data.digest !== undefined) populate_spsa_digest(data.digest);
             if (data.history) window.dispatchEvent(new CustomEvent('live-history', {detail: data.history}));
+            if (data.training) window.dispatchEvent(new CustomEvent('live-training', {detail: data.training}));
             Object.entries(data.fields || {}).forEach(([id, value]) => {
                 const input = document.getElementById(id);
                 if (input && !input.dataset.liveDirty && input !== document.activeElement) {

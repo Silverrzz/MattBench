@@ -97,7 +97,7 @@ def filter_valid_workloads(request, machine):
 
     # The ordering of get_active_tests() is for the GUI. It costs a sort that we
     # do not need, since the priority refinement below is done in Python anyway
-    workloads = OpenBench.utils.get_active_tests().order_by()
+    workloads = OpenBench.utils.get_active_tests().exclude(execution__has_key='demo').order_by()
 
     # Skip engines that the Machine cannot handle. Expressed as a whitelist, so
     # the query carries two IN() clauses instead of one NOT for every engine

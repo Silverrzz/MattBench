@@ -19,7 +19,7 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 from django.db.models import CharField, IntegerField, BigIntegerField, BooleanField, FloatField
-from django.db.models import JSONField, ForeignKey, DateTimeField, OneToOneField
+from django.db.models import JSONField, ForeignKey, DateTimeField, OneToOneField, TextField
 from django.db.models import CASCADE, PROTECT, Model, TextChoices, UniqueConstraint
 from django.contrib.auth.models import User
 
@@ -115,7 +115,7 @@ class Test(Model):
     dev              = ForeignKey('Engine', PROTECT, related_name='dev')
     dev_repo         = CharField(max_length=1024)
     dev_engine       = CharField(max_length=64)
-    dev_options      = CharField(max_length=256)
+    dev_options      = TextField()
     dev_network      = CharField(max_length=256, blank=True)
     dev_netname      = CharField(max_length=256, blank=True)
     dev_time_control = CharField(max_length=32)
@@ -124,7 +124,7 @@ class Test(Model):
     base              = ForeignKey('Engine', PROTECT, related_name='base')
     base_repo         = CharField(max_length=1024)
     base_engine       = CharField(max_length=64)
-    base_options      = CharField(max_length=256)
+    base_options      = TextField()
     base_network      = CharField(max_length=256, blank=True)
     base_netname      = CharField(max_length=256, blank=True)
     base_time_control = CharField(max_length=32)
@@ -155,7 +155,7 @@ class Test(Model):
     upperllr      = FloatField(default=0.0) # SPRT
     llr_history_state = JSONField(default=dict, blank=True)
     execution = JSONField(default=dict, blank=True)
-    max_games     = IntegerField(default=0) # GAMES or DATAGEN
+    max_games     = BigIntegerField(default=0)
     genfens_args  = CharField(max_length=256, default='', blank=True) # DATAGEN
     play_reverses = BooleanField(default=False) # DATAGEN
 
@@ -413,3 +413,10 @@ class WorkloadPreset(Model):
     def clean(self):
         from OpenBench.config import verify_preset
         verify_preset(self.workload_type, self.settings)
+
+
+from OpenBench.training_models import HuggingFaceCredential, TrainingSchedule, TrainingWorker
+from OpenBench.training_models import TrainingRun, TrainingArtifact, DatasetUpload
+from OpenBench.training_models import TrainingCheckpoint, LifecycleEvent
+from OpenBench.training_models import TrainingDataset
+from OpenBench.training_models import TrainingServiceLease

@@ -1,0 +1,21 @@
+{% extends 'OpenBench/base.html' %}
+{% load static live %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><script src="{% static 'workspace.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block page_actions %}<a class="button button-primary" href="/training/new/"><span aria-hidden="true">+</span> New train</a>{% endblock %}
+{% block content %}
+<div data-filter-scope>
+    <div class="workspace-toolbar"><input data-search type="search" placeholder="Search runs" aria-label="Search training runs"><select data-filter-select="engine" aria-label="Filter by engine"><option value="">All engines</option>{% for engine in engines %}<option value="{{ engine.name }}">{{ engine.name }}</option>{% endfor %}</select></div>
+    <div class="tests-page" id="live-training-runs" data-live>{% live_region 'live-training-runs' %}
+        {% if paging.page == 1 %}
+        <section class="tests-section" data-filter-section aria-labelledby="active-heading"><h2 id="active-heading">Active <span class="section-count">{{ active|length }}</span></h2>
+            {% if active %}{% include 'OpenBench/Blocks/training_rows.html' with runs=active label='Active training runs' %}{% else %}<div class="tests-empty"><strong>No active runs</strong></div>{% endif %}
+        </section>
+        {% endif %}
+        <section class="tests-section" data-filter-section aria-labelledby="finished-heading"><h2 id="finished-heading">Finished <span class="section-count">{{ finished|length }} shown</span></h2>
+            {% if finished %}{% include 'OpenBench/Blocks/training_rows.html' with runs=finished label='Finished training runs' %}{% else %}<div class="tests-empty"><strong>No finished runs</strong></div>{% endif %}
+            {% if paging.prev != paging.next %}{% include 'OpenBench/Blocks/pagebrowser.html' %}{% endif %}
+        </section>
+    {% endlive_region %}</div>
+    <div class="tests-empty" data-search-empty hidden><strong>No matching runs</strong></div>
+</div>
+{% endblock %}

@@ -58,6 +58,25 @@
         </div>
     </form>
 
+    <section class="form form-section" aria-labelledby="huggingface-heading">
+        <h2 id="huggingface-heading">Hugging Face</h2>
+        {% if user.huggingface %}
+            <p>Connected as <strong>{{ user.huggingface.account }}</strong> · Updated {{ user.huggingface.updated|date:"j M Y" }}</p>
+        {% endif %}
+        <form method="post" action="/profile/huggingface/" class="form-stack">
+            {% csrf_token %}
+            <div class="field">
+                <label for="hf-token">{% if user.huggingface %}Replace access token{% else %}Access token{% endif %}</label>
+                <input id="hf-token" name="token" type="password" autocomplete="new-password" spellcheck="false" required>
+                <a class="field-note" href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">Manage access tokens ↗</a>
+            </div>
+            <div class="form-actions"><button class="button button-primary" type="submit">{% if user.huggingface %}Replace token{% else %}Connect account{% endif %}</button></div>
+        </form>
+        {% if user.huggingface %}
+            <form method="post" action="/profile/huggingface/">{% csrf_token %}<input type="hidden" name="action" value="disconnect"><button class="button" type="submit">Disconnect Hugging Face</button></form>
+        {% endif %}
+    </section>
+
     <form class="form form-section" method="POST" action="/profileConfig/" id="repository-form" aria-labelledby="repositories-heading">
         {% csrf_token %}
         <h2 id="repositories-heading">Engine repositories</h2>

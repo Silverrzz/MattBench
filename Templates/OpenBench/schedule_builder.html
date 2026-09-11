@@ -1,0 +1,106 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'schedule_builder.css' %}?{{ static_version }}"><script src="{% static 'schedule_builder.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block content %}
+{% include 'OpenBench/Blocks/training_nav.html' %}
+<form class="form schedule-builder" id="schedule-builder" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">
+    {% csrf_token %}
+    {% if builder_data.notice %}<p class="builder-notice">{{ builder_data.notice }}</p>{% endif %}
+    <fieldset id="builder-fields">
+        <legend class="sr-only">Schedule configuration</legend>
+        <div class="builder-identity">
+            <div class="field"><label for="builder-name">Schedule name</label><input id="builder-name" maxlength="128" required placeholder="Schedule name" value="{{ builder_data.name }}"></div>
+            <div class="field"><label for="builder-scope">Scope</label><select id="builder-scope"><option value="personal">Personal</option>{% if user.is_superuser %}<option value="engine">Engine</option><option value="global">Global</option>{% endif %}</select></div>
+            <div class="field" id="builder-engine-field"><label for="builder-engine">Engine</label><select id="builder-engine" required><option value="">Choose engine</option>{% for engine in engines %}<option value="{{ engine.pk }}">{{ engine.name }}</option>{% endfor %}</select></div>
+        </div>
+        <div class="builder-workspace">
+            <div class="builder-controls">
+                <div class="builder-tabs" role="tablist" aria-label="Builder settings">
+                    <button type="button" id="tab-network" role="tab" aria-controls="panel-network" aria-selected="true" data-tab="network">Network</button>
+                    <button type="button" id="tab-buckets" role="tab" aria-controls="panel-buckets" aria-selected="false" tabindex="-1" data-tab="buckets">Buckets</button>
+                    <button type="button" id="tab-training" role="tab" aria-controls="panel-training" aria-selected="false" tabindex="-1" data-tab="training">Training</button>
+                </div>
+                <section class="builder-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
+                    <div class="builder-group">
+                        <h2>Input features</h2>
+                        <div class="builder-input-base">Piece-square inputs <span>768 per king bucket</span></div>
+                        <label class="choice"><input type="checkbox" name="threat_inputs">Threat inputs (TI)</label>
+                        <label class="choice"><input type="checkbox" name="pawn_pair_inputs">Pawn-pair inputs (PP)</label>
+                    </div>
+                    <div class="builder-group">
+                        <div class="builder-group-heading"><h2>Hidden layers</h2><button class="button" id="builder-add-layer" type="button">+ Add layer</button></div>
+                        <div id="builder-layers"></div>
+                        <div class="field"><label for="builder-activation">Activation</label><select id="builder-activation" name="activation"><option value="screlu">SCReLU</option><option value="crelu">CReLU</option></select></div>
+                    </div>
+                    <div class="builder-group">
+                        <div class="field"><label for="builder-feature-format">Feature layer export</label><select id="builder-feature-format" name="feature_format"><option value="i16">i16 · scale 255</option><option value="f32">f32</option></select></div>
+                    </div>
+                </section>
+                <section class="builder-panel" id="panel-buckets" role="tabpanel" aria-labelledby="tab-buckets" hidden>
+                    <div class="builder-group">
+                        <div class="field-grid">
+                            <div class="field"><label for="builder-input-buckets">Input buckets</label><input id="builder-input-buckets" name="input_buckets" type="number" min="1" max="32" required></div>
+                            <div class="field"><label for="builder-output-buckets">Output buckets</label><input id="builder-output-buckets" name="output_buckets" type="number" min="1" max="32" required></div>
+                        </div>
+                        <label class="choice"><input type="checkbox" name="mirrored">Mirror files a–h, b–g, c–f, d–e</label>
+                    </div>
+                    <div class="builder-group">
+                        <div class="builder-board-toolbar"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
+                        <div class="builder-board" id="builder-board" role="group" aria-label="King square input buckets"></div>
+                        <p class="builder-note" id="builder-layout-status" aria-live="polite"></p>
+                    </div>
+                </section>
+                <section class="builder-panel" id="panel-training" role="tabpanel" aria-labelledby="tab-training" hidden>
+                    <div class="builder-group">
+                        <div class="field-grid">
+                            <div class="field"><label for="builder-superbatches">Superbatches</label><input id="builder-superbatches" name="superbatches" type="number" min="1" max="1000000" required></div>
+                            <div class="field"><label for="builder-save-every">Save every (SB)</label><input id="builder-save-every" name="save_every" type="number" min="1" max="1000000" required></div>
+                            <div class="field"><label for="builder-batch-size">Batch size</label><input id="builder-batch-size" name="batch_size" type="number" min="1" max="1048576" required></div>
+                            <div class="field"><label for="builder-batches">Batches per SB</label><input id="builder-batches" name="batches_per_superbatch" type="number" min="1" max="1000000" required></div>
+                        </div>
+                    </div>
+                    <div class="builder-group">
+                        <h3>Learning rate stages</h3>
+                        <div id="builder-lr-stages"></div>
+                        <button type="button" class="button" id="builder-add-lr-stage">Add LR stage</button>
+                    </div>
+                    <div class="builder-group">
+                        <h3>WDL blend stages</h3>
+                        <div id="builder-wdl-stages"></div>
+                        <button type="button" class="button" id="builder-add-wdl-stage">Add WDL stage</button>
+                    </div>
+                    <details class="training-options"><summary>Dataset processing on worker</summary>
+                        <label class="choice"><input type="checkbox" name="shuffle">Shuffle games</label>
+                        <label class="choice"><input type="checkbox" name="interleave">Interleave already-shuffled files</label>
+                        <p class="builder-note">Shuffling mixes games across the whole dataset. Interleaving also mixes files already marked shuffled. Both use the random seed below; completed preparation is reused.</p>
+                        <div class="field-grid">
+                            <div class="field"><label for="builder-shuffle-memory">Shuffle chunk memory (MiB)</label><input id="builder-shuffle-memory" name="shuffle_memory_mb" type="number" min="16" max="65536" required></div>
+                            <div class="field"><label for="builder-interleave-fan-in">Files per merge</label><input id="builder-interleave-fan-in" name="interleave_fan_in" type="number" min="2" max="256" required></div>
+                            <div class="field"><label for="builder-dataset-shard">Output shard size (MiB)</label><input id="builder-dataset-shard" name="dataset_shard_mb" type="number" min="4" max="16384" required></div>
+                        </div>
+                    </details>
+                    <details class="training-options"><summary>Loader &amp; initialization</summary><div class="field-grid">
+                        <div class="field"><label for="builder-backend">GPU backend</label><select id="builder-backend" name="backend"><option value="cuda">CUDA</option><option value="rocm">ROCm</option></select></div>
+                        <div class="field"><label for="builder-threads">Loader threads</label><input id="builder-threads" name="threads" type="number" min="1" max="255" required></div>
+                        <div class="field"><label for="builder-buffer">Read buffer (MB)</label><input id="builder-buffer" name="buffer_mb" type="number" min="16" max="65536" required></div>
+                        <div class="field"><label for="builder-eval-scale">Evaluation scale</label><input id="builder-eval-scale" name="eval_scale" type="number" min="1" max="100000" step="any" required></div>
+                        <div class="field"><label for="builder-seed">Random seed</label><input id="builder-seed" name="seed" type="number" min="0" max="9007199254740991" required></div>
+                    </div></details>
+                </section>
+            </div>
+            <section class="builder-preview schedule-editor-shell" aria-label="Generated Rust">
+                <div class="builder-preview-heading"><span>examples/mattbench.rs</span><button class="button" id="builder-download" type="button">Download Rust</button></div>
+                <label class="sr-only" for="builder-source">Generated Rust source</label><textarea id="builder-source" class="code-input" readonly spellcheck="false" wrap="off">{{ builder_data.source }}</textarea>
+                <div class="editor-status" id="builder-preview-status" role="status">Generated Rust</div>
+            </section>
+        </div>
+    </fieldset>
+    <div class="form-actions schedule-save builder-actions">
+        <p id="builder-feedback" role="status" aria-live="polite"></p>
+        <a class="button" id="builder-open-source" href="/training/schedules/{{ builder_data.id }}/" {% if not builder_data.id %}hidden{% endif %}>Edit source</a>
+        <a class="button" id="builder-use" href="/training/new/?schedule={{ builder_data.id }}&amp;engine={{ builder_data.engine }}" {% if not builder_data.id %}hidden{% endif %}>Use schedule</a>
+        <button type="submit" class="button button-primary" id="builder-save">Save schedule</button>
+    </div>
+</form>
+{{ builder_data|json_script:'schedule-builder-data' }}
+{% endblock %}

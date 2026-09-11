@@ -21,8 +21,49 @@
 import django.urls, OpenBench.views
 import OpenBench.configuration_views
 import OpenBench.presets
+from OpenBench import training_api, training_views, dataset_library
+from OpenBench.schedule_builder_views import schedule_builder
+from OpenBench import training_checkpoints, training_datasets
+from OpenBench import worker_views
 
 urlpatterns = [
+
+    django.urls.path('profile/huggingface/', training_views.connection),
+    django.urls.path('training/', training_views.training_index),
+    django.urls.path('training/page/<int:page>/', training_views.training_index),
+    django.urls.path('training/new/', training_views.new_training),
+    django.urls.path('training/datasets/', dataset_library.library),
+    django.urls.path('training/datasets/new/', dataset_library.library, {'create': True}),
+    django.urls.path('training/datasets/<uuid:dataset_id>/', dataset_library.library),
+    django.urls.path('training/schedules/', training_views.schedules),
+    django.urls.path('training/schedules/new/', training_views.schedules, {'create': True}),
+    django.urls.path('training/schedules/builder/', schedule_builder),
+    django.urls.path('training/schedules/<uuid:schedule_id>/builder/', schedule_builder),
+    django.urls.path('training/schedules/<uuid:schedule_id>/', training_views.schedules),
+    django.urls.path('training/workers/', training_views.workers),
+    django.urls.path('workers/', worker_views.index),
+    django.urls.path('workers/<int:pk>/', worker_views.detail),
+    django.urls.path('workers/<uuid:pk>/', worker_views.detail),
+    django.urls.path('training/<int:pk>/', training_views.training_detail),
+    django.urls.path('training/<int:pk>/log/', training_views.training_log),
+    django.urls.path('training/<int:pk>/configuration/', training_views.training_configuration),
+    django.urls.path('training/<int:pk>/checkpoints/', training_views.checkpoint_list),
+    django.urls.path('training/<int:pk>/artifacts/<int:artifact_id>/', training_views.artifact),
+    django.urls.path('datagen/<int:pk>/huggingface/', training_views.dataset_upload),
+    django.urls.path('api/training/register/', training_api.register),
+    django.urls.path('api/training/claim/', training_api.claim),
+    django.urls.path('api/training/<int:pk>/recover/', training_api.recover),
+    django.urls.path('api/training/<int:pk>/report/', training_api.report),
+    django.urls.path('api/training/<int:pk>/dataset/<int:file_index>/', training_api.dataset_access),
+    django.urls.path('api/training/<int:pk>/dataset/<int:file_index>/file/', training_api.dataset_file),
+    django.urls.path('api/training/<int:pk>/xet-token/', training_api.xet_token),
+    django.urls.path('api/training/<int:pk>/artifacts/', training_api.upload_artifact),
+    django.urls.path('api/training/<int:pk>/checkpoints/', training_checkpoints.checkpoint_ready),
+    django.urls.path('api/training/<int:pk>/resume/', training_checkpoints.resume_download),
+    django.urls.path('api/training/<int:pk>/dataset/prepare/', training_datasets.prepare),
+    django.urls.path('api/training/<int:pk>/dataset/prepare/token/', training_datasets.dataset_token),
+    django.urls.path('api/training/<int:pk>/dataset/prepare/publish/', training_datasets.publish_dataset),
+    django.urls.path('api/lifecycle/events/', training_views.lifecycle_events),
 
     django.urls.path('presets/<str:kind>/', OpenBench.presets.presets),
 

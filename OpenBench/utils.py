@@ -183,18 +183,18 @@ def get_pending_tests():
     t = Test.objects.select_related('dev', 'base').filter(approved=False)
     t = t.exclude(finished=True)
     t = t.exclude(deleted=True)
-    return t.order_by('-creation')
+    return t.order_by('-creation', '-pk')
 
 def get_active_tests():
     t = Test.objects.select_related('dev', 'base').filter(approved=True)
     t = t.exclude(finished=True)
     t = t.exclude(deleted=True)
-    return t.order_by('-priority', '-currentllr')
+    return t.order_by('-priority', '-creation', '-pk')
 
 def get_completed_tests():
     t = Test.objects.select_related('dev', 'base').filter(finished=True)
     t = t.exclude(deleted=True)
-    return t.order_by('-updated')
+    return t.order_by('-updated', '-pk')
 
 def group_active_tests_by_priority(active):
     grouped = []
@@ -207,9 +207,9 @@ def group_active_tests_by_priority(active):
 
 def getRecentMachines(minutes=2):
     target = datetime.datetime.utcnow()
-    target = target.replace(tzinfo=timezone.utc)
+    target = target.replace(tzinfo=datetime.timezone.utc)
     target = target - datetime.timedelta(minutes=minutes)
-    return Machine.objects.filter(updated__gte=target)
+    return Machine.objects.filter(updated__gte=target).exclude(info__has_key='demo')
 
 def getMachineStatus(username=None):
 
@@ -218,7 +218,7 @@ def getMachineStatus(username=None):
     if username != None:
         machines = machines.filter(user__username=username)
 
-    return ": {0} Machines / ".format(len(machines)) + \
+    return ": {0} Workers / ".format(len(machines)) + \
            "{0} Threads / ".format(sum([f.info['concurrency'] for f in machines])) + \
            "{0} MNPS ".format(round(sum([f.info['concurrency'] * f.mnps for f in machines]), 2))
 

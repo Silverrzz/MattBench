@@ -1,0 +1,47 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'training.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block content %}
+{% include 'OpenBench/Blocks/training_nav.html' %}
+<form class="form training-create" method="post" id="training-new-form">
+    {% csrf_token %}{{ form.non_field_errors }}
+    <section class="training-form-section" aria-labelledby="training-setup-heading">
+    <h3 id="training-setup-heading">Training setup</h3>
+    <div class="field-grid training-identity">
+        <div class="field">{{ form.engine.label_tag }}{{ form.engine }}{{ form.engine.errors }}</div>
+        <div class="field"><div class="training-schedule-label field-label">{{ form.schedule.label_tag }}<a id="training-schedule-link" hidden>Edit schedule</a></div>{{ form.schedule }}{{ form.schedule.errors }}</div>
+        <div class="field">{{ form.name.label_tag }}{{ form.name }}{{ form.name.errors }}</div>
+    </div>
+    </section>
+    {{ form.stage_datasets }}{{ form.stage_datasets.errors }}
+        <section class="training-form-section" aria-labelledby="training-data-heading">
+            <div class="training-dataset-heading"><h3 id="training-data-heading">Datasets by stage</h3><a href="/training/datasets/">Manage datasets</a></div>
+            {{ form.dataset }}{{ form.dataset.errors }}
+            <div id="training-stage-datasets"></div>
+            {% if not dataset_options %}<p class="field-note"><a href="/training/datasets/new/">Register dataset</a></p>{% endif %}
+        </section>
+        <details class="training-run-settings" id="training-run-settings" {% if form.worker.errors or form.checkpoint_retention.errors or form.checkpoint_keep_last.errors or form.delete_uploaded_checkpoints.errors %}open{% endif %}>
+            <summary>Run settings <span id="training-settings-summary"></span></summary>
+            <div class="training-settings-grid">
+            <div class="field">{{ form.worker.label_tag }}{{ form.worker }}{{ form.worker.errors }}</div>
+            <div class="field"><label for="train-checkpoint_retention">Checkpoints</label>
+                <div class="training-retention">
+                    {{ form.checkpoint_retention }}
+                    <div id="training-checkpoint-count"><label class="sr-only" for="train-checkpoint_keep_last">Number to keep</label>{{ form.checkpoint_keep_last }}<span>checkpoints</span></div>
+                </div>
+                {{ form.checkpoint_retention.errors }}{{ form.checkpoint_keep_last.errors }}
+                <label class="choice training-local-cleanup">{{ form.delete_uploaded_checkpoints }}{{ form.delete_uploaded_checkpoints.label }}</label>
+            </div>
+            </div>
+        </details>
+    <div class="training-create-actions">
+        <div class="form-actions">
+            {% if not hf_connected %}<a class="training-connect" href="/profile/">Connect Hugging Face</a>{% endif %}
+            <a class="button" href="/training/">Cancel</a>
+            <button class="button button-primary" type="submit" {% if not hf_connected %}disabled{% endif %}>Start training</button>
+        </div>
+    </div>
+</form>
+{{ schedule_options|json_script:'training-schedule-options' }}
+{{ dataset_options|json_script:'training-dataset-options' }}
+{% endblock %}

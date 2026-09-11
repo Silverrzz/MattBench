@@ -14,6 +14,8 @@ from django.http import HttpRequest, QueryDict
 from django.urls import Resolver404, resolve
 
 from OpenBench import views
+from OpenBench import training_views
+from OpenBench import worker_views
 from OpenBench.config import ConfigurationMiddleware
 
 
@@ -47,6 +49,8 @@ class LiveUpdates(AsyncJsonWebsocketConsumer):
         allowed = (
             views.index, views.user, views.greens, views.search, views.workload,
             views.users, views.machines, views.events_actions, views.events_errors, views.networks,
+            training_views.training_index, training_views.training_detail, training_views.dataset_upload, training_views.workers,
+            worker_views.index, worker_views.detail,
         )
         if self.route.func not in allowed or self.route.kwargs.get('action'):
             await self.close(code=4404)

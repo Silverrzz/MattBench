@@ -27,6 +27,7 @@ import traceback
 from OpenBench.models import PGN
 
 from django.core.files.storage import FileSystemStorage
+from django.apps import apps
 from django.db import close_old_connections
 
 # Max PGN rows handled per pass. Drains a backlog in chunks, and bounds how long
@@ -75,6 +76,7 @@ class PGNWatcher(threading.Thread):
         return len(pgns)
 
     def run(self):
+        apps.ready_event.wait()
 
         # Loop until we are shutdown by the atexit.register()
         while not self.stop_event.is_set():

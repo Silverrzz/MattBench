@@ -1,19 +1,19 @@
-<nav id="pagebrowse" aria-label="Test pages">
+<nav id="pagebrowse" aria-label="{{ paging.label|default:'Test pages' }}">
     {% if paging.prev != paging.next %}
         <div class="pagination">
-            <a class="page previous" href="/{{ paging.url }}/{{ paging.prev }}" aria-label="Previous page">←</a>
+            <a class="page previous" href="/{{ paging.url }}/{{ paging.prev }}/{% if test_kind %}?kind={{ test_kind|urlencode }}{% endif %}" aria-label="Previous page">←</a>
             <div class="pages">
                 {% for page in paging.pages %}
                     {% if page == "..." %}
                         <span class="page ellipsis" aria-hidden="true">…</span>
                     {% elif page == paging.page %}
-                        <a class="page current" href="/{{ paging.url }}/{{ page }}" aria-current="page" aria-label="Page {{ page }}">{{ page }}</a>
+                        <a class="page current" href="/{{ paging.url }}/{{ page }}/{% if test_kind %}?kind={{ test_kind|urlencode }}{% endif %}" aria-current="page" aria-label="Page {{ page }}">{{ page }}</a>
                     {% else %}
-                        <a class="page" href="/{{ paging.url }}/{{ page }}" aria-label="Page {{ page }}">{{ page }}</a>
+                        <a class="page" href="/{{ paging.url }}/{{ page }}/{% if test_kind %}?kind={{ test_kind|urlencode }}{% endif %}" aria-label="Page {{ page }}">{{ page }}</a>
                     {% endif %}
                 {% endfor %}
             </div>
-            <a class="page next" href="/{{ paging.url }}/{{ paging.next }}" aria-label="Next page">→</a>
+            <a class="page next" href="/{{ paging.url }}/{{ paging.next }}/{% if test_kind %}?kind={{ test_kind|urlencode }}{% endif %}" aria-label="Next page">→</a>
         </div>
     {% endif %}
 </nav>

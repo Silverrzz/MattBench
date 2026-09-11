@@ -1,0 +1,46 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'training_schedules.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block page_actions %}{% if builder_available %}<a class="button" href="/training/schedules/{{ selected.pk }}/builder/">Open builder</a>{% endif %}{% if selected %}<a class="button" href="?copy=1">Save a copy</a>{% endif %}<a id="train-with-schedule" class="button button-primary" href="/training/new/?schedule={{ schedule_data.id }}&amp;engine={{ schedule_data.engine }}" {% if not schedule_data.id %}hidden{% endif %}>Use schedule</a>{% endblock %}
+{% block content %}
+{% include 'OpenBench/Blocks/training_nav.html' %}
+<div class="schedule-layout" id="schedule-workspace" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">
+    <aside class="schedule-library" aria-label="Schedules">
+        <a class="button" href="/training/schedules/new/">+ New schedule</a>
+        <input type="search" id="schedule-search" placeholder="Find a schedule" aria-label="Find a schedule">
+        <div id="schedule-library-list">{% for row in schedules %}<a class="schedule-library-row" href="/training/schedules/{{ row.pk }}/" {% if row.pk == selected.pk %}aria-current="page"{% endif %}><span>{% if row.scope == 'engine' %}{{ row.engine.name }}{% else %}All engines{% endif %} · {{ row.scope_label }}</span><strong>{{ row.name }}</strong></a>{% empty %}<span class="workspace-muted">No saved schedules</span>{% endfor %}</div>
+    </aside>
+    <form class="form schedule-form workspace-stack" id="schedule-form">
+        {% csrf_token %}
+        <section class="workspace-panel workspace-stack">
+            <div class="field-grid">
+                <div class="field"><label for="schedule-name">Name</label><input id="schedule-name" maxlength="128" required value="{{ schedule_data.name }}"></div>
+                <div class="field" id="schedule-engine-field"><label for="schedule-engine">Engine</label><select id="schedule-engine" required><option value="">Choose engine</option>{% for engine in engines %}<option value="{{ engine.pk }}">{{ engine.name }}</option>{% endfor %}</select></div>
+                <div class="field"><label for="schedule-scope">Scope</label><select id="schedule-scope"><option value="personal">Personal</option>{% if user.is_superuser or schedule_data.scope == 'engine' %}<option value="engine">Engine</option>{% endif %}{% if user.is_superuser or schedule_data.scope == 'global' %}<option value="global">Global</option>{% endif %}</select></div>
+            </div>
+            <div class="field-grid">
+                <div class="field"><label for="bullet-repo">Bullet fork</label><input id="bullet-repo" type="url" required spellcheck="false"></div>
+                <div class="field"><label for="bullet-ref">Revision</label><input id="bullet-ref" required spellcheck="false"></div>
+            </div>
+        </section>
+        <section class="schedule-editor-shell" id="schedule-editor-shell">
+            <div class="editor-toolbar">
+                <select id="schedule-file" aria-label="Source file"></select>
+                <input id="schedule-path" aria-label="New file path" spellcheck="false" hidden>
+                <label class="button" for="schedule-upload">Upload<input id="schedule-upload" type="file" multiple accept=".rs,.toml,.json,.py,.sh,.txt" class="sr-only"></label>
+                <button type="button" class="button" id="add-schedule-file">Add</button>
+                <button type="button" class="button" id="rename-schedule-file">Rename</button>
+                <button type="button" class="button" id="cancel-schedule-rename" hidden>Cancel</button>
+                <button type="button" class="button" id="remove-schedule-file">Remove</button>
+                <button type="button" class="button" id="expand-editor" aria-pressed="false">Expand</button>
+            </div>
+            <label for="schedule-source" class="sr-only">Source code</label>
+            <textarea id="schedule-source" class="code-input" spellcheck="false" wrap="off"></textarea>
+            <div class="editor-status">Rust <span aria-hidden="true">·</span> Ctrl/Cmd+S</div>
+        </section>
+        <details class="training-options" id="schedule-build-settings"><summary>Build settings</summary><div class="field"><label class="sr-only" for="schedule-settings">Build settings JSON</label><textarea id="schedule-settings" class="code-input" rows="16" spellcheck="false"></textarea></div></details>
+        <div class="form-actions schedule-save"><p id="schedule-feedback" role="status" aria-live="polite"></p><button class="button" type="button" id="delete-schedule" {% if not schedule_data.id %}hidden{% endif %}>Delete</button><button class="button button-primary" type="submit" id="save-schedule">Save schedule</button></div>
+    </form>
+</div>
+{{ schedule_data|json_script:'training-schedule-data' }}
+{% endblock %}

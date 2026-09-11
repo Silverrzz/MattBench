@@ -6,12 +6,21 @@
     <div id="live-page" data-live>
     {% live_region "live-page" %}
 
-    <table class="hoverable">
+    <div class="table-scroll">
+    <table class="hoverable contributors-table">
+
+        <colgroup>
+            <col class="contributor-username">
+            <col class="contributor-games">
+            <col class="contributor-tests">
+            <col class="contributor-engine">
+            <col class="contributor-created">
+        </colgroup>
 
         <thead><tr class="table-header">
             <th scope="col">Username</th>
-            <th scope="col">Games</th>
-            <th scope="col">Tests</th>
+            <th scope="col" class="contributor-number">Games</th>
+            <th scope="col" class="contributor-number">Tests</th>
             <th scope="col">Engine</th>
             <th scope="col">Created</th>
         </tr></thead>
@@ -21,9 +30,9 @@
             {% if profile.games or profile.tests or profile.approver %}
                 <tr>
                     <td><a href="/user/{{profile.user.username}}">{{profile.user.username}}</a></td>
-                    <td style="text-align: right">{{profile.games|insertCommas}}</td>
-                    <td style="text-align: right">{{profile.tests|insertCommas}}</td>
-                    <td>{{profile.engine}}</td>
+                    <td class="contributor-number">{{profile.games|insertCommas}}</td>
+                    <td class="contributor-number">{{profile.tests|insertCommas}}</td>
+                    <td>{{profile.engine|default:'—'}}</td>
                     <td class="timestamp">{{profile.user.date_joined|date:'U'}}</td>
                 </tr>
             {% endif %}
@@ -31,6 +40,7 @@
         </tbody>
 
     </table>
+    </div>
 
     {% endlive_region %}
     </div>

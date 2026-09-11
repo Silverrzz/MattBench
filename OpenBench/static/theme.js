@@ -104,8 +104,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const parts = window.location.pathname.split('/').filter(Boolean);
     const section = parts[0] || 'index';
-    const aliases = { index: 'tests', user: 'tests', test: 'tests', tune: 'tests', datagen: 'tests', newNetwork: 'uploadnet', profileConfig: 'profile' };
-    const current = parts[1] === 'new' ? `new-${section}` : aliases[section] || section;
+    const aliases = { index: 'tests', user: 'tests', test: 'tests', tune: 'tests', datagen: 'tests', training: 'training', machines: 'workers', newNetwork: 'uploadnet', profileConfig: 'profile' };
+    const current = section === 'training' && ['new', 'schedules'].includes(parts[1]) ? 'new-training' : parts[1] === 'new' ? `new-${section}` : aliases[section] || section;
     sidebar.querySelector(`[data-nav="${current.replace(/[^a-z-]/g, '')}"]`)?.setAttribute('aria-current', 'page');
 
     format_live_content(document);

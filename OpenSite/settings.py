@@ -10,7 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/2.0/ref/settings/
 """
 
+import json
 import os
+
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,12 +22,26 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 # SECURITY WARNING: keep the secret key used in production secret!
 # SECURITY WARNING: don't run with debug turned on in production!
-SECRET_KEY = '@!zw2l8til1(0eb_nk+1w!(n78gqm&u)s)_v7#k6iseia@g9q0'
-DEBUG = True
+DEBUG = os.environ.get('OPENBENCH_DEBUG', '1').lower() in ('1', 'true', 'yes')
+SECRET_KEY = os.environ.get('OPENBENCH_SECRET_KEY', '')
+if not SECRET_KEY and DEBUG:
+    SECRET_KEY = 'development-only-openbench-key-never-use-this-for-production'
+if not SECRET_KEY or not DEBUG and (len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5):
+    raise ImproperlyConfigured('Set OPENBENCH_SECRET_KEY to a random secret of at least 50 characters.')
 
-ALLOWED_HOSTS = ['*']
-CSRF_TRUSTED_ORIGINS = ['https://chess.n9x.co', 'https://openbench.nocturn9x.space']
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('OPENBENCH_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]' if DEBUG else '').split(',') if host.strip()]
+if not ALLOWED_HOSTS or not DEBUG and '*' in ALLOWED_HOSTS:
+    raise ImproperlyConfigured('Set OPENBENCH_ALLOWED_HOSTS to the production hostnames.')
+CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get('OPENBENCH_CSRF_ORIGINS', '').split(',') if origin.strip()]
+if os.environ.get('OPENBENCH_TRUST_PROXY') == '1':
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_SSL_REDIRECT = not DEBUG
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get('OPENBENCH_HSTS_SUBDOMAINS') == '1'
+SECURE_HSTS_PRELOAD = os.environ.get('OPENBENCH_HSTS_PRELOAD') == '1'
+SECURE_CONTENT_TYPE_NOSNIFF = True
 
 HTML_MINIFY   = True
 APPEND_SLASH  = True
@@ -39,7 +56,7 @@ PROJECT_PATH  = os.path.abspath(PROJECT_PATH)
 TEMPLATE_PATH = os.path.join(PROJECT_PATH, 'Templates')
 
 MEDIA_URL  = '/Media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'Media')
+MEDIA_ROOT = os.environ.get('OPENBENCH_MEDIA_ROOT', os.path.join(BASE_DIR, 'Media'))
 
 INSTALLED_APPS = [
     'daphne',
@@ -99,6 +116,16 @@ DATABASES = {
     }
 }
 
+database_config_path = os.environ.get('OPENBENCH_DATABASE_CONFIG')
+if database_config_path:
+    with open(database_config_path, encoding='utf-8') as database_config_file:
+        database_config = json.load(database_config_file)
+    if not isinstance(database_config, dict) or not isinstance(database_config.get('ENGINE'), str) or not database_config['ENGINE']:
+        raise ImproperlyConfigured('OPENBENCH_DATABASE_CONFIG must contain a Django database connection object with ENGINE.')
+    DATABASES = {'default': database_config}
+if not DEBUG and DATABASES['default']['ENGINE'] != 'django.db.backends.postgresql':
+    raise ImproperlyConfigured('Production training requires PostgreSQL. Set OPENBENCH_DATABASE_CONFIG.')
+
 
 # Password validation
 # https://docs.djangoproject.com/en/2.0/ref/settings/#auth-password-validators
@@ -137,3 +164,29 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/2.0/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = os.environ.get('OPENBENCH_STATIC_ROOT', os.path.join(BASE_DIR, 'StaticFiles'))
+
+TRAINING_ROOT = os.environ.get('MATTBENCH_TRAINING_ROOT', os.path.join(BASE_DIR, 'TrainingData'))
+TRAINING_CREDENTIAL_KEY = os.environ.get('MATTBENCH_CREDENTIAL_KEY', '')
+TRAINING_CREDENTIAL_KEY_FILE = os.environ.get('MATTBENCH_CREDENTIAL_KEY_FILE', '')
+if DEBUG and not TRAINING_CREDENTIAL_KEY and not TRAINING_CREDENTIAL_KEY_FILE:
+    local_app_data = os.environ.get('LOCALAPPDATA')
+    if local_app_data:
+        local_credential_key_file = os.path.join(local_app_data, 'MattBench', 'credential.key')
+        if os.path.isfile(local_credential_key_file):
+            TRAINING_CREDENTIAL_KEY_FILE = local_credential_key_file
+TRAINING_WORKER_TIMEOUT = 600
+TRAINING_VALIDATION_TIMEOUT = int(os.environ.get('MATTBENCH_VALIDATION_TIMEOUT', '600'))
+TRAINING_UPLOAD_TIMEOUT = int(os.environ.get('MATTBENCH_UPLOAD_TIMEOUT', '86400'))
+TRAINING_MAX_ARTIFACT_BYTES = 8 * 1024 ** 3
+TRAINING_STORAGE_RESERVE_BYTES = int(os.environ.get('MATTBENCH_STORAGE_RESERVE_GB', '10')) * 1024 ** 3
+TRAINING_REPLICA_ROOT = os.environ.get('MATTBENCH_REPLICA_ROOT', '')
+if TRAINING_REPLICA_ROOT and os.path.realpath(TRAINING_REPLICA_ROOT) == os.path.realpath(TRAINING_ROOT):
+    raise ImproperlyConfigured('Artifact replicas must use a separate storage root.')
+if not DEBUG and (not TRAINING_CREDENTIAL_KEY_FILE or not TRAINING_REPLICA_ROOT):
+    raise ImproperlyConfigured('Production training requires MATTBENCH_CREDENTIAL_KEY_FILE and MATTBENCH_REPLICA_ROOT on durable storage.')
+LOGGING = {
+    'version': 1, 'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {'OpenBench.training_tasks': {'handlers': ['console'], 'level': 'INFO'}, 'OpenBench.training_storage': {'handlers': ['console'], 'level': 'INFO'}},
+}
