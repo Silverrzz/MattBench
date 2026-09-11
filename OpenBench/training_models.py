@@ -144,6 +144,7 @@ class TrainingArtifact(models.Model):
 
 class DatasetUpload(models.Model):
     task_attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     workload = models.ForeignKey('OpenBench.Test', on_delete=models.PROTECT, related_name='dataset_uploads')
     repo = models.CharField(max_length=256)

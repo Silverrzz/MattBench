@@ -1088,12 +1088,10 @@ def server_configure_worker(config):
 
     # Throw all the way back to the client.py
     if 'Bad Client Version' in response.get('error', ''):
-        raise BadVersionException();
+        raise BadVersionException(response['error'])
 
     # The 'error' header is included if there was an issue
     if 'error' in response:
-        if response['error'] == 'Bad Credentials' and os.name == 'nt' and config.password and len(config.password) >= 2 and config.password.startswith("'") and config.password.endswith("'"):
-            raise utils.OpenBenchFatalWorkerException('Bad Credentials: the password contains surrounding single quotes. Windows Command Prompt passes single quotes literally. Use double quotes, or omit --password to enter it at the password prompt.')
         raise utils.OpenBenchFatalWorkerException(response['error'])
 
     # Store machine_id, and the secret for this session
@@ -1453,7 +1451,8 @@ def parse_arguments(client_args):
     worker_args.cli_options = format_cli_options(worker_args)
 
     # Add the client args (Username, Password, and Server) to the worker args
-    return argparse.Namespace(**{ **vars(client_args), **vars(worker_args) })
+    vars(client_args).update(vars(worker_args))
+    return client_args
 
 def format_cli_options(worker_args):
 
@@ -1516,7 +1515,7 @@ def run_openbench_worker(client_args):
 
         # Caught by client.py, prompting a Client Update
         except BadVersionException:
-            raise BadVersionException()
+            raise
 
         # Fatal error, fully restart the Worker
         except utils.OpenBenchFatalWorkerException:

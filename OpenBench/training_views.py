@@ -456,16 +456,31 @@ def dataset_upload(request, pk):
     from OpenBench.utils import getRecentMachines
     enabled(request.user)
     workload = get_object_or_404(Test, pk=pk, test_mode='DATAGEN', deleted=False)
+    source = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % pk)
+    archive_ready = workload.finished and not getRecentMachines().filter(workload=pk).exists() and not PGN.objects.filter(test_id=pk, processed=False).exists() and source.is_file()
     form_error = None
     if request.method == 'POST':
         try:
             if workload.execution.get('demo'):
                 raise ValidationError('Demo datasets cannot be uploaded.')
+            action = request.POST.get('action', 'upload')
+            if action == 'cancel':
+                upload = get_object_or_404(DatasetUpload, pk=request.POST.get('upload'), workload=workload, owner=request.user)
+                if not DatasetUpload.objects.filter(pk=upload.pk, state='QUEUED').update(state='CANCELLED', stage='Cancelled', error='', next_attempt_at=None, updated=timezone.now()):
+                    raise ValidationError('This upload has already started. Only waiting uploads can be cancelled.')
+                return redirect(request, '/datagen/%d/huggingface/' % pk, status='Upload cancelled')
             hf_token(request.user.pk)
-            if not workload.finished or getRecentMachines().filter(workload=pk).exists() or PGN.objects.filter(test_id=pk, processed=False).exists():
+            if not archive_ready:
                 raise ValidationError('The archive is still being assembled. Wait until datagen and its workers have finished.')
-            if not (Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % pk)).is_file():
-                raise ValidationError('No PGN archive is available for this datagen.')
+            if action == 'retry':
+                upload = get_object_or_404(DatasetUpload, pk=request.POST.get('upload'), workload=workload, owner=request.user)
+                with transaction.atomic():
+                    changed = DatasetUpload.objects.filter(pk=upload.pk, state__in=['FAILED', 'CANCELLED']).update(state='QUEUED', stage='Waiting to upload', error='', progress=0, task_attempts=0, next_attempt_at=None, private=request.POST.get('visibility', 'private' if upload.private else 'public') != 'public', updated=timezone.now())
+                if not changed:
+                    raise ValidationError('This upload is already active or published.')
+                return redirect(request, '/datagen/%d/huggingface/' % pk, status='Upload queued again')
+            if action != 'upload':
+                raise ValidationError('Unknown upload action.')
             repository = repo_id(request.POST.get('repo', ''))
             filename = relative_path(request.POST.get('filename', '').strip())
             if not filename.endswith('.pgn.tar'):
@@ -475,9 +490,16 @@ def dataset_upload(request, pk):
         except (ValidationError, IntegrityError) as error:
             form_error = 'An upload to that path is already queued.' if isinstance(error, IntegrityError) else error_text(error)
     connection = HuggingFaceCredential.objects.filter(user=request.user).first()
+    uploads = list(DatasetUpload.objects.filter(workload=workload, owner=request.user)[:20])
+    now = timezone.now()
+    waiting = DatasetUpload.objects.filter(state='QUEUED').filter(Q(next_attempt_at=None) | Q(next_attempt_at__lte=now)).exclude(workload__execution__has_key='demo')
+    for upload in uploads:
+        upload.retry_wait = upload.state == 'QUEUED' and upload.next_attempt_at is not None and upload.next_attempt_at > now
+        upload.queue_position = waiting.filter(created__lt=upload.created).count() + 1 if upload.state == 'QUEUED' and not upload.retry_wait else None
     return render(request, 'dataset_upload.html', {
         'page_title': 'Upload to Hugging Face', 'workload': workload,
-        'uploads': DatasetUpload.objects.filter(workload=workload, owner=request.user)[:20],
+        'uploads': uploads, 'archive_ready': archive_ready, 'archive_size': source.stat().st_size if source.is_file() else 0,
+        'active_uploads': sum(upload.state in ('QUEUED', 'UPLOADING') for upload in uploads),
         'destination': request.POST.get('repo', (connection.account + '/' if connection else '') + 'chess-training'),
         'filename': request.POST.get('filename', '%d.pgn.tar' % pk), 'form_error': form_error,
         'hf_connected': bool(connection),

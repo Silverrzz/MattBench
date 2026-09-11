@@ -7,6 +7,7 @@ import os
 import platform
 import queue
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -848,6 +849,33 @@ class WorkerSession:
         return True
 
 
+def register_worker(server, payload, registration, identity_path):
+    try:
+        for attempt in range(2):
+            response = requests.post(server.rstrip('/') + '/api/training/register/', data=payload, timeout=30)
+            response.request.body = None
+            if response.status_code < 400:
+                response.raise_for_status()
+                return
+            try:
+                details = response.json()
+            except ValueError:
+                details = {}
+            message = details.get('error') if isinstance(details, dict) else None
+            if attempt == 0 and response.status_code == 403 and message == 'Worker identity is revoked or belongs to another account.':
+                replacement = {'server': server.rstrip('/'), 'worker': str(uuid.uuid4()), 'token': secrets.token_urlsafe(48), 'claim_id': str(uuid.uuid4()), 'registered': False}
+                write_json(identity_path.with_name(identity_path.name + '.rejected'), registration)
+                write_json(identity_path, replacement)
+                registration.clear()
+                registration.update(replacement)
+                payload.update(worker=registration['worker'], token=registration['token'])
+                print('Saved training identity was rejected. Registering a new identity for this authenticated session.')
+                continue
+            raise RuntimeError('Training registration rejected by %s (HTTP %d): %s' % (server, response.status_code, message or 'Server returned no error details.'))
+    finally:
+        payload.clear()
+
+
 def main(argv=None, worker_config=None, gpu_info=None):
     parser = argparse.ArgumentParser(description='MattBench single-worker NNUE training. Runs schedules belonging to your account; use a dedicated worker account on the GPU host.')
     server = os.environ.pop('OPENBENCH_SERVER', None)
@@ -943,20 +971,9 @@ def main(argv=None, worker_config=None, gpu_info=None):
             payload.update(machine_id=worker_config.machine_id, machine_secret=worker_config.secret_token)
         else:
             payload['password'] = os.environ.pop('OPENBENCH_PASSWORD', None) or getpass.getpass('MattBench password: ')
-        response = requests.post(args.server.rstrip('/') + '/api/training/register/', data=payload, timeout=30)
-        payload.clear()
-        response.request.body = None
-        if response.status_code >= 400:
-            try:
-                details = response.json()
-            except ValueError:
-                details = {}
-            message = details.get('error') if isinstance(details, dict) else None
-            raise RuntimeError('Training registration rejected by %s (HTTP %d): %s' % (args.server, response.status_code, message or 'Server returned no error details.'))
-        response.raise_for_status()
+        register_worker(args.server, payload, registration, identity_path)
         registration.update(registered=True, username=username, info=info)
         write_json(identity_path, registration)
-        del response
     elif registration['info'] != info:
         previous = {key: value for key, value in registration['info'].items() if key != 'disk_gb'}
         current = {key: value for key, value in info.items() if key != 'disk_gb'}

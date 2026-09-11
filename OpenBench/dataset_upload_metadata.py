@@ -4,6 +4,7 @@ import io
 import json
 import re
 import tarfile
+import time
 
 from django.core.exceptions import ValidationError
 
@@ -14,7 +15,9 @@ def analyse_archive(source, progress):
     results = {'1-0': 0, '0-1': 0, '1/2-1/2': 0, '*': 0}
     members = 0
     header = re.compile(r'^\[Result\s+"(1-0|0-1|1/2-1/2|\*)"\s*\]$')
-    with tarfile.open(source, mode='r|') as archive:
+    last_progress = time.monotonic()
+    size = source.stat().st_size
+    with tarfile.open(source, mode='r:') as archive:
         for member in archive:
             if not member.isfile():
                 continue
@@ -27,8 +30,14 @@ def analyse_archive(source, progress):
                         match = header.fullmatch(line.strip())
                         if match:
                             results[match.group(1)] += 1
+                        if time.monotonic() - last_progress >= 2:
+                            progress(min(100, 100 * archive.fileobj.tell() / max(1, size)))
+                            last_progress = time.monotonic()
             members += 1
-            progress()
+            if time.monotonic() - last_progress >= 2:
+                progress(min(100, 100 * archive.fileobj.tell() / max(1, size)))
+                last_progress = time.monotonic()
+    progress(100)
     games = sum(results.values())
     if not games:
         raise ValidationError('The PGN archive contains no games with valid result headers.')

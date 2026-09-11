@@ -9,7 +9,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from OpenBench.models import DatasetUpload, TrainingRun
@@ -56,8 +56,8 @@ def upload_dataset(task):
                 DatasetUpload.objects.filter(pk=task.pk).update(stage='Checking archive', progress=100 * read / max(1, size), updated=last)
     sha256 = digest.hexdigest()
     DatasetUpload.objects.filter(pk=task.pk).update(stage='Analysing PGN archive', progress=0, updated=timezone.now())
-    def analysis_progress():
-        DatasetUpload.objects.filter(pk=task.pk).update(updated=timezone.now())
+    def analysis_progress(progress):
+        DatasetUpload.objects.filter(pk=task.pk).update(progress=progress, updated=timezone.now())
     statistics = analyse_archive(source, analysis_progress)
     if source.stat().st_size != size:
         raise ValidationError('The PGN archive changed while reading it. Wait for all datagen workers to finish.')
@@ -68,7 +68,7 @@ def upload_dataset(task):
         api.create_repo(task.repo, repo_type='dataset', private=task.private, exist_ok=True)
         info = api.dataset_info(task.repo, files_metadata=True)
     if info.private != task.private:
-        raise ValidationError('The existing repository has a different visibility. Select its current visibility or use a new repository.')
+        raise ValidationError('This repository is %s, but the upload requested %s. Select %s when retrying, or upload to a different repository.' % ('private' if info.private else 'public', 'private' if task.private else 'public', 'Private' if info.private else 'Public'))
     existing = api.get_paths_info(task.repo, paths=[task.filename], repo_type='dataset', revision=info.sha)
     operations = []
     if existing:
@@ -124,16 +124,26 @@ class TrainingTasks:
     def failed(self, task, error, expected, retry, operation):
         status = getattr(getattr(error, 'response', None), 'status_code', None)
         transient = not isinstance(error, ValidationError) and status not in (400, 401, 403, 404)
+        if isinstance(task, DatasetUpload):
+            from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+            from httpx import TransportError
+            transient = status in (408, 429, 500, 502, 503, 504) or isinstance(error, (ConnectionError, TimeoutError, RequestsConnectionError, Timeout, TransportError))
         state = retry if transient and task.task_attempts < 5 else 'FAILED'
         now = timezone.now()
         changes = {'state': state, 'error': failure_message(error, operation), 'updated': now}
+        if isinstance(task, DatasetUpload):
+            changes['next_attempt_at'] = now + timedelta(seconds=min(300, 10 * 2 ** task.task_attempts)) if state == retry else None
+            changes['stage'] = 'Waiting to retry' if state == retry else 'Upload failed'
+            changes['progress'] = 0
+            if not transient and not isinstance(error, ValidationError) and status is None:
+                changes['error'] = 'A server error stopped this upload (%s). Other uploads can continue. Retry after the server issue is fixed.' % type(error).__name__
         if isinstance(task, TrainingRun) and state == 'FAILED':
             changes['finished'] = now
         with transaction.atomic():
             if type(task).objects.filter(pk=task.pk, state=expected).update(**changes):
                 record_event('training.task.' + ('retry' if state == retry else 'failed'), task, task.owner_id, {'operation': operation, 'attempt': task.task_attempts}, key='task:%s:%s:%s:%s' % (type(task).__name__, task.pk, operation, task.task_attempts))
         logger.warning('%s %s: %s', operation, task.pk, changes['error'])
-        if state == retry:
+        if state == retry and not isinstance(task, DatasetUpload):
             self.stop_event.wait(min(300, 10 * 2 ** task.task_attempts))
 
     def validate(self):
@@ -155,13 +165,13 @@ class TrainingTasks:
             self.failed(run, error, 'PREPARING', 'VALIDATING', 'Input validation')
 
     def upload(self):
-        task = DatasetUpload.objects.filter(state='QUEUED').exclude(workload__execution__has_key='demo').order_by('created').first()
+        task = DatasetUpload.objects.filter(state='QUEUED').filter(Q(next_attempt_at=None) | Q(next_attempt_at__lte=timezone.now())).exclude(workload__execution__has_key='demo').order_by('created').first()
         if not task:
             return
         if task.task_attempts >= 5:
-            DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='FAILED', error='Upload exceeded five attempts. Check coordinator logs before retrying.', updated=timezone.now())
+            DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='FAILED', stage='Upload failed', next_attempt_at=None, error='Upload exceeded five attempts. Check coordinator logs before retrying.', updated=timezone.now())
             return
-        if not DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='UPLOADING', task_attempts=F('task_attempts') + 1, stage='Checking archive', error='', updated=timezone.now()):
+        if not DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='UPLOADING', task_attempts=F('task_attempts') + 1, stage='Checking archive', error='', next_attempt_at=None, progress=0, updated=timezone.now()):
             return
         task.refresh_from_db()
         try:

@@ -6,21 +6,31 @@
 {% if form_error %}<p class="training-error" role="alert">{{ form_error }}</p>{% endif %}
 <div class="workspace-columns">
     <form method="post" class="form workspace-panel workspace-stack">{% csrf_token %}
-        <div class="panel-heading"><h2>Destination</h2>{% if not hf_connected %}<a class="button" href="/profile/">Connect Hugging Face</a>{% endif %}</div>
+        <div class="panel-heading"><h2>Publish your datagen</h2></div>
+        <div class="training-upload-source"><strong>{{ workload.id }}.pgn.tar</strong><p class="workspace-muted">{{ archive_size|filesizeformat }} &middot; {% if archive_ready %}Ready to upload{% else %}Waiting for datagen to finish assembling the archive{% endif %}</p></div>
+        {% if not hf_connected %}<p class="workspace-muted">Connect your Hugging Face account before uploading.</p><a class="button" href="/profile/">Connect Hugging Face</a>{% endif %}
         <div class="field"><label for="hf-repo">Dataset repository</label><input id="hf-repo" name="repo" required value="{{ destination }}" placeholder="account/dataset"></div>
-        <div class="field"><label for="hf-path">Archive filename</label><input id="hf-path" name="filename" value="{{ filename }}" required></div>
         <div class="field"><label for="hf-visibility">Visibility</label><select id="hf-visibility" name="visibility"><option value="private">Private</option><option value="public" {% if request.POST.visibility == 'public' %}selected{% endif %}>Public</option></select></div>
-        <p class="workspace-muted">Uploads the archive and creates or updates dataset.json and analysis.txt with the file inventory and PGN game results. Existing dataset entries and analysis history are preserved.</p>
-        <div class="form-actions"><button class="button button-primary" type="submit" {% if not hf_connected or workload.execution.demo %}disabled{% endif %}>Upload archive and metadata</button></div>
+        <details><summary>Change archive filename</summary><div class="field"><label for="hf-path">Filename in the dataset</label><input id="hf-path" name="filename" value="{{ filename }}" required></div></details>
+        <p class="workspace-muted">We check the archive, analyse the games, and publish it to Hugging Face. You can leave this page while it runs. The repository is created if needed; existing files are preserved.</p>
+        <div class="form-actions"><button class="button button-primary" type="submit" {% if not hf_connected or not archive_ready or workload.execution.demo %}disabled{% endif %}>Upload to Hugging Face</button></div>
     </form>
-    <section class="workspace-panel"><div class="panel-heading"><h2>Recent uploads</h2></div>
+    <section class="workspace-panel"><div class="panel-heading"><h2>Your uploads</h2></div>
         <div id="dataset-uploads" data-live>{% live_region 'dataset-uploads' %}
+        {% if active_uploads %}<p class="workspace-muted" role="status">{{ active_uploads }} active upload{{ active_uploads|pluralize }}. Status updates automatically.</p>{% endif %}
         {% for upload in uploads %}<article class="training-upload">
-            <div class="training-heading"><strong>{{ upload.repo }}</strong><span class="training-badge state-{{ upload.state|lower }}">{{ upload.state|title }}</span></div>
+            <div class="training-heading"><strong>{{ upload.repo }}</strong><span class="training-badge state-{{ upload.state|lower }}">{% if upload.retry_wait %}Retry scheduled{% elif upload.state == 'QUEUED' %}Waiting{% elif upload.state == 'UPLOADING' %}In progress{% elif upload.state == 'COMPLETED' %}Published{% else %}{{ upload.state|title }}{% endif %}</span></div>
             <p class="workspace-muted">{{ upload.filename }}</p>
-            {% if upload.stage %}<p class="workspace-muted">{{ upload.stage }}</p>{% endif %}
-            {% if upload.state == 'UPLOADING' %}<progress value="{{ upload.progress }}" max="100" aria-label="Upload progress"></progress>{% endif %}
+            {% if upload.retry_wait %}<p>Automatic retry in {{ upload.next_attempt_at|timeuntil }}. Other uploads can continue.</p>
+            {% elif upload.state == 'QUEUED' %}<p>Queue position {{ upload.queue_position }} &middot; Starts when the upload processor is free.</p>
+            {% elif upload.state == 'UPLOADING' %}<p>{{ upload.stage }}{% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' %} &middot; {{ upload.progress|floatformat:0 }}%{% endif %}</p>
+            <progress {% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' %}value="{{ upload.progress }}"{% endif %} max="100" aria-label="{{ upload.stage }}"></progress>
+            {% elif upload.state == 'FAILED' %}<p>Upload stopped. It is no longer holding a place in the queue.</p>
+            {% elif upload.state == 'CANCELLED' %}<p>Removed from the queue.</p>{% endif %}
+            <p class="workspace-muted">Updated {{ upload.updated|timesince }} ago{% if upload.task_attempts %} &middot; Attempt {{ upload.task_attempts }} of 5{% endif %}</p>
             {% if upload.error %}<p class="training-error">{{ upload.error }}</p>{% endif %}
+            {% if upload.state == 'FAILED' or upload.state == 'CANCELLED' %}<form method="post" class="form workspace-stack">{% csrf_token %}<input type="hidden" name="upload" value="{{ upload.pk }}"><div class="field"><label for="retry-visibility-{{ upload.pk }}">Repository visibility</label><select id="retry-visibility-{{ upload.pk }}" name="visibility"><option value="private" {% if upload.private %}selected{% endif %}>Private</option><option value="public" {% if not upload.private %}selected{% endif %}>Public</option></select></div><div class="form-actions"><button class="button button-primary" name="action" value="retry" {% if not hf_connected or not archive_ready %}disabled{% endif %}>Retry upload</button></div></form>{% endif %}
+            {% if upload.state == 'QUEUED' %}<form method="post" class="form-actions">{% csrf_token %}<input type="hidden" name="upload" value="{{ upload.pk }}"><button class="button" name="action" value="cancel">Cancel upload</button></form>{% endif %}
             {% if upload.state == 'COMPLETED' %}<div class="form-actions"><a class="button" href="{{ upload.url }}" rel="noreferrer">Open dataset ↗</a><a class="button button-primary" href="/training/datasets/new/?repo={{ upload.repo|urlencode }}&amp;files={{ upload.filename|urlencode }}&amp;revision={{ upload.revision }}">Register dataset</a></div>{% endif %}
         </article>{% empty %}<div class="empty-block">No uploads yet</div>{% endfor %}
         {% endlive_region %}</div>
