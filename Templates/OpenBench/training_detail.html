@@ -24,6 +24,7 @@
                 <tr><td class="td-label">Dataset</td><td><a href="{{ run.dataset_url }}" rel="noreferrer">{{ run.dataset.repo }}</a></td></tr>
                 <tr><td class="td-label">Dataset SHA</td><td>{{ run.dataset.commit|default:'—' }}</td></tr>
                 <tr><td class="td-label">Worker</td><td>{% if run.worker %}<a href="/workers/{{ run.worker_id }}/">{{ run.worker.name }}</a>{% else %}Unassigned{% endif %}</td></tr>
+                <tr><td class="td-label">Eligible workers</td><td>{% if run.requested_worker %}Only <a href="/workers/{{ run.requested_worker_id }}/">{{ run.requested_worker.name }}</a>{% else %}Any compatible worker accepting {{ run.owner.username }}’s workloads{% endif %}</td></tr>
                 <tr><td class="td-label">Hardware</td><td>{{ run.worker.info.gpu|default:'—' }}</td></tr>
                 <tr><td class="td-label">Backend</td><td>{{ run.snapshot.settings.backend|upper }}</td></tr>
                 <tr><td class="td-label">Assigned worker threads</td><td>{{ run.worker.info.threads|default:run.snapshot.settings.threads }}</td></tr>

@@ -319,7 +319,7 @@ def new_training(request):
 @transaction.atomic
 def training_detail(request, pk):
     from OpenBench.views import redirect, render
-    run = get_object_or_404(TrainingRun.objects.select_related('owner', 'engine', 'worker'), pk=pk)
+    run = get_object_or_404(TrainingRun.objects.select_related('owner', 'engine', 'worker', 'requested_worker'), pk=pk)
     manage = may_manage(request.user, run)
     if request.method == 'POST':
         enabled(request.user)
