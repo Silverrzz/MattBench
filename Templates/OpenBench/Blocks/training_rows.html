@@ -14,7 +14,9 @@
                     <div>{{ run.get_state_display }}{% if run.state == 'COMPLETED' %} · 100.0%{% elif run.metrics.progress != None %} · {{ run.metrics.progress|floatformat:1 }}%{% endif %}</div>
                     {% if run.metrics.superbatch != None %}<div>SB {{ run.metrics.superbatch }}{% if run.metrics.loss != None %} · Loss {{ run.metrics.loss|floatformat:5 }}{% endif %}</div>{% endif %}
                     {% if run.metrics.positions_per_second != None %}{% if not run.terminal %}<div>{{ run.metrics.positions_per_second|floatformat:'0g' }} positions/s</div>{% endif %}{% elif run.state == 'DOWNLOADING' and run.metrics.downloaded_bytes != None %}<div>Downloaded {{ run.metrics.downloaded_bytes|filesizeformat }}</div>{% elif run.metrics.converted_files != None %}<div>{{ run.metrics.converted_files }} files converted</div>{% endif %}
-                    {% if run.state == 'QUEUED' %}<div>Any compatible worker</div>{% endif %}
+                    <div>Priority {{ run.priority }}{% if run.workload_size %} · {{ run.completed_superbatches }} SB committed{% endif %}</div>
+                    {% if run.workload_size and run.metrics.workload_start and not run.terminal and run.state != 'QUEUED' %}<div>Workload SB {{ run.metrics.workload_start }}–{{ run.metrics.workload_end }}</div>{% endif %}
+                    {% if run.state == 'QUEUED' %}<div>{% if run.completed_superbatches %}Continuation queued{% else %}Any compatible worker{% endif %}</div>{% endif %}
                 </td>
             </tr>
         {% endfor %}

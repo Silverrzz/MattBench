@@ -13,6 +13,8 @@
                 <tr><td class="td-label">Network</td><td>{{ run.name }}{% if run.snapshot.demo %} <span class="test-flag">Demo</span>{% endif %}</td></tr>
                 {% if run.snapshot.resume %}<tr><td class="td-label">Starting checkpoint</td><td><a href="/training/{{ run.snapshot.resume.run_id }}/">Run #{{ run.snapshot.resume.run_id }}</a> · SB {{ run.snapshot.resume.superbatch }}{% if run.snapshot.automatic_recovery %} · Automatic recovery{% endif %}</td></tr>{% endif %}
                 {% if run.snapshot.wdl_override != None %}<tr><td class="td-label">Remaining WDL</td><td>{{ run.snapshot.wdl_override }}</td></tr>{% endif %}
+                <tr><td class="td-label">Priority</td><td>{{ run.priority }}</td></tr>
+                <tr><td class="td-label">Workloads</td><td>{% if run.workload_size %}{{ run.workload_size }} SB · {{ run.completed_superbatches }} SB committed{% if run.metrics.workload_start %} · SB {{ run.metrics.workload_start }}–{{ run.metrics.workload_end }}{% endif %}{% if run.state == "QUEUED" and run.completed_superbatches %} · Continuation queued{% endif %}{% else %}Uninterrupted{% endif %}</td></tr>
                 <tr><td class="td-label">Creation</td><td class="timestamp">{{ run.created|date:'U' }}</td></tr>
                 <tr><td class="td-label">Started</td><td>{{ run.started|date:'j M Y, H:i'|default:'—' }}</td></tr>
                 <tr><td class="td-label">Finished</td><td>{{ run.finished|date:'j M Y, H:i'|default:'—' }}</td></tr>
@@ -39,6 +41,7 @@
         {% if can_manage %}<form method="post">{% csrf_token %}<div class="anchor-container" id="training-actions" data-live>{% live_region 'training-actions' %}
             {% if run.deleted %}<button class="anchorbutton btn-preset" type="submit" name="action" value="restore">Restore</button>{% else %}<button class="anchorbutton btn-red" type="submit" name="action" value="delete">Delete</button>{% if run.terminal %}<a class="anchorbutton btn-yellow" href="/training/new/?engine={{ run.engine_id }}&schedule={{ run.schedule_id|default:'' }}">New train</a>{% if run.metrics.recovery_pending and not run.recovery_run_id and not run.cancel_requested %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel">Cancel recovery</button>{% endif %}{% else %}<button class="anchorbutton btn-yellow" type="submit" name="action" value="cancel" {% if run.cancel_requested %}disabled{% endif %}>Stop</button>{% endif %}{% endif %}
         {% endlive_region %}</div></form>{% endif %}
+        <form method="post">{% csrf_token %}<label>Priority <input name="priority" type="number" value="{{ run.priority }}" min="-2147483648" max="2147483647" required></label><button class="button" name="action" value="priority" {% if not can_manage %}disabled{% endif %}>Apply at next allocation</button></form>
         <div class="anchor-container"><button class="mt-1 anchorbutton" type="button" onclick="copy_text_codeblock('long-statblock', true)">Copy stat block</button></div>
         <div class="anchor-container"><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/configuration/">Download config</a><a class="mt-1 anchorbutton" href="/training/{{ run.id }}/log/">Download log</a></div>
         <p id="workload-feedback" class="field-note" role="status"></p>

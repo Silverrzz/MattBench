@@ -84,6 +84,7 @@ def schedule_builder(request, schedule_id=None):
     payload = {
         'id': str(selected.pk) if selected and not copy else '', 'version': selected.version if selected and not copy else 0,
         'spec': spec, 'source': files[SOURCE], 'notice': notice,
+        'wdl_model_defaults': {key: DEFAULT_SPEC[key] for key in ('wdl_model_params_a', 'wdl_model_params_b', 'material_min', 'material_max', 'mom_target', 'wdl_heuristic_scale')},
         'name': selected.name + (' copy' if copy else '') if selected else '',
         'engine': str(selected.engine_id) if selected and selected.engine_id else request.GET.get('engine', ''),
         'scope': selected.scope if selected and not copy else 'personal',

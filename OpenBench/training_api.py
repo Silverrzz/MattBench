@@ -16,14 +16,14 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import F, Q
 from django.http import JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
-from OpenBench.models import Machine, Profile, TrainingArtifact, TrainingRun, TrainingWorker
+from OpenBench.models import Machine, Profile, TrainingArtifact, TrainingRun, TrainingWorker, TrainingWorkload
 from OpenBench.training import download_access, hf_token, xet_access
 from OpenBench.training import worker_requirement_errors
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
@@ -84,7 +84,9 @@ def register(request):
             info['threads'] = machine.info['concurrency']
         if not isinstance(info, dict) or len(json.dumps(info)) > 8192:
             raise ValueError
-        if info.get('protocol') != 3 or info.get('backend') not in ('cuda', 'rocm'):
+        if info.get('protocol') not in (3, 4) or info.get('backend') not in ('cuda', 'rocm'):
+            raise ValueError
+        if info.get('protocol') == 4 and (not isinstance(info.get('capabilities'), list) or any(not isinstance(capability, str) for capability in info['capabilities'])):
             raise ValueError
         for field in ('vram_gb', 'disk_gb', 'threads'):
             if type(info.get(field)) not in (int, float) or not math.isfinite(info[field]) or info[field] <= 0:
@@ -130,7 +132,7 @@ def register(request):
             worker.machine = machine
             worker.save(update_fields=['machine'])
         record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', '')})
-    response = JsonResponse({'worker': str(worker.pk), 'token': secret, 'protocol': 3})
+    response = JsonResponse({'worker': str(worker.pk), 'token': secret, 'protocol': info['protocol'], 'capabilities': ['training-workloads', 'typed-assignments'] if info['protocol'] == 4 else []})
     response['Cache-Control'] = 'no-store'
     return response
 
@@ -140,11 +142,13 @@ def register(request):
 @transaction.atomic
 def claim(request):
     worker = request.training_worker
-    if worker.info.get('protocol') != 3:
+    if worker.info.get('protocol') not in (3, 4):
         return JsonResponse({'error': 'Update and register the training worker to use dataset manifests.'}, status=409)
     machine = Machine.objects.select_for_update().get(pk=worker.machine_id) if worker.machine_id else None
     worker = TrainingWorker.objects.select_for_update().get(pk=worker.pk)
     data = json_body(request)
+    if worker.test_assignment.get('claim_id') == data.get('claim_id') and (machine.mode if machine else worker.mode) != 'paused':
+        return JsonResponse(worker.test_assignment['response'])
     if machine and data.get('machine_idle') is True and machine.workload == data.get('completed_workload'):
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
         machine.workload = 0
@@ -155,15 +159,30 @@ def claim(request):
         raise ValueError
     info = {**worker.info, 'disk_gb': free_disk}
     TrainingWorker.objects.filter(pk=worker.pk).update(updated=now, info=info)
+    for attempt in worker.workloads.filter(state='ACTIVE', run__state__in=TRAINING_TERMINAL).select_related('run'):
+        attempt.state, attempt.finished = attempt.run.state, now
+        attempt.save(update_fields=['state', 'finished'])
+    previous = TrainingWorkload.objects.filter(worker=worker, claim_token=claim_id).first()
+    if previous and previous.state != 'ACTIVE':
+        return JsonResponse({'run': None, 'claim_finished': True})
     existing = TrainingRun.objects.filter(worker=worker, claim_id=claim_id).first() or TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).first()
     if existing:
-        return JsonResponse({'run': assignment(existing, info)})
+        return JsonResponse(training_assignment(existing, info))
     if (machine.mode if machine else worker.mode) not in ('automatic', 'training-only') or machine and machine.workload:
         return JsonResponse({'run': None})
     candidates = TrainingRun.objects.filter(state='QUEUED', worker=None, cancel_requested=False, deleted=False).exclude(snapshot__has_key='demo')
     if not worker.accept_any_owner:
         candidates = candidates.filter(owner=worker.owner)
-    candidates = candidates.annotate(recovery_priority=Case(When(recovered_from__isnull=False, then=Value(0)), default=Value(1), output_field=IntegerField())).order_by('recovery_priority', 'created').iterator()
+    if worker.info.get('protocol') < 4 or 'training-workloads' not in worker.info.get('capabilities', []):
+        candidates = candidates.filter(workload_size=0)
+    candidates = candidates.filter(Q(requested_worker=None) | Q(requested_worker=worker)).select_related('engine').order_by(F('last_allocated').asc(nulls_first=True), 'created', 'pk')
+    from OpenBench.workloads.get_workload import machine_info_list, filter_valid_workloads, get_workload
+    from OpenBench.training_workloads import refine_candidates
+    preferences = machine.info if machine else info
+    only = machine_info_list(preferences, 'only')
+    if only:
+        candidates = candidates.filter(engine__name__in=only)
+    eligible = []
     for run in candidates:
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
@@ -172,12 +191,38 @@ def claim(request):
             continue
         if worker_requirement_errors(info, config, disk_required):
             continue
+        eligible.append(run)
+    request.workload_blacklist = data.get('blacklist', [])
+    if not isinstance(request.workload_blacklist, list) or any(type(pk) is not int for pk in request.workload_blacklist):
+        raise ValueError
+    tests = filter_valid_workloads(request, machine, refine=False)[0] if machine and machine.mode == 'automatic' else []
+    eligible, tests, preferred = refine_candidates(eligible, tests, preferences)
+    if tests and (not eligible or worker.last_allocation_kind == 'training'):
+        worker.last_allocation_kind = 'test'
+        worker.save(update_fields=['last_allocation_kind'])
+        if info.get('protocol') >= 4 and 'typed-assignments' in info.get('capabilities', []):
+            result = get_workload(request, machine, tests, preferred)
+            response = {'run': None, 'assignment': {'type': 'test', **result}, 'settings': machine.info.get('worker_settings', {})}
+            worker.test_assignment = {'claim_id': str(claim_id), 'response': response}
+            worker.save(update_fields=['test_assignment'])
+            return JsonResponse(response)
+        return JsonResponse({'run': None})
+    for run in eligible:
         try:
             with transaction.atomic():
+                run = TrainingRun.objects.select_for_update().get(pk=run.pk)
+                if run.state != 'QUEUED' or run.worker_id or run.cancel_requested or run.deleted:
+                    continue
                 runtime = info.get('runtime', {})
                 snapshot = {**run.snapshot, 'runtime': runtime, 'resume_semantics': 'optimiser-continuation; dataset reader restarts at the selected stage'}
-                claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False, deleted=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=now, updated=now)
+                claimed = TrainingRun.objects.filter(pk=run.pk, state='QUEUED', worker=None, cancel_requested=False, deleted=False).update(worker=worker, claim_id=claim_id, snapshot=snapshot, state='DOWNLOADING', started=run.started or now, updated=now, last_allocated=now, error='')
                 if claimed:
+                    run.refresh_from_db()
+                    if run.workload_size:
+                        from OpenBench.training_workloads import claim_workload
+                        claim_workload(run, worker, claim_id)
+                    worker.last_allocation_kind = 'training'
+                    worker.save(update_fields=['last_allocation_kind'])
                     if worker.machine_id:
                         Machine.objects.filter(pk=worker.machine_id).update(workload=0, updated=now)
                     record_event('training.started', run, run.owner_id, {'worker_id': str(worker.pk)})
@@ -185,13 +230,28 @@ def claim(request):
             return JsonResponse({'run': None})
         if claimed:
             run.refresh_from_db()
-            return JsonResponse({'run': assignment(run, info)})
+            return JsonResponse(training_assignment(run, info))
     return JsonResponse({'run': None})
+
+
+def training_assignment(run, info):
+    job = assignment(run, info)
+    return {'run': job, 'assignment': {'type': 'training', 'run': job}}
 
 
 def assignment(run, info):
     from OpenBench.training_datasets import effective_dataset
-    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': run.snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested or run.deleted, 'recovery_pending': bool(run.metrics.get('recovery_pending'))}
+    from OpenBench.dataset_manifest import required_disk_bytes
+    snapshot = run.snapshot
+    workload_data = None
+    if run.workload_size:
+        workload = run.workloads.get(state='ACTIVE')
+        snapshot = dict(snapshot)
+        if workload.resume_checkpoint_id:
+            from OpenBench.training_checkpoints import checkpoint_provenance
+            snapshot['resume'] = checkpoint_provenance(workload.resume_checkpoint)
+        workload_data = {'id': workload.pk, 'claim_token': str(workload.claim_token), 'start': workload.start, 'end': workload.end, 'report_sequence': workload.report_sequence, 'finalize_only': bool(workload.resume_checkpoint_id and workload.resume_checkpoint.superbatch == workload.end)}
+    return {'id': run.pk, 'name': run.name, 'engine': run.engine.name, 'snapshot': snapshot, 'dataset': effective_dataset(run), 'parameters': run.parameters, 'worker_info': info, 'state': run.state, 'report_sequence': run.report_sequence, 'cancel_requested': run.cancel_requested or run.deleted, 'recovery_pending': bool(run.metrics.get('recovery_pending')), 'workload': workload_data, 'priority': run.priority, 'completed_superbatches': run.completed_superbatches, 'required_disk_bytes': required_disk_bytes(run.dataset, run.snapshot['settings']) + run.snapshot['settings'].get('disk_reserve_gb', 10) * 1024 ** 3}
 
 
 @worker_endpoint
@@ -200,6 +260,10 @@ def recover(request, pk):
     from OpenBench.training_checkpoints import resume_training
     with storage_lock():
         run = TrainingRun.objects.select_for_update().get(pk=owned_run(request, pk).pk)
+        if run.workload_size:
+            from OpenBench.training_workloads import expire_workload
+            expire_workload(run, 'Worker restarted; continuing from the latest committed checkpoint.')
+            return JsonResponse({'recovery_run': run.pk})
         if run.recovery_run_id:
             return JsonResponse({'recovery_run': run.recovery_run_id})
         if run.deleted or run.state in ('COMPLETED', 'CANCELLED'):
@@ -233,25 +297,38 @@ def owned_run(request, pk):
     run = TrainingRun.objects.filter(pk=pk, worker=request.training_worker).first()
     if not run:
         raise ValidationError('This run is not assigned to this worker.')
+    from OpenBench.training_workloads import check_claim
+    check_claim(request, run)
     return run
 
 
 @worker_endpoint
 @require_POST
 def control(request, pk):
-    run = TrainingRun.objects.only('state', 'cancel_requested', 'deleted').filter(pk=pk, worker=request.training_worker).first()
-    if not run:
-        raise ValidationError('This run is not assigned to this worker.')
+    try:
+        run = owned_run(request, pk)
+    except ValidationError:
+        return JsonResponse({'stop': True, 'state': 'EXPIRED'})
     return JsonResponse({'stop': run.cancel_requested or run.deleted or run.terminal, 'state': run.state})
 
 
 @worker_endpoint
 @require_POST
 def report(request, pk):
-    run = owned_run(request, pk)
+    data = json_body(request)
+    from OpenBench.training_workloads import completion_retry, complete_workload
+    if retry := completion_retry(request, pk, data):
+        return JsonResponse(retry)
+    try:
+        run = owned_run(request, pk)
+    except ValidationError:
+        if retry := completion_retry(request, pk, data):
+            return JsonResponse(retry)
+        raise
+    if run.workload_size and data.get('state') == 'COMPLETED':
+        return JsonResponse(complete_workload(request, run, data))
     if run.terminal:
         return JsonResponse({'stop': True, 'state': run.state, 'sequence': run.report_sequence})
-    data = json_body(request)
     if (run.cancel_requested or run.deleted) and data.get('state') not in ('CANCELLED', 'FAILED'):
         return JsonResponse({'stop': True, 'state': run.state})
     sequence = data.get('sequence')
@@ -306,6 +383,11 @@ def report(request, pk):
         history = merge_loss_history(history, samples, now.timestamp())
     from OpenBench.training_telemetry import training_metrics
     clean_metrics = training_metrics(clean_metrics, run.snapshot, run.dataset, state)
+    if run.workload_size and state != 'TRAINING':
+        from OpenBench.training_workloads import run_end
+        clean_metrics['phase_progress'] = clean_metrics.get('progress', 0)
+        completed = max(run.completed_superbatches, clean_metrics.get('superbatch', 0)) if state == 'SAVING' else run.completed_superbatches
+        clean_metrics['progress'] = 100 * min(completed, run_end(run)) / run_end(run)
     changes = {'state': state, 'updated': now, 'metrics': clean_metrics, 'history': history, 'log_tail': (run.log_tail + log)[-32768:], 'report_sequence': sequence}
     if error:
         changes['error'] = error
@@ -316,7 +398,15 @@ def report(request, pk):
         with storage_lock():
             prune_checkpoints(run)
     with transaction.atomic():
-        changed = TrainingRun.objects.filter(pk=pk, report_sequence=run.report_sequence, state=run.state, cancel_requested=run.cancel_requested, deleted=run.deleted).update(**changes)
+        locked = TrainingRun.objects.select_for_update().get(pk=run.pk)
+        from OpenBench.training_workloads import check_claim
+        workload = check_claim(request, locked)
+        changed = TrainingRun.objects.filter(pk=pk, claim_id=run.claim_id, worker=run.worker, report_sequence=run.report_sequence, state=run.state, cancel_requested=run.cancel_requested, deleted=run.deleted).update(**changes)
+        if changed and workload:
+            workload.report_sequence = sequence
+            if state in ('FAILED', 'CANCELLED'):
+                workload.state, workload.finished = state, now
+            workload.save(update_fields=['report_sequence', 'state', 'finished'])
         if changed and state != run.state:
             record_event('training.' + state.lower(), run, run.owner_id, {'from': run.state, 'to': state, 'worker_id': str(request.training_worker.pk)}, key='training.state:%d:%d' % (run.pk, sequence))
     if changed:
@@ -328,6 +418,9 @@ def report(request, pk):
             if not path.exists() or path.stat().st_size < 64 * 1024 ** 2:
                 with path.open('a', encoding='utf-8') as output:
                     output.write(log)
+        if workload and state == 'FAILED' and clean_metrics.get('recovery_pending'):
+            from OpenBench.training_workloads import expire_workload
+            expire_workload(run, 'Worker interrupted; continuing from the latest committed checkpoint.')
     return JsonResponse({'stop': run.cancel_requested or run.deleted, 'state': state if changed else run.state, 'sequence': sequence if changed else run.report_sequence})
 
 
@@ -394,6 +487,11 @@ def upload_artifact(request, pk):
     expected = request.GET.get('sha256', '')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', name) or not re.fullmatch(r'[a-f0-9]{64}', expected) or kind not in ('network', 'log', 'manifest', 'checkpoint'):
         raise ValueError
+    workload = run.workloads.filter(state='ACTIVE').first() if run.workload_size else None
+    if workload:
+        name = '%s-%s' % (workload.claim_token.hex, name)
+        if len(name) > 128:
+            raise ValidationError('Artifact name is too long for a workload.')
     existing = TrainingArtifact.objects.filter(run=run, name=name).first()
     if existing:
         if existing.sha256 != expected or existing.kind != kind:
@@ -433,11 +531,16 @@ def upload_artifact(request, pk):
             raise ValidationError('The run stopped accepting artifacts.')
         destination = directory / (uuid.uuid4().hex + '-' + name)
         with storage_lock():
+            locked = TrainingRun.objects.select_for_update().get(pk=run.pk)
+            from OpenBench.training_workloads import check_claim
+            check_claim(request, locked)
+            if locked.state not in ('TRAINING', 'SAVING') or locked.cancel_requested or locked.deleted:
+                raise ValidationError('The run stopped accepting artifacts.')
             temporary.rename(destination)
             sync_directory(destination.parent)
             try:
                 with transaction.atomic():
-                    row = TrainingArtifact.objects.create(run=run, name=name, kind=kind, sha256=expected, size=size, path=destination.relative_to(settings.TRAINING_ROOT).as_posix())
+                    row = TrainingArtifact.objects.create(run=run, workload=workload, name=name, kind=kind, sha256=expected, size=size, path=destination.relative_to(settings.TRAINING_ROOT).as_posix())
             except IntegrityError:
                 destination.unlink(missing_ok=True)
                 row = TrainingArtifact.objects.get(run=run, name=name)

@@ -24,7 +24,13 @@ DEFAULT_SPEC = {
     'random_fen_skip': 0.0, 'position_filtering': True,
     'min_ply': 16, 'max_ply': 100000, 'min_eval': 0, 'max_eval': 31338,
     'min_pieces': 4, 'max_pieces': 32, 'filter_tactical': True, 'filter_check': True, 'filter_castling': False,
-    'piece_count_sampling': False, 'piece_count_keep': [1.0] * 31,
+    'piece_count_sampling': False, 'piece_count_mode': 'fixed', 'piece_count_keep': [1.0] * 33,
+    'result_filtering': False, 'max_eval_incorrectness': 2500,
+    'wdl_filtered': False,
+    'wdl_model_params_a': [6.87155862, -39.65226391, 90.68460352, 170.66996364],
+    'wdl_model_params_b': [-7.19890710, 56.13947185, -139.91091183, 182.81007427],
+    'material_min': 17, 'material_max': 78, 'mom_target': 58, 'wdl_heuristic_scale': 1.5,
+    'lr_convention': 'native', 'presentation': {'lr': 'lengths', 'wdl': 'lengths'},
     'batch_size': 16384, 'batches_per_superbatch': 6104, 'superbatches': 800, 'save_every': 1,
     'lr_stages': [{'start': 1, 'end': 800, 'kind': 'cosine', 'initial': 0.001, 'final': 0.00001}],
     'wdl_stages': [{'start': 1, 'end': 800, 'kind': 'constant', 'initial': 0.75, 'final': 0.75}],
@@ -37,6 +43,9 @@ DEFAULT_SPEC = {
 
 def validate_spec(value):
     if isinstance(value, dict):
+        value = {'lr_convention': 'legacy', 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'},
+                 **{key: DEFAULT_SPEC[key] for key in ('piece_count_mode', 'result_filtering', 'max_eval_incorrectness',
+                    'wdl_filtered', 'wdl_model_params_a', 'wdl_model_params_b', 'material_min', 'material_max', 'mom_target', 'wdl_heuristic_scale')}, **value}
         value = {'psqt_inputs': True, **value}
         value = {'pairwise_layers': [1],
                  'pairwise_left_activation': 'crelu', 'pairwise_right_activation': 'crelu', **value}
@@ -67,12 +76,14 @@ def validate_spec(value):
         ('dataset_shard_mb', 4, 16384),
         ('min_ply', 0, 100000), ('max_ply', 0, 100000), ('min_eval', 0, 32768), ('max_eval', 0, 32768),
         ('min_pieces', 2, 32), ('max_pieces', 2, 32),
+        ('max_eval_incorrectness', 0, 4294967295), ('material_min', 0, 4294967295),
+        ('material_max', 0, 4294967295), ('mom_target', 1, 4294967295),
     ):
         if type(spec[key]) is not int or not minimum <= spec[key] <= maximum:
             raise ValidationError('%s must be between %d and %d.' % (key.replace('_', ' ').capitalize(), minimum, maximum))
     for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave',
                 'score_outputs', 'wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation',
-                'position_filtering', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling'):
+                'position_filtering', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling', 'result_filtering', 'wdl_filtered'):
         if type(spec[key]) is not bool:
             raise ValidationError('Invalid %s selection.' % key.replace('_', ' '))
     if not spec['score_outputs'] and not spec['wdl_outputs']:
@@ -89,12 +100,24 @@ def validate_spec(value):
         raise ValidationError('Random FEN skip probability must be between 0 and 1.')
     spec['random_fen_skip'] = float(spec['random_fen_skip'])
     keep = spec['piece_count_keep']
-    if not isinstance(keep, list) or len(keep) != 31 or any(type(p) not in (int, float) or not math.isfinite(p) or not 0 <= p <= 1 for p in keep):
-        raise ValidationError('Set a keep probability between 0 and 1 for each piece count from 2 to 32.')
+    if isinstance(keep, list) and len(keep) == 31:
+        keep = [0.0, 0.0] + keep
+    if spec['piece_count_mode'] not in ('fixed', 'target'):
+        raise ValidationError('Choose fixed keep probabilities or a target distribution.')
+    if not isinstance(keep, list) or len(keep) != 33 or any(type(p) not in (int, float) or not math.isfinite(p) or not 0 <= p <= 1 for p in keep):
+        raise ValidationError('Set a finite value between 0 and 1 for each piece count from 0 to 32.')
+    if spec['piece_count_mode'] == 'target' and not math.isclose(sum(keep), 1, rel_tol=0, abs_tol=0.00001):
+        raise ValidationError('Target proportions must sum to approximately one (within 0.00001).')
     spec['piece_count_keep'] = [float(p) for p in keep]
     low, high = (spec['min_pieces'], spec['max_pieces']) if spec['position_filtering'] else (2, 32)
-    if spec['piece_count_sampling'] and not any(keep[low - 2:high - 1]):
+    if spec['piece_count_sampling'] and not any(keep[low:high + 1]):
         raise ValidationError('Keep at least one piece count in the permitted range.')
+    from OpenBench.builder_values import validate_wdl_model
+    validate_wdl_model(spec)
+    if spec['lr_convention'] not in ('native', 'legacy'):
+        raise ValidationError('Invalid LR convention.')
+    if not isinstance(spec['presentation'], dict) or set(spec['presentation']) != {'lr', 'wdl'} or any(mode not in ('lengths', 'boundaries') for mode in spec['presentation'].values()):
+        raise ValidationError('Choose lengths or boundaries for each stage editor.')
     for key, options in (
         ('activation', ('screlu', 'crelu')),
         ('pairwise_left_activation', ('crelu', 'screlu', 'relu', 'identity')),
@@ -134,30 +157,39 @@ def validate_spec(value):
         stages = spec[channel + '_stages']
         if not isinstance(stages, list) or not stages:
             raise ValidationError('Add at least one %s stage.' % channel.upper())
-        if channel == 'lr' and all(isinstance(stage, dict) and set(stage) == {'start', 'end', 'kind', 'initial', 'final'} for stage in stages):
-            stages = [{**stages[0], 'start': 1, 'end': spec['superbatches'], 'final': stages[-1]['final']}]
-            spec['lr_stages'] = stages
+        if isinstance(stages[-1], dict) and type(stages[-1].get('end')) is int and stages[-1]['end'] > spec['superbatches']:
+            raise ValidationError('%s stages allocate %d SB; %d SB excess over the run total.' % (channel.upper(), stages[-1]['end'], stages[-1]['end'] - spec['superbatches']))
         next_start = 1
         for index, stage in enumerate(stages, 1):
             label = '%s stage %d' % (channel.upper(), index)
-            if not isinstance(stage, dict) or set(stage) != {'start', 'end', 'kind', 'initial', 'final'}:
+            required = {'start', 'end', 'kind', 'initial', 'final'}
+            optional = {'gamma', 'interval', 'warmup_batches'} if channel == 'lr' else set()
+            if not isinstance(stage, dict) or not required <= set(stage) or set(stage) - required - optional:
                 raise ValidationError('%s is incomplete.' % label)
-            stage['start'] = next_start
-            if index == len(stages):
-                stage['end'] = spec['superbatches']
             if type(stage['start']) is not int or type(stage['end']) is not int or stage['start'] != next_start or not stage['start'] <= stage['end'] <= spec['superbatches']:
                 raise ValidationError('%s must start at SB %d and end within the schedule, without gaps or overlaps.' % (label, next_start))
-            if stage['kind'] not in ('constant', 'linear', 'cosine'):
+            if stage['kind'] not in (('constant', 'linear', 'cosine', 'exponential', 'step', 'drop') if channel == 'lr' else ('constant', 'linear', 'cosine')):
                 raise ValidationError('%s has an invalid curve.' % label)
+            if channel == 'lr':
+                if spec['lr_convention'] == 'legacy' and stage['kind'] not in ('constant', 'linear', 'cosine'):
+                    raise ValidationError('Legacy interpolation supports constant, linear and cosine curves.')
+                for key, default in (('gamma', 0.5), ('interval', 1), ('warmup_batches', 0)):
+                    stage.setdefault(key, default)
+                if type(stage['gamma']) not in (float, int) or not math.isfinite(stage['gamma']) or not 0 <= stage['gamma'] <= 1:
+                    raise ValidationError('%s gamma must be between zero and one.' % label)
+                if type(stage['interval']) is not int or not 1 <= stage['interval'] <= 1000000:
+                    raise ValidationError('%s interval must be a positive integer.' % label)
+                if type(stage['warmup_batches']) is not int or not 0 <= stage['warmup_batches'] <= spec['batches_per_superbatch']:
+                    raise ValidationError('%s warmup must fit within its first superbatch.' % label)
             for key in ('initial', 'final'):
                 if type(stage[key]) not in (int, float) or not math.isfinite(stage[key]) or not 0 <= stage[key] <= 1:
                     raise ValidationError('%s values must be between 0 and 1.' % label)
                 stage[key] = float(stage[key])
-            if stage['kind'] == 'constant' or stage['start'] == stage['end']:
-                stage['final'] = stage['initial']
+            if channel == 'lr' and stage['kind'] == 'exponential' and min(stage['initial'], stage['final']) <= 0:
+                raise ValidationError('%s exponential rates must be positive.' % label)
             next_start = stage['end'] + 1
         if next_start != spec['superbatches'] + 1:
-            raise ValidationError('%s stages must cover all superbatches.' % channel.upper())
+            raise ValidationError('%s stages allocate %d SB; %d SB short of the run total.' % (channel.upper(), next_start - 1, spec['superbatches'] - next_start + 1))
     return spec
 
 
@@ -180,7 +212,7 @@ def fingerprint(files, settings):
 def builder_state(schedule):
     try:
         metadata = json.loads(schedule.files[MANIFEST])
-        if metadata['version'] not in (1, 2, 3):
+        if metadata['version'] not in (1, 2, 3, 4):
             return None, False
         spec = validate_spec(metadata['spec'])
         return spec, metadata['fingerprint'] == fingerprint(schedule.files, schedule.settings)
@@ -211,10 +243,14 @@ def generate_schedule(value):
         '        min_ply: %d, min_pieces: %d, max_eval: %d,' % (spec['min_ply'] if filtering else 0, spec['min_pieces'] if filtering else 2, spec['max_eval'] + 1 if filtering else 32769),
         '        filter_tactical: %s, filter_check: %s, filter_castling: %s,' % tuple(str(filtering and spec[key]).lower() for key in ('filter_tactical', 'filter_check', 'filter_castling')),
         '        random_fen_skipping: true, random_fen_skip_probability: %s,' % repr(spec['random_fen_skip']),
+        '        max_eval_incorrectness: %d, wdl_filtered: %s,' % (spec['max_eval_incorrectness'] if spec['result_filtering'] else 4294967295, str(spec['wdl_filtered']).lower()),
+        *('        %s: [%s],' % (key, ', '.join(repr(float(x)) for x in spec[key])) for key in ('wdl_model_params_a', 'wdl_model_params_b')),
+        '        material_min: %d, material_max: %d, mom_target: %d, wdl_heuristic_scale: %s,' % (spec['material_min'], spec['material_max'], spec['mom_target'], repr(float(spec['wdl_heuristic_scale']))),
         '        ..Filter::UNRESTRICTED',
         '    },',
         '    max_ply: %d, min_eval: %d, max_pieces: %d,' % (spec['max_ply'] if filtering else 4294967295, spec['min_eval'] if filtering else 0, spec['max_pieces'] if filtering else 32),
-        '    piece_count_keep: [%s],' % ', '.join(repr(p) for p in (spec['piece_count_keep'] if spec['piece_count_sampling'] else [1.0] * 31)),
+        '    piece_count_keep: [%s],' % ', '.join(repr(p) for p in (spec['piece_count_keep'] if spec['piece_count_sampling'] else [1.0] * 33)),
+        '    target_distribution: %s,' % str(spec['piece_count_sampling'] and spec['piece_count_mode'] == 'target').lower(),
         '}',
     ])
     sizes = spec['layers']
@@ -317,7 +353,7 @@ def generate_schedule(value):
     source = template.substitute(
         spec, bucket_type=bucket_type, map_size=king_width * 8, bucket_rows='\n'.join(rows),
         feature_expression=feature_expression, layers=indent('\n'.join(graph), '        '),
-        saved_format=indent('\n'.join(formats), '        '), lr_rows=stage_rows('lr'), wdl_rows=stage_rows('wdl'),
+        saved_format=indent('\n'.join(formats), '        '), lr_scheduler=lr_scheduler(spec), wdl_rows=stage_rows('wdl'),
         dataset_ranges=', '.join('(%d, %d)' % (stage['start'], stage['end']) for stage in dataset_stages(spec)),
         worker_adapter=indent(adapter.rstrip(), '    '), auxiliary_module=auxiliary_module,
         loader_import=loader_import, target_count=4 if spec['wdl_outputs'] else 1,
@@ -335,7 +371,8 @@ def generate_schedule(value):
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
     files[MANIFEST] = json.dumps({
-        'version': 3, 'spec': spec, 'fingerprint': fingerprint(files, settings),
+        'version': 4, 'spec': spec, 'fingerprint': fingerprint(files, settings),
+        'workload_bounds': True,
         'bullet_source': 'https://github.com/jw1912/bullet/tree/' + BULLET_COMMIT,
         'export': {'feature_weights': spec['feature_format'], 'feature_scale': 255 if spec['feature_format'] == 'i16' else 1, 'dense_weights': 'f32', 'dense_weights_transposed': True,
                    'heads': {name: {'buckets': spec[name + '_buckets'], 'outputs_per_bucket': width,
@@ -369,7 +406,30 @@ def schedule_dataset_stages(schedule):
     if not spec or not current:
         return []
     metadata = json.loads(schedule.files[MANIFEST])
-    if metadata['version'] not in (2, 3):
+    if metadata['version'] not in (2, 3, 4):
         return []
     stored = metadata['spec']
     return dataset_stages(stored if 'lr_stages' in stored and 'wdl_stages' in stored else spec)
+
+
+def lr_scheduler(spec):
+    def scheduler(stage):
+        duration = stage['end'] - stage['start'] + 1
+        initial, final = repr(float(stage['initial'])), repr(float(stage['final']))
+        kind = stage['kind']
+        if spec['lr_convention'] == 'legacy':
+            expression = 'LegacyLR { initial: %s, final_value: %s, duration: %d, kind: %d }' % (initial, final, duration, ('constant', 'linear', 'cosine').index(kind))
+        elif kind == 'constant':
+            expression = 'lr::ConstantLR { value: %s }' % initial
+        elif kind in ('step', 'drop'):
+            expression = 'lr::%sLR { start: %s, gamma: %s, %s: %d }' % (kind.capitalize(), initial, repr(float(stage['gamma'])), kind, stage['interval'])
+        else:
+            expression = 'lr::%sDecayLR { initial_lr: %s, final_lr: %s, final_superbatch: %d }' % (kind.capitalize(), initial, final, duration)
+        if stage['warmup_batches']:
+            expression = 'lr::Warmup { inner: %s, warmup_batches: %d }' % (expression, stage['warmup_batches'])
+        return expression
+    stages = spec['lr_stages']
+    expression = scheduler(stages[-1])
+    for stage in reversed(stages[:-1]):
+        expression = 'lr::Sequence { first: %s, second: %s, first_scheduler_final_superbatch: %d }' % (scheduler(stage), expression, stage['end'] - stage['start'] + 1)
+    return expression

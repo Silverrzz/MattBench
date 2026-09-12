@@ -27,12 +27,14 @@ import psutil
 import requests
 
 try:
+    from . import training_cache
     from .training_gpu import detect_gpu
     from .training_checkpoints import CheckpointUploader, download_checkpoint
     from .training_data import prepare_and_publish
     from .training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
     from .training_runtime import cuda_build_environment, identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 except ImportError:
+    import training_cache
     from training_gpu import detect_gpu
     from training_checkpoints import CheckpointUploader, download_checkpoint
     from training_data import prepare_and_publish
@@ -159,7 +161,7 @@ class Reporter:
         if text.startswith('MATTBENCH_METRIC '):
             try:
                 values = json.loads(text.removeprefix('MATTBENCH_METRIC '))
-                allowed = ('loss', 'validation_loss', 'step', 'superbatch', 'learning_rate', 'positions_per_second', 'progress')
+                allowed = ('loss', 'validation_loss', 'step', 'superbatch', 'learning_rate', 'wdl_blend', 'positions_per_second', 'progress')
                 if isinstance(values, dict):
                     self.update(**{key: value for key, value in values.items() if key in allowed and type(value) in (int, float) and abs(value) < 1e20})
             except (ValueError, TypeError):
@@ -182,6 +184,8 @@ class Reporter:
     def flush(self):
         with self.send_lock:
             with self.lock:
+                if self.ack_state == 'COMPLETED' and self.inflight is None:
+                    return
                 if self.inflight is not None and self.state in ('FAILED', 'CANCELLED') and self.inflight['state'] != self.state:
                     self.inflight = None
                 if self.inflight is None:
@@ -610,7 +614,7 @@ def save_outputs(connection, job, directory, reporter):
     outputs = directory / 'outputs'
     uploaded = reporter.checkpoints.uploaded_networks if reporter.checkpoints else set()
     networks = sorted(path for path in outputs.glob(settings['network_glob']) if path.is_file() and path.resolve() not in uploaded)
-    if not networks and not uploaded or len(networks) > 250:
+    if (not networks and not uploaded and not (job.get('workload') or {}).get('finalize_only')) or len(networks) > 250:
         raise RuntimeError('Expected between 1 and 250 network outputs matching %s.' % settings['network_glob'])
     artifacts = []
     for index, path in enumerate(networks):
@@ -619,7 +623,7 @@ def save_outputs(connection, job, directory, reporter):
         size = path.stat().st_size
         if not settings['network_min_bytes'] <= size <= settings['network_max_bytes']:
             raise RuntimeError('Network output size is outside the schedule limits: %s' % path.name)
-        name = '%03d-%s' % (index, re.sub(r'[^A-Za-z0-9_.-]', '_', path.name)[-110:])
+        name = '%03d-%s' % (index, re.sub(r'[^A-Za-z0-9_.-]', '_', path.name)[-80:])
         artifacts.append({'path': path, 'name': name, 'kind': 'network', 'sha256': sha256_file(path), 'size': size})
     manifest = {**job, 'checkpoints': reporter.checkpoints.records if reporter.checkpoints else [], 'artifacts': [{key: str(value) if key == 'path' else value for key, value in item.items()} for item in artifacts]}
     manifest_path = directory / 'manifest.json'
@@ -648,11 +652,19 @@ def save_outputs(connection, job, directory, reporter):
 
 
 def execute(connection, job, root, pawnocchio):
+    if job.get('workload'):
+        connection = Connection(connection.server, connection.headers['X-Training-Worker'], connection.headers['Authorization'].removeprefix('Bearer '))
+        connection.headers['X-Training-Claim'] = job['workload']['claim_token']
     directory = root / str(job['id'])
+    cache_root = root / 'cache'
+    training_cache.evict(cache_root, job.get('required_disk_bytes', (job['snapshot']['settings'].get('disk_reserve_gb', 10) * 1024 ** 3) + job['dataset'].get('size', 0)))
     directory.mkdir(exist_ok=False)
     reporter = None
     previous_handlers = {}
     interrupted = threading.Event()
+    dataset_caches = []
+    build_cache_key = None
+    build_ready = False
     def interrupt(*args):
         interrupted.set()
         if reporter:
@@ -670,15 +682,23 @@ def execute(connection, job, root, pawnocchio):
             reporter.write('Using Microsoft linker: %s\n' % environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'])
         source_dataset = job['dataset']
         resume_superbatch = job['snapshot'].get('resume', {}).get('superbatch', 0)
-        if source_dataset.get('stages') and all(stage.get('end', float('inf')) <= resume_superbatch for stage in source_dataset['stages']):
+        if not (job.get('workload') or {}).get('finalize_only') and source_dataset.get('stages') and all(stage.get('end', float('inf')) <= resume_superbatch for stage in source_dataset['stages']):
             raise RuntimeError('The checkpoint is already at or beyond the end of the schedule. Choose an earlier checkpoint or extend the schedule.')
         resume_directory = download_checkpoint(connection, job, directory, reporter)
+        if (job.get('workload') or {}).get('finalize_only'):
+            (directory / 'outputs').mkdir()
+            for state in ('CONVERTING', 'COMPILING', 'TRAINING', 'SAVING'):
+                reporter.stage(state)
+            reporter.write('Final checkpoint already committed; completing remaining artifacts.\n')
+            save_outputs(connection, job, directory, reporter)
+            reporter.stage('COMPLETED')
+            return False
         stage_data = []
         stage_statistics = []
         prepared_stages = {}
         data = []
         for index, stage in enumerate(source_dataset.get('stages') or [source_dataset]):
-            if stage.get('end', float('inf')) <= resume_superbatch:
+            if stage.get('end', float('inf')) <= resume_superbatch or stage.get('start', 1) > (job.get('workload') or {}).get('end', float('inf')):
                 stage_data.append([])
                 stage_statistics.append({})
                 continue
@@ -695,6 +715,20 @@ def execute(connection, job, root, pawnocchio):
             stage_job = {**job, 'dataset': {**stage, 'files': [source_dataset['files'][i] for i in indices]}}
             plan = stage_connection.request('POST', '%d/dataset/prepare/' % job['id'], json={}).json()
             reporter.write('Dataset stage %d remaining steps: %s.\n' % (index + 1, ', '.join(plan['steps']) or 'none'))
+            dataset_cache_key = training_cache.key({'source': plan['source_key'], 'settings': job['snapshot']['settings'], 'tools': [PAWNOCCHIO_REF, COMBINER_REF]})
+            cached = training_cache.take(cache_root / 'datasets', dataset_cache_key, stage_directory) if job.get('workload') else None
+            if cached:
+                if reporter.state == 'DOWNLOADING':
+                    reporter.stage('CONVERTING')
+                prepared = [stage_directory / item['path'] for item in cached['files']]
+                statistics = cached['metadata'].get('statistics', {})
+                prepared_stages[key] = (prepared, statistics)
+                stage_data.append(prepared)
+                stage_statistics.append(statistics)
+                data.extend(prepared)
+                dataset_caches.append((dataset_cache_key, stage_directory, prepared, statistics))
+                reporter.write('Reusing verified dataset preparation for stage %d.\n' % (index + 1))
+                continue
             paths = download_dataset(stage_connection, stage_job, stage_directory, reporter)
             if reporter.state == 'DOWNLOADING':
                 reporter.stage('CONVERTING')
@@ -706,14 +740,19 @@ def execute(connection, job, root, pawnocchio):
             stage_data.append(prepared)
             stage_statistics.append(statistics)
             data.extend(prepared)
+            if job.get('workload'):
+                dataset_caches.append((dataset_cache_key, stage_directory, prepared, statistics))
         job['dataset_statistics'] = {'stages': stage_statistics, 'games': sum(item.get('games', 0) for _, item in prepared_stages.values())}
         reporter.stage('COMPILING')
         repository = directory / 'bullet'
         snapshot = job['snapshot']
-        command(['git', '-c', 'init.defaultBranch=main', 'init', str(repository)], directory, environment, reporter, trusted=True)
-        command(['git', '-C', str(repository), 'remote', 'add', 'origin', snapshot['settings']['bullet_repo']], directory, environment, reporter, trusted=True)
-        command(['git', '-C', str(repository), 'fetch', '--depth', '1', 'origin', snapshot['bullet_commit']], directory, environment, reporter, trusted=True)
-        command(['git', '-C', str(repository), 'checkout', '--detach', 'FETCH_HEAD'], directory, environment, reporter, trusted=True)
+        build_cache_key = training_cache.key({'commit': snapshot['bullet_commit'], 'source': snapshot['files'], 'settings': snapshot['settings'], 'environment': snapshot.get('environment', {}), 'runtime': job['worker_info']['runtime'], 'backend': job['worker_info']['backend']})
+        cached_build = training_cache.take(cache_root / 'builds', build_cache_key, repository) if job.get('workload') else None
+        if not cached_build:
+            command(['git', '-c', 'init.defaultBranch=main', 'init', str(repository)], directory, environment, reporter, trusted=True)
+            command(['git', '-C', str(repository), 'remote', 'add', 'origin', snapshot['settings']['bullet_repo']], directory, environment, reporter, trusted=True)
+            command(['git', '-C', str(repository), 'fetch', '--depth', '1', 'origin', snapshot['bullet_commit']], directory, environment, reporter, trusted=True)
+            command(['git', '-C', str(repository), 'checkout', '--detach', 'FETCH_HEAD'], directory, environment, reporter, trusted=True)
         for name, source in snapshot['files'].items():
             destination = repository / name
             if not destination.resolve().is_relative_to(repository.resolve()) or '.git' in Path(name).parts:
@@ -740,6 +779,10 @@ def execute(connection, job, root, pawnocchio):
             config.update(resume_checkpoint_dir=str(resume_directory), start_superbatch=snapshot['resume']['superbatch'] + 1, resume_metadata=snapshot['resume']['metadata'])
             environment['MATTBENCH_RESUME_DIR'] = str(resume_directory)
             environment['MATTBENCH_START_SUPERBATCH'] = str(config['start_superbatch'])
+        if job.get('workload'):
+            config.update(start_superbatch=job['workload']['start'], end_superbatch=job['workload']['end'])
+            environment['MATTBENCH_START_SUPERBATCH'] = str(config['start_superbatch'])
+            environment['MATTBENCH_END_SUPERBATCH'] = str(config['end_superbatch'])
         (directory / 'job.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
         (directory / 'data-files.txt').write_text('\n'.join(str(path) for path in data), encoding='utf-8')
         environment['MATTBENCH_DATA_FILES'] = str(directory / 'data-files.txt')
@@ -764,16 +807,21 @@ def execute(connection, job, root, pawnocchio):
                 overrides['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'
             for key, value in sorted(overrides.items()):
                 reporter.write('ROCm architecture override for %s: %s=%s\n' % (job['worker_info']['gpu'], key, value))
-        command(build, repository, environment, reporter)
+        if cached_build:
+            reporter.write('Reusing verified trainer build.\n')
+        else:
+            command(build, repository, environment, reporter)
         if sha256_file(lockfile) != job['build_provenance']['cargo_lock_sha256']:
             raise RuntimeError('The build changed Cargo.lock. Pin the resolved dependency lockfile in the schedule before retrying.')
+        build_ready = True
         reporter.stage('TRAINING')
         reporter.checkpoints = CheckpointUploader(connection, job, directory, reporter)
         command(snapshot['settings']['run'], repository, environment, reporter)
         reporter.stage('SAVING')
         reporter.checkpoints.finish()
-        for index in range(len(stage_data)):
-            remove_work_directory(directory / ('stage-%d' % index), directory)
+        if not job.get('workload'):
+            for index in range(len(stage_data)):
+                remove_work_directory(directory / ('stage-%d' % index), directory)
         save_outputs(connection, job, directory, reporter)
         reporter.stage('COMPLETED')
     except Exception as error:
@@ -816,6 +864,13 @@ def execute(connection, job, root, pawnocchio):
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
             stop_previous(directory)
+            if job.get('workload'):
+                for cache_key, stage_directory, prepared, statistics in dataset_caches:
+                    training_cache.put(cache_root / 'datasets', cache_key, stage_directory, prepared, {'statistics': statistics})
+                if build_ready and (directory / 'bullet').exists():
+                    repository = directory / 'bullet'
+                    executable = repository / job['snapshot']['settings']['run'][0]
+                    training_cache.put(cache_root / 'builds', build_cache_key, repository, [executable, repository / 'Cargo.lock'])
             remove_work_directory(directory, root)
             remove_work_directory(root / 'transfer-cache', root)
     return interrupted.is_set()
@@ -828,23 +883,37 @@ class WorkerSession:
         self.registration = registration
         self.identity_path = identity_path
         self.directory_lock = directory_lock
+        self.pending_test = None
+        self.settings = {}
 
     def close(self):
         self.directory_lock.close()
 
-    def poll(self, completed_workload=0):
+    def poll(self, completed_workload=0, blacklist=None):
         cleanup_runs(self.args.directory)
-        result = self.connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(self.args.directory).free / 1024 ** 3, 'claim_id': self.registration['claim_id'], 'machine_idle': self.args.unified, 'completed_workload': completed_workload}).json()
+        result = self.connection.request('POST', 'claim/', json={'disk_gb': (shutil.disk_usage(self.args.directory).free + training_cache.reclaimable_bytes(self.args.directory / 'cache')) / 1024 ** 3, 'claim_id': self.registration['claim_id'], 'machine_idle': self.args.unified, 'completed_workload': completed_workload, 'blacklist': blacklist or []}).json()
+        self.settings = result.get('settings', {})
+        if result.get('claim_finished'):
+            self.registration['claim_id'] = str(uuid.uuid4())
+            write_json(self.identity_path, self.registration)
+            return True
+        self.pending_test = result.get('assignment', {}).get('workload') if result.get('assignment', {}).get('type') == 'test' else None
+        if self.pending_test:
+            self.registration['claim_id'] = str(uuid.uuid4())
+            write_json(self.identity_path, self.registration)
         if not result['run']:
             return False
         job = result['run']
         interrupted = False
         executed = False
-        if job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+        if job['state'] == 'DOWNLOADING' and (job.get('workload', {}).get('report_sequence', 0) if job.get('workload') else job['report_sequence']) == 0 and not job['cancel_requested']:
             executed = True
             interrupted = execute(self.connection, job, self.args.directory, self.args.pawnocchio)
         elif job['state'] not in ('COMPLETED', 'CANCELLED'):
-            self.connection.request('POST', '%d/recover/' % job['id'], json={})
+            recovery_connection = Connection(self.connection.server, self.connection.headers['X-Training-Worker'], self.connection.headers['Authorization'].removeprefix('Bearer '))
+            if job.get('workload'):
+                recovery_connection.headers['X-Training-Claim'] = job['workload']['claim_token']
+            recovery_connection.request('POST', '%d/recover/' % job['id'], json={})
         if not interrupted and not (executed and job.get('recovery_pending')):
             self.registration['claim_id'] = str(uuid.uuid4())
             write_json(self.identity_path, self.registration)
@@ -965,7 +1034,7 @@ def main(argv=None, worker_config=None, gpu_info=None):
     args.pawnocchio = dataset_tools['pawnocchio']
     import getpass
     username = args.username or registration.get('username') or input('MattBench username: ')
-    info = {'protocol': 3, 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
+    info = {'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
     info['combiner_path'] = str(dataset_tools['combiner'])
     info['runtime']['dataset_tools'] = tool_provenance
     info['runtime']['gpu_driver'] = driver_version.strip()
@@ -998,7 +1067,7 @@ def main(argv=None, worker_config=None, gpu_info=None):
                 job = result['run']
                 interrupted = False
                 executed = False
-                if job['state'] == 'DOWNLOADING' and job['report_sequence'] == 0 and not job['cancel_requested']:
+                if job['state'] == 'DOWNLOADING' and (job.get('workload', {}).get('report_sequence', 0) if job.get('workload') else job['report_sequence']) == 0 and not job['cancel_requested']:
                     executed = True
                     interrupted = execute(connection, job, args.directory, args.pawnocchio)
                 elif job['state'] not in ('COMPLETED', 'CANCELLED'):

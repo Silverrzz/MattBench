@@ -27,22 +27,65 @@ def checkpoint_ready(request, pk):
         raise ValidationError('Invalid checkpoint metadata.')
     with storage_lock():
         run = TrainingRun.objects.select_for_update().get(pk=run.pk)
+        from OpenBench.training_workloads import check_claim
+        workload = check_claim(request, run)
+        if workload and not workload.start <= superbatch <= workload.end:
+            raise ValidationError('Checkpoint is outside this workload’s bounds.')
         existing = TrainingCheckpoint.objects.filter(run=run, superbatch=superbatch).first()
         if existing:
             if existing.archive_id != data.get('archive') or existing.network_id != data.get('network'):
                 raise ValidationError('This superbatch already has a different checkpoint.')
             replicated = verify_artifact(existing.archive) and verify_artifact(existing.network)
             return JsonResponse({'checkpoint': existing.pk, 'superbatch': existing.superbatch, 'stored': True, 'replicated': replicated})
-        if run.state not in ('TRAINING', 'SAVING') or run.cancel_requested:
+        if run.state not in ('TRAINING', 'SAVING') or run.cancel_requested or run.deleted:
             raise ValidationError('This run is not accepting checkpoints.')
         archive = get_object_or_404(TrainingArtifact, pk=data.get('archive'), run=run, kind='checkpoint')
         network = get_object_or_404(TrainingArtifact, pk=data.get('network'), run=run, kind='network')
+        if workload and (archive.workload_id != workload.pk or network.workload_id != workload.pk):
+            raise ValidationError('Checkpoint artifacts belong to another workload attempt.')
         archive_replicated = verify_artifact(archive)
         network_replicated = verify_artifact(network)
+        if workload:
+            validate_resume_archive(archive, network)
         checkpoint = TrainingCheckpoint.objects.create(run=run, superbatch=superbatch, archive=archive, network=network, metadata=metadata)
+        if workload and superbatch > run.completed_superbatches:
+            run.completed_superbatches = superbatch
+            run.save(update_fields=['completed_superbatches'])
         record_event('training.checkpoint.saved', checkpoint, run.owner_id, {'run_id': run.pk, 'superbatch': superbatch, 'archive_sha256': archive.sha256, 'network_sha256': network.sha256})
         prune_checkpoints(run, checkpoint.pk)
     return JsonResponse({'checkpoint': checkpoint.pk, 'superbatch': superbatch, 'stored': True, 'replicated': archive_replicated and network_replicated})
+
+
+def validate_resume_archive(archive, network):
+    import hashlib
+    import tarfile
+    import zstandard
+    required = {'optimiser_state/weights.bin', 'optimiser_state/momentum.bin', 'optimiser_state/velocity.bin', 'quantised.bin'}
+    found = set()
+    total = 0
+    try:
+        with (Path(settings.TRAINING_ROOT) / archive.path).open('rb') as source:
+            with zstandard.ZstdDecompressor().stream_reader(source) as stream:
+                with tarfile.open(fileobj=stream, mode='r|') as contents:
+                    for index, member in enumerate(contents):
+                        total += member.size
+                        if index >= 10000 or not member.isfile() or member.name.startswith('/') or '..' in Path(member.name).parts or '\\' in member.name or total > settings.TRAINING_MAX_ARTIFACT_BYTES * 16:
+                            raise ValidationError('Invalid optimizer checkpoint archive.')
+                        if member.name in required:
+                            if member.name in found or member.size <= 0:
+                                raise ValidationError('Invalid optimizer checkpoint component.')
+                            found.add(member.name)
+                        if member.name == 'quantised.bin':
+                            digest = hashlib.sha256()
+                            with contents.extractfile(member) as file:
+                                for chunk in iter(lambda: file.read(1024 ** 2), b''):
+                                    digest.update(chunk)
+                            if member.size != network.size or digest.hexdigest() != network.sha256:
+                                raise ValidationError('Checkpoint network does not match its registered network.')
+    except (OSError, tarfile.TarError, zstandard.ZstdError):
+        raise ValidationError('Cannot read the optimizer checkpoint archive.') from None
+    if found != required:
+        raise ValidationError('Workload checkpoints require weights, momentum, velocity and the exported network.')
 
 
 def checkpoint_users(checkpoints):
@@ -95,6 +138,11 @@ def prune_checkpoints(run, newest_id=None):
         TrainingRun.objects.select_for_update().get(pk=run.pk)
         candidates = list(run.checkpoints.select_for_update().select_related('archive', 'network').order_by('-superbatch')[keep:])
         protected = set(checkpoint_users(candidates).values_list('resume_from_id', flat=True))
+        protected.update(TrainingRun.objects.filter(continuation_checkpoint__in=candidates).exclude(state__in=TRAINING_TERMINAL).values_list('continuation_checkpoint_id', flat=True))
+        from OpenBench.models import TrainingWorkload
+        protected.update(TrainingWorkload.objects.filter(state='ACTIVE', resume_checkpoint__in=candidates).values_list('resume_checkpoint_id', flat=True))
+        if run.workload_size and not run.terminal:
+            protected.add(run.checkpoints.order_by('-superbatch').values_list('pk', flat=True).first())
         from OpenBench.training_telemetry import training_stages
         boundaries = {stage['end'] for stage in training_stages(run.snapshot, run.dataset)}
         protected.update(checkpoint.pk for checkpoint in candidates if checkpoint.superbatch in boundaries)
@@ -127,9 +175,10 @@ def prune_checkpoints(run, newest_id=None):
 @worker_endpoint
 def resume_download(request, pk):
     run = owned_run(request, pk)
-    if not run.resume_from_id or run.terminal or run.cancel_requested:
+    checkpoint = run.continuation_checkpoint if run.workload_size else run.resume_from
+    if not checkpoint or run.terminal or run.cancel_requested:
         raise ValidationError('No checkpoint is available for this run.')
-    artifact = run.resume_from.archive
+    artifact = checkpoint.archive
     response = FileResponse((Path(settings.TRAINING_ROOT) / artifact.path).open('rb'), as_attachment=True, filename=artifact.name)
     response['X-Checksum-SHA256'] = artifact.sha256
     response['Content-Length'] = str(artifact.size)

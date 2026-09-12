@@ -83,10 +83,17 @@ class TrainingWorker(models.Model):
     info = models.JSONField(default=dict)
     updated = models.DateTimeField(default=timezone.now, db_index=True)
     enabled = models.BooleanField(default=True)
+    last_allocation_kind = models.CharField(max_length=16, blank=True)
+    test_assignment = models.JSONField(default=dict)
     mode = models.CharField(max_length=16, default='automatic', choices=[('automatic', 'Automatic'), ('testing-only', 'Testing only'), ('training-only', 'Training only'), ('paused', 'Paused')])
 
 
 class TrainingRun(models.Model):
+    priority = models.IntegerField(default=0)
+    workload_size = models.PositiveIntegerField(default=0)
+    completed_superbatches = models.PositiveIntegerField(default=0)
+    last_allocated = models.DateTimeField(null=True, blank=True)
+    continuation_checkpoint = models.ForeignKey('TrainingCheckpoint', on_delete=models.SET_NULL, null=True, blank=True, related_name='continuing_runs')
     claim_id = models.UUIDField(null=True, blank=True, unique=True)
     recovery_run = models.OneToOneField('self', on_delete=models.PROTECT, null=True, blank=True, related_name='recovered_from')
     preparation = models.JSONField(default=dict)
@@ -131,6 +138,7 @@ class TrainingRun(models.Model):
 
 class TrainingArtifact(models.Model):
     run = models.ForeignKey(TrainingRun, on_delete=models.CASCADE, related_name='artifacts')
+    workload = models.ForeignKey('TrainingWorkload', on_delete=models.SET_NULL, null=True, blank=True, related_name='artifacts')
     name = models.CharField(max_length=128)
     sha256 = models.CharField(max_length=64)
     size = models.BigIntegerField()
@@ -182,6 +190,27 @@ class TrainingCheckpoint(models.Model):
     class Meta:
         ordering = ['-superbatch']
         constraints = [models.UniqueConstraint(fields=['run', 'superbatch'], name='unique_training_checkpoint')]
+
+
+class TrainingWorkload(models.Model):
+    run = models.ForeignKey(TrainingRun, on_delete=models.CASCADE, related_name='workloads')
+    worker = models.ForeignKey(TrainingWorker, on_delete=models.PROTECT, related_name='workloads')
+    claim_token = models.UUIDField(unique=True)
+    start = models.PositiveIntegerField()
+    end = models.PositiveIntegerField()
+    state = models.CharField(max_length=16, default='ACTIVE')
+    report_sequence = models.BigIntegerField(default=0)
+    checkpoint = models.ForeignKey(TrainingCheckpoint, on_delete=models.SET_NULL, null=True, blank=True, related_name='workloads')
+    resume_checkpoint = models.ForeignKey(TrainingCheckpoint, on_delete=models.SET_NULL, null=True, blank=True, related_name='resuming_workloads')
+    created = models.DateTimeField(default=timezone.now)
+    finished = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['run'], condition=models.Q(state='ACTIVE'), name='one_active_workload_per_run'),
+            models.UniqueConstraint(fields=['worker'], condition=models.Q(state='ACTIVE'), name='one_active_workload_per_worker'),
+            models.CheckConstraint(condition=models.Q(start__gte=1, end__gte=models.F('start')), name='valid_training_workload_bounds'),
+        ]
 
 
 class LifecycleEvent(models.Model):

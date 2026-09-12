@@ -6,7 +6,7 @@ use std::{
 
 use bullet_lib::game::formats::bulletformat::ChessBoard;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use bullet_trainer::reader::DataReader;
 use bullet_lib::value::loader::viribinpack::{Filter, Game};
@@ -18,7 +18,22 @@ pub struct PositionFilter {
     pub max_ply: u32,
     pub min_eval: u32,
     pub max_pieces: u32,
-    pub piece_count_keep: [f64; 31],
+    pub piece_count_keep: [f64; 33],
+    pub target_distribution: bool,
+}
+
+#[derive(Clone)]
+struct SamplingStats { counts: [u64; 33], total: u64 }
+impl Default for SamplingStats {
+    fn default() -> Self { Self { counts: [0; 33], total: 0 } }
+}
+
+impl SamplingStats {
+    fn acceptance(&mut self, count: usize, target: f64) -> f64 {
+        self.counts[count] += 1;
+        self.total += 1;
+        (0.5 * target / (self.counts[count] as f64 / self.total as f64)).clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Clone)]
@@ -97,6 +112,9 @@ impl DataReader<ChessBoard> for ViriBinpackLoader {
 
         std::thread::spawn(move || {
             let mut kept_in_pass = 0;
+            // One persistent counter set per conversion worker, reset only when
+            // read_chunks starts again (including workload continuation).
+            let mut stats = vec![SamplingStats::default(); threads];
             'dataloading: while let Ok(games) = receiver.recv() {
                 if game_msg_receiver.try_recv().unwrap_or(false) {
                     msg_sender.send(true).unwrap();
@@ -110,7 +128,7 @@ impl DataReader<ChessBoard> for ViriBinpackLoader {
                     }
                     kept_in_pass = 0;
                 } else {
-                    kept_in_pass += convert_buffer(threads, &game_sender, &games, &filter);
+                    kept_in_pass += convert_buffer(threads, &game_sender, &games, &filter, &mut stats);
                 }
             }
         });
@@ -163,12 +181,12 @@ impl DataReader<ChessBoard> for ViriBinpackLoader {
     }
 }
 
-fn convert_buffer(threads: usize, sender: &SyncSender<Vec<ChessBoard>>, games: &[Vec<u8>], filter: &PositionFilter) -> usize {
+fn convert_buffer(threads: usize, sender: &SyncSender<Vec<ChessBoard>>, games: &[Vec<u8>], filter: &PositionFilter, stats: &mut [SamplingStats]) -> usize {
     let chunk_size = games.len().div_ceil(threads);
     let kept = std::sync::atomic::AtomicUsize::new(0);
 
     std::thread::scope(|s| {
-        for chunk in games.chunks(chunk_size) {
+        for (chunk, stats) in games.chunks(chunk_size).zip(stats.iter_mut()) {
             let this_sender = sender.clone();
             let kept = &kept;
             s.spawn(move || {
@@ -177,7 +195,7 @@ fn convert_buffer(threads: usize, sender: &SyncSender<Vec<ChessBoard>>, games: &
                 let mut reusable = Vec::new();
                 for game_bytes in chunk {
                     let game = Game::deserialise_from(&mut Cursor::new(game_bytes), reusable).unwrap();
-                    parse_into_buffer(&game, &mut buffer, filter);
+                    parse_into_buffer(&game, &mut buffer, filter, stats);
                     reusable = game.moves;
                 }
 
@@ -191,8 +209,9 @@ fn convert_buffer(threads: usize, sender: &SyncSender<Vec<ChessBoard>>, games: &
     kept.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn parse_into_buffer(game: &Game, buffer: &mut Vec<ChessBoard>, filter: &PositionFilter) {
+fn parse_into_buffer(game: &Game, buffer: &mut Vec<ChessBoard>, filter: &PositionFilter, stats: &mut SamplingStats) {
     let clock = Cell::new(0u8);
+    let stats = RefCell::new(stats);
     game.splat_to_bulletformat_with_filter_callback(
         |mut board| {
             board.extra[0] = clock.get();
@@ -205,9 +224,11 @@ fn parse_into_buffer(game: &Game, buffer: &mut Vec<ChessBoard>, filter: &Positio
             board.ply() > filter.max_ply as usize
                 || eval.unsigned_abs() < filter.min_eval
                 || pieces > filter.max_pieces
-                || !(2..=32).contains(&pieces)
+                || pieces > 32
                 || filter.base.should_filter(mv, eval, board, wdl, rng)
-                || !rng.random_bool(filter.piece_count_keep[pieces as usize - 2])
+                || !rng.random_bool(if filter.target_distribution {
+                    stats.borrow_mut().acceptance(pieces as usize, filter.piece_count_keep[pieces as usize])
+                } else { filter.piece_count_keep[pieces as usize] })
         },
     ).unwrap();
 }
@@ -219,5 +240,40 @@ fn shuffle(data: &mut [ChessBoard]) {
     for i in (0..data.len()).rev() {
         let idx = rng.rand_range(0..i as u64 + 1) as usize;
         data.swap(idx, i);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bullet_lib::game::formats::viriformat::chess::board::Board;
+
+    #[test]
+    fn counters_survive_conversion_chunks_per_worker() {
+        let mut board = Board::new();
+        board.set_startpos();
+        let mut game = Game::new(&board);
+        game.add_move(board.parse_uci("e2e4").unwrap(), 0);
+        let mut bytes = Vec::new();
+        game.serialise_into(&mut bytes).unwrap();
+        let games = vec![bytes.clone(), bytes];
+        let filter = PositionFilter { base: Filter::UNRESTRICTED, max_ply: 1000, min_eval: 0, max_pieces: 32,
+            piece_count_keep: [1.0; 33], target_distribution: true };
+        let (sender, _receiver) = mpsc::sync_channel(8);
+        let mut stats = vec![SamplingStats::default(); 2];
+        convert_buffer(2, &sender, &games, &filter, &mut stats);
+        convert_buffer(2, &sender, &games, &filter, &mut stats);
+        assert_eq!(stats.iter().map(|s| s.total).collect::<Vec<_>>(), vec![2, 2]);
+        assert_eq!(stats[0].counts[32], 2);
+        assert_eq!(SamplingStats::default().total, 0);
+    }
+
+    #[test]
+    fn target_acceptance_uses_all_eligible_positions_and_clamps() {
+        let mut stats = SamplingStats::default();
+        assert_eq!(stats.acceptance(32, 0.0), 0.0);
+        assert_eq!(stats.acceptance(2, 1.0), 1.0);
+        assert!((stats.acceptance(32, 0.4) - 0.3).abs() < 1e-12);
+        assert_eq!(stats.total, 3);
     }
 }
