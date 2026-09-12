@@ -43,6 +43,7 @@ from OpenBench.config import OPENBENCH_CONFIG
 from OpenBench.models import *
 from OpenBench.workloads.verify_workload import verify_workload
 
+@transaction.atomic
 def create_workload(request, workload_type):
 
     assert workload_type in [ 'TEST', 'TUNE', 'DATAGEN' ]
@@ -102,8 +103,11 @@ def create_workload(request, workload_type):
     summary  = 'CREATE P=%d TP=%d' % (workload.priority, workload.throughput)
     LogEvent.objects.create(author=username, summary=summary, log_file='', test_id=workload.id)
 
+    from OpenBench.lifecycle import test_event
+    test_event('created', workload, request.user.pk)
     if not OPENBENCH_CONFIG['use_cross_approval'] and profile.approver:
         workload.approved = True; workload.save()
+        test_event('approved', workload, request.user.pk)
 
     return OpenBench.views.redirect(request, '/index/', warning=warning)
 

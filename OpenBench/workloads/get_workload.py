@@ -37,11 +37,17 @@ from OpenBench.spsa_utils import spsa_workload_assignment_dict
 
 from django.db import transaction
 
+@transaction.atomic
 def get_workload(request, machine, candidates=None, has_engine_preference=False):
 
     # Select a workload from the possible ones, if we can
     if not (test := select_workload(request, machine, candidates, has_engine_preference)):
         return {}
+
+    test = Test.objects.select_for_update().get(pk=test.pk)
+    if test.finished or test.deleted or not test.approved:
+        return {}
+    starting = test.execution_number > 0 or not Result.objects.filter(test=test).exists()
 
     # Avoid creating duplicate Result objects
     result, created = Result.objects.get_or_create(test=test, machine=machine)
@@ -52,7 +58,11 @@ def get_workload(request, machine, candidates=None, has_engine_preference=False)
     machine.mnps = machine.dev_mnps = machine.base_mnps = 0.00
     machine.save(update_fields=['workload', 'mnps', 'dev_mnps', 'base_mnps', 'updated'])
 
-    return { 'workload' : workload_to_dictionary(test, result, machine) }
+    workload = workload_to_dictionary(test, result, machine)
+    if starting:
+        from OpenBench.lifecycle import test_event
+        test_event('started', test)
+    return { 'workload' : workload }
 
 def select_workload(request, machine, candidates=None, has_engine_preference=False):
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=OpenBench Discord notification sender
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openbench
+Group=openbench
+StateDirectory=openbench
+WorkingDirectory=/opt/openbench
+EnvironmentFile=/etc/openbench/production.env
+Environment=OPENBENCH_DEBUG=0
+Environment=OPENBENCH_DISABLE_WATCHERS=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/openbench/venv/bin/python manage.py discord_notifications
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/openbench
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

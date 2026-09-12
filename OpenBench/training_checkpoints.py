@@ -202,7 +202,9 @@ def resume_training(user, source, checkpoint_id=None):
         verify_artifact(checkpoint.archive)
         provenance = {'checkpoint_id': checkpoint.pk, 'run_id': source.pk, 'superbatch': checkpoint.superbatch, 'sha256': checkpoint.archive.sha256, 'size': checkpoint.archive.size, 'metadata': checkpoint.metadata}
         run = TrainingRun.objects.create(owner=user, engine=source.engine, name=source.name, schedule=source.schedule, snapshot={**source.snapshot, 'resume': provenance}, dataset=effective_dataset(source), parameters=source.parameters, resume_from=checkpoint, state='QUEUED')
+        record_event('training.created', run, user.pk)
         record_event('training.resumed', run, user.pk, {'source_run_id': source.pk, **provenance})
+        record_event('training.queued', run, user.pk)
         return run
 
 

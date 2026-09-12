@@ -28,7 +28,10 @@
 import OpenBench.views
 
 from OpenBench.models import *
+from django.db import transaction
+from OpenBench.lifecycle import test_event
 
+@transaction.atomic
 def modify_workload(request, id, action=None):
 
     actions = {
@@ -42,7 +45,7 @@ def modify_workload(request, id, action=None):
         return OpenBench.views.redirect(request, '/index/', error='Unknown Workload action')
 
     # Make sure that the workload exists
-    if not (workload := Test.objects.filter(id=id).first()):
+    if not (workload := Test.objects.select_for_update().filter(id=id).first()):
         return OpenBench.views.redirect(request, '/index/', error='No such Workload exists')
 
     # Must be logged in to interact with workloads
@@ -59,9 +62,13 @@ def modify_workload(request, id, action=None):
         return OpenBench.views.redirect(request, '/index/', error='You cannot approve this Workload')
 
     # Make the change; Record the change; Save the change
+    before = (workload.approved, workload.finished, workload.deleted)
     message = actions[action](request, profile, workload)
     LogEvent.objects.create(author=request.user.username, summary=action, log_file='', test_id=id)
     workload.save()
+    if before != (workload.approved, workload.finished, workload.deleted):
+        test_event({'APPROVE': 'approved', 'RESTART': 'restarted', 'STOP': 'stopped',
+                    'DELETE': 'deleted', 'RESTORE': 'restored'}[action], workload, request.user.pk)
 
     destination = '/%s/%s/' % (workload.workload_type_str(), workload.id) if action == 'MODIFY' else '/index/'
     return OpenBench.views.redirect(request, destination, status=message)
@@ -71,6 +78,8 @@ def approve_workload(request, profile, workload):
     return 'Workload was Approved!'
 
 def restart_workload(request, profile, workload):
+    if workload.finished:
+        workload.execution_number += 1
     workload.finished = False;
     return 'Workload was Restarted!'
 

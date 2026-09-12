@@ -160,7 +160,7 @@ def detail(request, pk):
         action = request.POST.get('action')
         if not worker.get('manage') or action not in ('settings', 'mode', 'stop', 'disconnect'):
             raise PermissionDenied
-        from OpenBench.lifecycle import record_event
+        from OpenBench.lifecycle import record_event, worker_mode_event
         from OpenBench.training_views import enabled
         enabled(request.user)
         with transaction.atomic():
@@ -176,6 +176,7 @@ def detail(request, pk):
                 training_scope = request.POST.get('training_scope', 'any' if capability and capability.accept_any_owner else 'own')
                 if training_scope not in ('own', 'any'):
                     return redirect(request, worker['url'], error='Choose whose training workloads this worker accepts.')
+                # Validate all settings before recording a mode transition.
                 if machine:
                     info = {**machine.info, 'machine_name': name, 'custom_name': name}
                     settings = dict(info.get('worker_settings', {}))
@@ -194,8 +195,11 @@ def detail(request, pk):
                             settings[key] = request.POST[key] == 'on'
                     info.update(settings)
                     info['worker_settings'] = settings
+                    worker_mode_event(machine, mode, request.user.pk)
                     Machine.objects.filter(pk=machine.pk).update(info=info, mode=mode)
                 if capability:
+                    if not machine:
+                        worker_mode_event(capability, mode, request.user.pk)
                     info = {**capability.info, 'custom_name': name}
                     TrainingWorker.objects.filter(pk=capability.pk).update(name=name, info=info, mode=mode, accept_any_owner=training_scope == 'any')
                 return redirect(request, worker['url'], status='Worker settings saved.')
@@ -210,10 +214,11 @@ def detail(request, pk):
                     if not expected or current != expected:
                         return redirect(request, worker['url'], error='The workload changed. Refresh and try again.')
                     if run:
-                        TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE).update(cancel_requested=True)
-                        record_event('training.cancel.requested', run, request.user.pk)
+                        if TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE, cancel_requested=False).update(cancel_requested=True):
+                            record_event('training.cancel.requested', run, request.user.pk, actor_id=request.user.pk)
                     elif machine:
                         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
+                worker_mode_event(machine or capability, mode, request.user.pk)
                 if machine:
                     Machine.objects.filter(pk=machine.pk).update(mode=mode)
                 if capability:
@@ -221,14 +226,21 @@ def detail(request, pk):
                 return redirect(request, worker['url'], status='Stop requested; worker paused.' if action == 'stop' else 'Worker mode saved. Current work will finish before the mode takes effect.')
             if not worker.get('disconnect'):
                 raise PermissionDenied
+            if machine and machine.info.get('disconnected') or not machine and not capability.enabled:
+                return redirect(request, worker['url'])
             if machine:
                 info = {**machine.info, 'disconnected': True}
                 Machine.objects.filter(pk=machine.pk).update(info=info, secret=secrets.token_hex(32), mode='paused', workload=0, mnps=0, dev_mnps=0, base_mnps=0)
             if capability:
                 TrainingWorker.objects.filter(pk=capability.pk).update(enabled=False, mode='paused')
             for run in TrainingRun.objects.filter(worker=capability, state__in=TRAINING_ACTIVE) if capability else []:
+                if run.workload_size:
+                    from OpenBench.training_workloads import expire_workload
+                    expire_workload(run, reason='Worker explicitly disconnected.', actor_id=request.user.pk)
+                    continue
                 if TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE).update(state='FAILED', error='Worker disconnected by its owner.', finished=timezone.now(), updated=timezone.now()):
-                    record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected'})
-            record_event('worker.disconnected', machine or capability, request.user.pk)
+                    run.refresh_from_db()
+                    record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected'}, actor_id=request.user.pk)
+            record_event('worker.disconnected', machine or capability, request.user.pk, actor_id=request.user.pk)
         return redirect(request, worker['url'])
     return render(request, 'worker_detail.html', {'page_title': worker['name'], 'worker': worker, 'engine_names': sorted(OPENBENCH_CONFIG['engines'])})

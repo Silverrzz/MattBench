@@ -91,8 +91,9 @@ def upload_dataset(task):
     commit = api.create_commit(repo_id=task.repo, repo_type='dataset', operations=operations, parent_commit=info.sha, commit_message='Upload MattBench datagen %d' % task.workload_id)
     revision = commit.oid
     with transaction.atomic():
-        DatasetUpload.objects.filter(pk=task.pk).update(state='COMPLETED', stage='Published', progress=100, revision=revision, updated=timezone.now())
-        record_event('datagen.uploaded', task, task.owner_id, {'repo': task.repo, 'revision': revision, 'workload_id': task.workload_id})
+        if DatasetUpload.objects.filter(pk=task.pk, state='UPLOADING').update(state='COMPLETED', stage='Published', progress=100, revision=revision, updated=timezone.now()):
+            task.refresh_from_db()
+            record_event('datagen.uploaded', task, task.owner_id, {'repo': task.repo, 'revision': revision, 'workload_id': task.workload_id})
 
 
 class TrainingTasks:
@@ -137,6 +138,7 @@ class TrainingTasks:
             changes['finished'] = now
         with transaction.atomic():
             if type(task).objects.filter(pk=task.pk, state=expected).update(**changes):
+                task.refresh_from_db()
                 record_event('training.task.' + ('retry' if state == retry else 'failed'), task, task.owner_id, {'operation': operation, 'attempt': task.task_attempts}, key='task:%s:%s:%s:%s' % (type(task).__name__, task.pk, operation, task.task_attempts))
         logger.warning('%s %s: %s', operation, task.pk, changes['error'])
         if state == retry and not isinstance(task, DatasetUpload):
@@ -147,7 +149,10 @@ class TrainingTasks:
         if not run:
             return
         if run.task_attempts >= 5:
-            TrainingRun.objects.filter(pk=run.pk, state='VALIDATING', deleted=False).update(state='FAILED', error='Input validation exceeded five attempts. Check coordinator logs before restarting.', finished=timezone.now(), updated=timezone.now())
+            with transaction.atomic():
+                if TrainingRun.objects.filter(pk=run.pk, state='VALIDATING', deleted=False).update(state='FAILED', error='Input validation exceeded five attempts. Check coordinator logs before restarting.', finished=timezone.now(), updated=timezone.now()):
+                    run.refresh_from_db()
+                    record_event('training.task.failed', run, run.owner_id)
             return
         if not TrainingRun.objects.filter(pk=run.pk, state='VALIDATING', deleted=False).update(state='PREPARING', task_attempts=F('task_attempts') + 1, updated=timezone.now()):
             return
@@ -156,6 +161,7 @@ class TrainingTasks:
             snapshot, dataset = resolve_inputs(run)
             with transaction.atomic():
                 if TrainingRun.objects.filter(pk=run.pk, state='PREPARING', cancel_requested=False).update(snapshot=snapshot, dataset=dataset, state='QUEUED', error='', updated=timezone.now()):
+                    run.refresh_from_db()
                     record_event('training.queued', run, run.owner_id, {'dataset_revision': dataset['commit'], 'bullet_commit': snapshot['bullet_commit']})
         except Exception as error:
             self.failed(run, error, 'PREPARING', 'VALIDATING', 'Input validation')
@@ -165,7 +171,10 @@ class TrainingTasks:
         if not task:
             return
         if task.task_attempts >= 5:
-            DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='FAILED', stage='Upload failed', next_attempt_at=None, error='Upload exceeded five attempts. Check coordinator logs before retrying.', updated=timezone.now())
+            with transaction.atomic():
+                if DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='FAILED', stage='Upload failed', next_attempt_at=None, error='Upload exceeded five attempts. Check coordinator logs before retrying.', updated=timezone.now()):
+                    task.refresh_from_db()
+                    record_event('training.task.failed', task, task.owner_id)
             return
         if not DatasetUpload.objects.filter(pk=task.pk, state='QUEUED').update(state='UPLOADING', task_attempts=F('task_attempts') + 1, stage='Checking archive', error='', next_attempt_at=None, progress=0, updated=timezone.now()):
             return
@@ -185,4 +194,5 @@ class TrainingTasks:
                     expire_workload(stale, cutoff=cutoff)
                     continue
                 if TrainingRun.objects.filter(pk=stale.pk, state__in=TRAINING_ACTIVE, updated__lt=cutoff).update(state='FAILED', error='Worker heartbeat lost. Training will recover automatically when the worker reconnects.', metrics={**stale.metrics, 'recovery_pending': 1}, finished=now, updated=now):
-                    record_event('training.interrupted', stale, stale.owner_id, {'latest_checkpoint_id': stale.checkpoints.values_list('pk', flat=True).first()})
+                    stale.refresh_from_db()
+                    record_event('training.interrupted', stale, stale.owner_id, {'reason': 'heartbeat_lost', 'latest_checkpoint_id': stale.checkpoints.values_list('pk', flat=True).first()})

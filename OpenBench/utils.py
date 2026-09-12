@@ -479,6 +479,11 @@ def update_test(request, machine):
 
         test.save()
 
+        if test.finished:
+            from OpenBench.lifecycle import test_event
+            outcome = 'completed' if test.test_mode in ('SPSA', 'DATAGEN') else 'passed' if test.passed else 'failed'
+            test_event(outcome, test)
+
         # Update Result object; No risk from concurrent access
         Result.objects.filter(id=result_id).update(
             games    = F('games'   ) + games,

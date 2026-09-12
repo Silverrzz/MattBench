@@ -3,6 +3,7 @@
 {% load mytags %}
 
 {% block scripts %}
+    <script src="{% static 'notifications.js' %}?{{ static_version }}" defer></script>
     <script src="{% static 'profile.js' %}?{{ static_version }}" defer></script>
 {% endblock %}
 
@@ -57,6 +58,8 @@
             </div>
         </div>
     </form>
+
+    {% include "OpenBench/Blocks/discord_preferences.html" %}
 
     <section class="form form-section" aria-labelledby="huggingface-heading">
         <h2 id="huggingface-heading">Hugging Face</h2>

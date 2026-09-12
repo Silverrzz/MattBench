@@ -1,0 +1,27 @@
+<form id="discord-notifications" class="form form-section form-stack" method="post" action="/profile/notifications/">
+    {% csrf_token %}
+    <h2>Discord notifications</h2>
+    <p>Selected summaries are posted into a shared channel{% if discord.channel_url %}: <a href="{{ discord.channel_url }}" target="_blank" rel="noopener noreferrer">{{ discord.destination_label }}</a>{% endif %}. Other channel members can read them.</p>
+    {% if not discord.enabled %}<p role="status">Delivery is currently unavailable because platform notifications are disabled. Your preferences are preserved.</p>{% endif %}
+    {{ notification_form.non_field_errors }}
+    <label class="choice">{{ notification_form.enabled }} {{ notification_form.enabled.label }}</label>
+    <div class="field">
+        <label for="{{ notification_form.discord_user_id.id_for_label }}">Optional Discord user ID</label>
+        {{ notification_form.discord_user_id }}{{ notification_form.discord_user_id.errors }}
+        <p class="field-note">In Discord, enable User Settings → Advanced → Developer Mode, then right-click your profile and choose Copy User ID. Required for Message + ping. Ownership is not verified; Discord settings determine whether a mention produces a push alert.</p>
+    </div>
+    {% for family, label, fields in notification_groups %}
+    <fieldset class="form-section" data-notification-group>
+        <legend>{{ label }}</legend>
+        <div class="form-actions" aria-label="Set all {{ label }} events">
+            <button class="button" type="button" data-notification-mode="off">All off</button>
+            <button class="button" type="button" data-notification-mode="message">All message</button>
+            <button class="button" type="button" data-notification-mode="ping">All message + ping</button>
+        </div>
+        <div class="field-grid">
+            {% for field in fields %}<div class="field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>{% endfor %}
+        </div>
+    </fieldset>
+    {% endfor %}
+    <div class="form-actions"><button class="button button-primary" type="submit">Save notifications</button></div>
+</form>

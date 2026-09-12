@@ -17,6 +17,7 @@ def run_end(run):
 def claim_workload(run, worker, token):
     # The caller holds the run and worker locks. Checkpoints are registered only
     # after both files have been committed and verified.
+    recovery_episode = run.metrics.get('notification_recovery_episode')
     checkpoint = run.checkpoints.order_by('-superbatch').first() or run.resume_from
     start = checkpoint.superbatch + 1 if checkpoint else 1
     end = min(run_end(run), start + run.workload_size - 1)
@@ -29,6 +30,11 @@ def claim_workload(run, worker, token):
     run.completed_superbatches = checkpoint.superbatch if checkpoint else 0
     run.metrics = {**run.metrics, 'workload_start': start, 'workload_end': end, 'queued_continuation': 0, 'recovery_pending': 0}
     run.save(update_fields=['continuation_checkpoint', 'completed_superbatches', 'metrics'])
+    if recovery_episode:
+        from OpenBench.lifecycle import record_event
+        record_event('training.recovered', run, run.owner_id, key='training.recovered:%s' % recovery_episode)
+        run.metrics.pop('notification_recovery_episode', None)
+        run.save(update_fields=['metrics'])
     return workload
 
 
@@ -100,12 +106,14 @@ def complete_workload(request, run, data):
         run.save(update_fields=['state', 'finished', 'updated', 'report_sequence', 'continuation_checkpoint', 'completed_superbatches', 'worker', 'claim_id', 'metrics'])
         from OpenBench.lifecycle import record_event
         record_event('training.workload.completed', run, run.owner_id, {'workload': workload.pk, 'start': workload.start, 'end': workload.end}, key='training.workload.completed:%s' % workload.pk)
+        if final:
+            record_event('training.completed', run, run.owner_id)
         from OpenBench.training_checkpoints import prune_checkpoints
         prune_checkpoints(run, checkpoint.pk)
         return {'stop': False, 'state': 'COMPLETED', 'sequence': sequence, 'continuation': not final}
 
 
-def expire_workload(run, reason='Worker heartbeat lost.', cutoff=None):
+def expire_workload(run, reason='Worker heartbeat lost.', cutoff=None, actor_id=None):
     """Fence the attempt before exposing the run for another allocation."""
     with transaction.atomic():
         run = TrainingRun.objects.select_for_update().get(pk=run.pk)
@@ -119,6 +127,7 @@ def expire_workload(run, reason='Worker heartbeat lost.', cutoff=None):
         now = timezone.now()
         cancelled = run.cancel_requested or run.deleted
         checkpoint = run.checkpoints.order_by('-superbatch').first() or run.resume_from
+        episode = '%s:%s' % (run.pk, run.claim_id)
         workloads.update(state='CANCELLED' if cancelled else 'EXPIRED', finished=now)
         run.state = 'CANCELLED' if cancelled else 'QUEUED'
         run.worker = None
@@ -129,7 +138,13 @@ def expire_workload(run, reason='Worker heartbeat lost.', cutoff=None):
         run.updated = now
         run.error = reason
         run.metrics = {**run.metrics, 'recovery_pending': 0, 'queued_continuation': int(not cancelled), 'superbatch': run.completed_superbatches, 'progress': 100 * run.completed_superbatches / run_end(run)}
+        if not cancelled:
+            run.metrics['notification_recovery_episode'] = episode
         run.save(update_fields=['state', 'worker', 'claim_id', 'continuation_checkpoint', 'completed_superbatches', 'finished', 'updated', 'error', 'metrics'])
+        from OpenBench.lifecycle import record_event
+        reason_code = 'worker_disconnected' if actor_id else 'heartbeat_lost' if reason == 'Worker heartbeat lost.' else 'worker_restarted'
+        record_event('training.cancelled' if cancelled else 'training.interrupted', run, run.owner_id,
+                     {'reason': reason_code}, key='training.expired:%s' % episode, actor_id=actor_id)
 
 
 def refine_candidates(training, tests, info):

@@ -131,7 +131,7 @@ def register(request):
                 machine.save(update_fields=['mode'])
             worker.machine = machine
             worker.save(update_fields=['machine'])
-        record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', '')})
+        record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', ''), 'registered': created})
     response = JsonResponse({'worker': str(worker.pk), 'token': secret, 'protocol': info['protocol'], 'capabilities': ['training-workloads', 'typed-assignments'] if info['protocol'] == 4 else []})
     response['Cache-Control'] = 'no-store'
     return response
@@ -275,6 +275,8 @@ def recover(request, pk):
             run.finished = run.updated = timezone.now()
             run.error = 'Worker restarted. Local files were preserved.'
             run.save(update_fields=['state', 'finished', 'updated', 'error'])
+            record_event('training.cancelled' if run.cancel_requested else 'training.interrupted', run, run.owner_id,
+                         {'reason': 'worker_restarted', 'recovery_pending': not run.cancel_requested})
         if not run.cancel_requested:
             if run.snapshot['settings'].get('resume_supported') and run.checkpoints.exists():
                 resumed = resume_training(run.owner, run)
@@ -285,11 +287,14 @@ def recover(request, pk):
                         raise ValidationError('The starting checkpoint was removed. Create a new train from an available checkpoint.')
                     verify_artifact(run.resume_from.archive)
                 resumed = TrainingRun.objects.create(owner=run.owner, engine=run.engine, name=run.name, schedule=run.schedule, snapshot=run.snapshot, dataset=effective_dataset(run), parameters=run.parameters, resume_from=run.resume_from, state='QUEUED')
+                record_event('training.created', resumed, resumed.owner_id)
+                record_event('training.queued', resumed, resumed.owner_id)
             resumed.snapshot = {**resumed.snapshot, 'automatic_recovery': True, 'recovery_source': run.pk}
             resumed.save(update_fields=['snapshot'])
             run.recovery_run = resumed
             run.save(update_fields=['recovery_run'])
-        record_event('training.recovered', run, run.owner_id, {'recovery_run': run.recovery_run_id})
+        if run.recovery_run_id:
+            record_event('training.recovered', run, run.owner_id, {'recovery_run': run.recovery_run_id})
         return JsonResponse({'recovery_run': run.recovery_run_id})
 
 
@@ -408,7 +413,11 @@ def report(request, pk):
                 workload.state, workload.finished = state, now
             workload.save(update_fields=['report_sequence', 'state', 'finished'])
         if changed and state != run.state:
-            record_event('training.' + state.lower(), run, run.owner_id, {'from': run.state, 'to': state, 'worker_id': str(request.training_worker.pk)}, key='training.state:%d:%d' % (run.pk, sequence))
+            previous_state = run.state
+            run.refresh_from_db()
+            record_event('training.' + state.lower(), run, run.owner_id, {'from': previous_state, 'to': state, 'worker_id': str(request.training_worker.pk)}, key='training.state:%d:%d' % (run.pk, sequence))
+            if state == 'FAILED' and clean_metrics.get('recovery_pending') and not run.workload_size:
+                record_event('training.interrupted', run, run.owner_id)
     if changed:
         TrainingWorker.objects.filter(pk=request.training_worker.pk).update(updated=now)
         if log:

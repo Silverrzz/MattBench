@@ -71,7 +71,7 @@ class OpenBenchConfig(django.apps.AppConfig):
             'sync_books', 'shell', 'createsuperuser', 'dumpdata', 'loaddata',
             'clearsessions', 'showmigrations', 'sqlsequencereset', 'test',
             'training_key', 'seed_demo_data', 'import_bullet_schedules',
-            'training_tasks', 'training_storage', 'training_backup', 'training_restore',
+            'discord_notifications', 'training_tasks', 'training_storage', 'training_backup', 'training_restore',
         )
         if any(command in sys.argv for command in maintenance_commands):
             return

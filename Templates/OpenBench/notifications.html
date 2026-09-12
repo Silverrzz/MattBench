@@ -1,0 +1,37 @@
+{% extends "OpenBench/base.html" %}
+{% block content %}
+<nav class="tabs" aria-label="Manage sections">
+    {% for key, label in navigation %}<a href="/manage/{{ key }}/" {% if key == 'notifications' %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+</nav>
+<div class="content-width">
+    <h2>Discord notifications</h2>
+    <p>Create a webhook in the desired Discord text channel and paste its URL here. The webhook determines the shared destination. No bot or OAuth application is required. Forum and thread routing are not supported.</p>
+    {% if errors %}<ul class="errorlist" role="alert">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+    <form method="post" class="form form-stack form-medium">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <label class="choice">{{ form.enabled }} {{ form.enabled.label }}</label>
+        {% for field in form %}{% if field.name != 'enabled' %}
+        <div class="field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>
+        {% endif %}{% endfor %}
+        {% if discord.webhook_ciphertext %}<p>Saved webhook: •••••••• (encrypted)</p>{% endif %}
+        <button class="button button-primary" name="action" value="save">Save and validate replacement</button>
+    </form>
+    {% if discord.channel_url %}
+    <p>Verified destination: <a href="{{ discord.channel_url }}" target="_blank" rel="noopener noreferrer">{{ discord.destination_label }}</a><br>Server {{ discord.guild_id }} · Channel {{ discord.channel_id }}</p>
+    <form method="post" class="form-actions">
+        {% csrf_token %}
+        <button class="button" name="action" value="validate">Validate saved webhook</button>
+        <button class="button" name="action" value="test">Queue test message without mentions</button>
+        <button class="button" name="action" value="remove">Remove configuration</button>
+    </form>
+    {% endif %}
+    <section class="form-section">
+        <h2>Sender status</h2>
+        <p>{% if sender_healthy %}Sender healthy{% else %}No recent sender heartbeat{% endif %} · {{ pending_count }} pending deliveries</p>
+        <p>Last successful delivery: {{ discord.last_success|default:"None yet" }}<br>Last sender heartbeat: {{ discord.sender_seen|default:"None yet" }}</p>
+        <h3>Recent delivery failures</h3>
+        <ul>{% for row in failures %}<li>{{ row.created }} · {{ row.event_key }} · {{ row.status }} · Attempt {{ row.attempts }}: {{ row.last_error }}</li>{% empty %}<li>No recent failures.</li>{% endfor %}</ul>
+    </section>
+</div>
+{% endblock %}

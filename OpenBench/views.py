@@ -239,7 +239,8 @@ def profile(request):
         return redirect(request, '/index/')
 
     if request.method == 'GET':
-        return render(request, 'profile.html')
+        from OpenBench.notification_views import profile_context
+        return render(request, 'profile.html', profile_context(request.user))
 
     changes_message = ''
     if request.user.email != request.POST['email']:
@@ -770,7 +771,11 @@ def client_worker_info(request):
         machine.info['supported'].append(engine)
 
     # Finish up
+    newly_registered = machine.pk is None
     machine.save()
+    if newly_registered:
+        from OpenBench.lifecycle import record_event
+        record_event('worker.registered', machine, user.pk)
 
     # Pass back the Machine Id, and Secret Token for this session
     return JsonResponse({ 'machine_id' : machine.id, 'secret' : machine.secret })
@@ -809,11 +814,14 @@ def client_get_workload(request, machine):
 
 @csrf_exempt
 @verify_worker
+@transaction.atomic
 def client_bench_error(request, machine):
 
     # Find and stop the test with the bad bench
-    test = Test.objects.get(id=int(request.POST['test_id']))
+    test = Test.objects.select_for_update().get(id=int(request.POST['test_id']))
     test.finished = True; test.save()
+    from OpenBench.lifecycle import test_event
+    test_event('execution_error', test)
 
     # Log the error into the Events table
     LogEvent.objects.create(
@@ -840,11 +848,18 @@ def client_submit_nps(request, machine):
 
 @csrf_exempt
 @verify_worker
+@transaction.atomic
 def client_submit_error(request, machine):
 
     # Report an error when working on test. This could be one three kinds.
     # 1. Error building the engine. Does not compile, for whatever reason.
     # 2. Error during actual gameplay. Timeloss, Disconnect, Crash, etc.
+
+    # Individual game errors remain in the existing error log only.
+    if request.POST['error'].endswith(' build failed'):
+        from OpenBench.lifecycle import test_event
+        test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
+        test_event('execution_error', test)
 
     # Log the Error into the Events table
     event = LogEvent.objects.create(

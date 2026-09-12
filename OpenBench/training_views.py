@@ -304,7 +304,9 @@ def new_training(request):
                     completed_superbatches=checkpoint.superbatch if checkpoint else 0,
                     dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
                 )
-            record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name, 'checkpoint_id': checkpoint.pk if checkpoint else None})
+            record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name, 'checkpoint_id': checkpoint.pk if checkpoint else None}, actor_id=request.user.pk)
+            if checkpoint:
+                record_event('training.resumed', run, request.user.pk, {'source_run_id': checkpoint.run_id}, actor_id=request.user.pk)
             return redirect(request, '/training/%d/' % run.pk)
         except ValidationError as error:
             form.add_error(None, error)
@@ -327,6 +329,7 @@ def training_detail(request, pk):
             raise PermissionDenied
         if run.snapshot.get('demo'):
             return redirect(request, '/training/%d/' % pk, error='Demo runs cannot be dispatched or modified.')
+        run = TrainingRun.objects.select_for_update().get(pk=pk)
         action = request.POST.get('action')
         if action == 'priority':
             try:
@@ -337,19 +340,26 @@ def training_detail(request, pk):
             return redirect(request, '/training/%d/' % pk)
         if action in ('delete', 'restore'):
             deleted = action == 'delete'
-            TrainingRun.objects.filter(pk=pk).update(deleted=deleted, updated=timezone.now())
-            record_event('training.deleted' if deleted else 'training.restored', run, request.user.pk)
+            if run.deleted != deleted:
+                run.deleted = deleted
+                run.updated = timezone.now()
+                run.save(update_fields=['deleted', 'updated'])
+                import uuid
+                record_event('training.deleted' if deleted else 'training.restored', run, request.user.pk,
+                             key='training.visibility:%s:%s' % (run.pk, uuid.uuid4()), actor_id=request.user.pk)
             return redirect(request, '/training/', status='Workload was Deleted!' if deleted else 'Workload was Restored!')
         if run.deleted:
             return redirect(request, '/training/%d/' % pk, error='Restore this workload before modifying it.')
         if request.POST.get('action') == 'cancel':
             now = timezone.now()
             cancelled = TrainingRun.objects.filter(pk=pk, state__in=('VALIDATING', 'PREPARING', 'QUEUED')).update(state='CANCELLED', finished=now, updated=now, cancel_requested=True)
-            TrainingRun.objects.filter(pk=pk, state__in=TRAINING_ACTIVE).update(cancel_requested=True)
-            TrainingRun.objects.filter(pk=pk, state='FAILED', recovery_run=None, metrics__recovery_pending=1).update(cancel_requested=True, error='Automatic recovery cancelled.')
-            record_event('training.cancel.requested', run, request.user.pk)
-            if cancelled:
-                record_event('training.cancelled', run, request.user.pk)
+            requested = TrainingRun.objects.filter(pk=pk, state__in=TRAINING_ACTIVE, cancel_requested=False).update(cancel_requested=True)
+            recovery_cancelled = TrainingRun.objects.filter(pk=pk, state='FAILED', recovery_run=None, metrics__recovery_pending=1, cancel_requested=False).update(cancel_requested=True, error='Automatic recovery cancelled.')
+            if cancelled or requested or recovery_cancelled:
+                run.refresh_from_db()
+                record_event('training.cancel.requested', run, request.user.pk, actor_id=request.user.pk)
+            if cancelled or recovery_cancelled:
+                record_event('training.cancelled', run, request.user.pk, actor_id=request.user.pk)
         elif request.POST.get('action') == 'resume':
             return redirect(request, '/training/new/', error='Select a checkpoint and settings in New train to create a separate task.')
         elif request.POST.get('action') == 'finish-checkpoints':
@@ -527,15 +537,22 @@ def workers(request):
     from OpenBench.views import redirect
     enabled(request.user)
     if request.method == 'POST':
-        worker = get_object_or_404(TrainingWorker, pk=request.POST.get('worker'), owner=request.user)
+        worker = get_object_or_404(TrainingWorker.objects.select_for_update(), pk=request.POST.get('worker'), owner=request.user)
+        if not worker.enabled:
+            return redirect(request, '/workers/')
         if worker.info.get('demo'):
             raise PermissionDenied
         TrainingWorker.objects.filter(pk=worker.pk).update(enabled=False)
         for run in TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE):
+            if run.workload_size:
+                from OpenBench.training_workloads import expire_workload
+                expire_workload(run, reason='Worker explicitly disconnected.', actor_id=request.user.pk)
+                continue
             changed = TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE).update(state='FAILED', error='Worker disconnected by its owner.', finished=timezone.now(), updated=timezone.now())
             if changed:
-                record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected', 'latest_checkpoint_id': run.checkpoints.values_list('pk', flat=True).first()})
-        record_event('worker.disconnected', worker, request.user.pk)
+                run.refresh_from_db()
+                record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected', 'latest_checkpoint_id': run.checkpoints.values_list('pk', flat=True).first()}, actor_id=request.user.pk)
+        record_event('worker.disconnected', worker.machine or worker, request.user.pk, actor_id=request.user.pk)
     return redirect(request, '/workers/')
 
 

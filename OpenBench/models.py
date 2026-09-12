@@ -98,6 +98,8 @@ class Result(Model):
 
 class Test(Model):
 
+    execution_number = IntegerField(default=0)
+
     class ScaleMethod(TextChoices):
         DEV  = 'DEV' , 'DEV'
         BASE = 'BASE', 'BASE'
@@ -422,3 +424,4 @@ from OpenBench.training_models import TrainingCheckpoint, LifecycleEvent
 from OpenBench.training_models import TrainingDataset
 from OpenBench.training_models import TrainingServiceLease
 from OpenBench.training_models import TrainingWorkload
+from OpenBench.notification_models import DiscordConfiguration, NotificationPreferences, NotificationDelivery

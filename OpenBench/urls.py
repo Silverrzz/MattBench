@@ -24,9 +24,11 @@ import OpenBench.presets
 from OpenBench import training_api, training_views, dataset_library
 from OpenBench.schedule_builder_views import schedule_builder
 from OpenBench import training_checkpoints, training_datasets
-from OpenBench import worker_views
+from OpenBench import worker_views, notification_views
 
 urlpatterns = [
+    django.urls.path('profile/notifications/', notification_views.preferences),
+    django.urls.path('manage/notifications/', notification_views.configuration),
 
     django.urls.path('profile/huggingface/', training_views.connection),
     django.urls.path('training/', training_views.training_index),

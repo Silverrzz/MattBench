@@ -14,7 +14,7 @@ from OpenBench.views import render
 
 SECTIONS = {'engines': ('Engines', EngineConfig), 'books': ('Books', OpeningBook),
             'variants': ('Variants', Variant), 'runners': ('Runners', Runner),
-            'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', None)}
+            'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', None), 'notifications': ('Notifications', None)}
 RELATIONS = {Variant: ('runner_release', RunnerRelease),
              RunnerRelease: ('runner', Runner)}
 
@@ -30,7 +30,7 @@ def entry_version(instance):
 @require_http_methods(['GET', 'POST'])
 def manage(request, section='engines', identifier=None):
 
-    if section not in SECTIONS:
+    if section not in SECTIONS or section == 'notifications':
         raise Http404
     if not request.user.is_active or not request.user.is_superuser:
         raise PermissionDenied
