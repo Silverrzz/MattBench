@@ -69,15 +69,22 @@
                 <dialog id="builder-bucket-dialog" class="builder-bucket-dialog" aria-labelledby="builder-bucket-title">
                     <div class="builder-group-heading"><h2 id="builder-bucket-title">King bucket assignments</h2><button type="button" class="button" id="builder-close-buckets">Done</button></div>
                     <div class="builder-group">
-                        <div class="builder-board-toolbar"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select><button class="button" id="builder-flip-layout" type="button">Flip vertically</button><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
+                        <div class="builder-board-toolbar">
+                            <div class="builder-board-selection"><label for="builder-paint-bucket">Assign bucket</label><select id="builder-paint-bucket"></select></div>
+                            <div class="builder-button-row"><button class="button" id="builder-flip-layout" type="button">Flip vertically</button><button class="button" id="builder-undo-layout" type="button" disabled>Undo</button></div>
+                        </div>
                         <p class="builder-note">Left-click or wheel up increments; right-click or wheel down decrements. Hold and drag to paint the source square’s value.</p>
                         <p class="builder-note" id="builder-board-convention"></p>
-                        <details><summary>Import bucket layout</summary>
-                            <label class="field">Import order<select id="builder-layout-order"><option value="a1">a1=0</option><option value="a8">a8=0</option></select></label>
-                            <label class="field">64-square interpretation<select id="builder-layout-mirroring"><option value="mirrored">Mirrored</option><option value="unmirrored">Unmirrored</option></select></label>
-                            <label class="field">32 values (files a–d) or 64 values<textarea id="builder-layout-import" rows="5"></textarea></label>
-                            <button type="button" class="button" id="builder-import-layout">Import layout</button>
-                            <p id="builder-import-layout-status" role="status"></p>
+                        <details class="builder-import"><summary>Import bucket layout</summary>
+                            <div class="builder-import-body">
+                                <div class="field-grid">
+                                    <label class="field">Import order<select id="builder-layout-order"><option value="a1">a1=0</option><option value="a8">a8=0</option></select></label>
+                                    <label class="field">64-square interpretation<select id="builder-layout-mirroring"><option value="mirrored">Mirrored</option><option value="unmirrored">Unmirrored</option></select></label>
+                                </div>
+                                <label class="field">32 values (files a–d) or 64 values<textarea id="builder-layout-import" rows="5"></textarea></label>
+                                <div class="builder-button-row"><button type="button" class="button" id="builder-import-layout">Import layout</button></div>
+                                <p class="builder-note" id="builder-import-layout-status" role="status"></p>
+                            </div>
                         </details>
                         <div class="builder-board" id="builder-board" role="group" aria-label="King square input buckets"></div>
                         <p class="builder-note" id="builder-layout-status" aria-live="polite"></p>
@@ -94,71 +101,92 @@
                     </div>
                     <div class="builder-group">
                         <h3>Learning rate stages</h3>
+                        <p class="builder-note">Choose Sequence inside a stage to combine curves, such as 50 SB of cosine followed by linear decay. Sequence segments keep the same dataset; adding an outer stage creates a dataset boundary.</p>
                         <label class="field">LR convention<select name="lr_convention"><option value="native">Bullet native</option><option value="legacy">Legacy inclusive interpolation</option></select></label>
                         <label class="field">Enter stages as<select id="builder-lr-mode"><option value="lengths">Lengths</option><option value="boundaries">Boundaries</option></select></label>
                         <p class="builder-note" id="builder-lr-convention"></p>
                         <div id="builder-lr-stages"></div>
-                        <p id="builder-lr-allocation" role="status"></p>
-                        <button type="button" class="button" id="builder-add-lr-stage">Add stage</button>
+                        <div class="builder-stage-actions">
+                            <p class="builder-allocation" id="builder-lr-allocation" role="status"></p>
+                            <button type="button" class="button" id="builder-add-lr-stage">Add stage</button>
+                        </div>
                     </div>
                     <div class="builder-group">
                         <h3>WDL blend stages</h3>
                         <label class="field">Enter stages as<select id="builder-wdl-mode"><option value="lengths">Lengths</option><option value="boundaries">Boundaries</option></select></label>
                         <p class="builder-note" id="builder-wdl-convention"></p>
                         <div id="builder-wdl-stages"></div>
-                        <p id="builder-wdl-allocation" role="status"></p>
-                        <button type="button" class="button" id="builder-add-wdl-stage">Add stage</button>
+                        <div class="builder-stage-actions">
+                            <p class="builder-allocation" id="builder-wdl-allocation" role="status"></p>
+                            <button type="button" class="button" id="builder-add-wdl-stage">Add stage</button>
+                        </div>
                     </div>
                     <details class="training-options"><summary>Position filtering &amp; sampling</summary>
-                        <div class="field"><label for="builder-random-skip">Random FEN skip probability</label><input id="builder-random-skip" name="random_fen_skip" type="number" min="0" max="1" step="any" required></div>
-                        <p class="builder-note">0 skips none; 1 skips everything and cannot train. Sampling happens while loading positions; source datasets are unchanged.</p>
-                        <h3>Position and move filters</h3><label class="choice"><input type="checkbox" name="position_filtering">Filter positions</label>
-                        <div id="builder-position-filters" class="field-grid">
-                            <label class="field">Minimum ply<input name="min_ply" type="number" min="0" max="100000" required></label>
-                            <label class="field">Maximum ply<input name="max_ply" type="number" min="0" max="100000" required></label>
-                            <label class="field">Minimum absolute eval (cp)<input name="min_eval" type="number" min="0" max="32768" required></label>
-                            <label class="field">Maximum absolute eval (cp)<input name="max_eval" type="number" min="0" max="32768" required></label>
-                            <label class="field">Minimum pieces<input name="min_pieces" type="number" min="2" max="32" required></label>
-                            <label class="field">Maximum pieces<input name="max_pieces" type="number" min="2" max="32" required></label>
-                            <label class="choice"><input type="checkbox" name="filter_check">Skip positions in check</label>
-                            <label class="choice"><input type="checkbox" name="filter_tactical">Skip tactical moves</label>
-                            <label class="choice"><input type="checkbox" name="filter_castling">Skip castling moves</label>
+                        <div class="builder-filter-group">
+                            <div class="field"><label for="builder-random-skip">Random FEN skip probability</label><input id="builder-random-skip" name="random_fen_skip" type="number" min="0" max="1" step="any" required><p class="builder-note">0 skips none; 1 skips everything and cannot train. Sampling happens while loading positions; source datasets are unchanged.</p></div>
                         </div>
-                        <p class="builder-note">Ranges are inclusive. Ply counts half-moves from the game position; piece counts include kings. Tactical filtering skips recorded captures and promotions.</p>
-                        <h3>Result consistency</h3>
-                        <label class="choice"><input type="checkbox" name="result_filtering">Filter evaluations inconsistent with the result</label>
-                        <label class="field">Maximum eval incorrectness (cp)<input name="max_eval_incorrectness" type="number" min="0" max="4294967295" required></label>
-                        <h3>WDL-model sampling</h3>
-                        <label class="choice"><input type="checkbox" name="wdl_filtered">Enable WDL sampling</label>
-                        <p class="builder-note">Selects positions independently of the WDL loss blend. Coefficients are ordered from cubic to constant.</p>
-                        <div id="builder-wdl-filter-options">
-                            <div class="field-grid" id="builder-wdl-coefficients"></div>
-                            <div class="field-grid">
-<label class="field">Material minimum<input name="material_min" type="number" min="0" max="4294967295" required></label>
-<label class="field">Material maximum<input name="material_max" type="number" min="0" max="4294967295" required></label>
-<label class="field">Material normalization (mom_target)<input name="mom_target" type="number" min="1" max="4294967295" required></label>
-<label class="field">Heuristic scale<input name="wdl_heuristic_scale" type="number" min="0.000000001" step="any" required></label>
+                        <div class="builder-filter-group">
+                            <h3>Position and move filters</h3><label class="choice"><input type="checkbox" name="position_filtering">Filter positions</label>
+                            <div id="builder-position-filters" class="field-grid">
+                                <label class="field">Minimum ply<input name="min_ply" type="number" min="0" max="100000" required></label>
+                                <label class="field">Maximum ply<input name="max_ply" type="number" min="0" max="100000" required></label>
+                                <label class="field">Minimum absolute eval (cp)<input name="min_eval" type="number" min="0" max="32768" required></label>
+                                <label class="field">Maximum absolute eval (cp)<input name="max_eval" type="number" min="0" max="32768" required></label>
+                                <label class="field">Minimum pieces<input name="min_pieces" type="number" min="2" max="32" required></label>
+                                <label class="field">Maximum pieces<input name="max_pieces" type="number" min="2" max="32" required></label>
+                                <label class="choice"><input type="checkbox" name="filter_check">Skip positions in check</label>
+                                <label class="choice"><input type="checkbox" name="filter_tactical">Skip tactical moves</label>
+                                <label class="choice"><input type="checkbox" name="filter_castling">Skip castling moves</label>
+                            </div>
+                            <p class="builder-note">Ranges are inclusive. Ply counts half-moves from the game position; piece counts include kings. Tactical filtering skips recorded captures and promotions.</p>
+                        </div>
+                        <div class="builder-filter-group">
+                            <h3>Result consistency</h3>
+                            <label class="choice"><input type="checkbox" name="result_filtering">Filter evaluations inconsistent with the result</label>
+                            <label class="field">Maximum eval incorrectness (cp)<input name="max_eval_incorrectness" type="number" min="0" max="4294967295" required></label>
+                        </div>
+                        <div class="builder-filter-group">
+                            <h3>WDL-model sampling</h3>
+                            <label class="choice"><input type="checkbox" name="wdl_filtered">Enable WDL sampling</label>
+                            <p class="builder-note">Selects positions independently of the WDL loss blend. Coefficients are ordered from cubic to constant.</p>
+                            <div id="builder-wdl-filter-options">
+                                <div class="field-grid" id="builder-wdl-coefficients"></div>
+                                <div class="field-grid">
+                                    <label class="field">Material minimum<input name="material_min" type="number" min="0" max="4294967295" required></label>
+                                    <label class="field">Material maximum<input name="material_max" type="number" min="0" max="4294967295" required></label>
+                                    <label class="field">Material normalization (mom_target)<input name="mom_target" type="number" min="1" max="4294967295" required></label>
+                                    <label class="field">Heuristic scale<input name="wdl_heuristic_scale" type="number" min="0.000000001" step="any" required></label>
+                                </div>
                             </div>
                         </div>
-                        <h3>Piece-count sampling</h3>
-                        <label class="choice"><input type="checkbox" name="piece_count_sampling">Enable piece-count sampling</label>
-                        <label class="field">Sampling mode<select name="piece_count_mode"><option value="fixed">Fixed keep probabilities</option><option value="target">Target distribution</option></select></label>
-                        <p class="builder-note">Fixed: 1 keeps all, 0 drops all. Target: proportions sum to one; acceptance is clamp(0.5 × target / observed frequency, 0, 1). Counts include kings and use indices 0–32. Other filters run first.</p>
-                        <details><summary>Import piece-count values</summary>
-                            <label class="field">33 values<textarea id="builder-piece-import" rows="4"></textarea></label>
-                            <button type="button" class="button" id="builder-import-pieces">Import values</button><button type="button" class="button" id="builder-undo-pieces" disabled>Undo import</button>
-                            <p id="builder-import-pieces-status" role="status"></p>
-                        </details>
-                        <div id="builder-piece-count-keep" class="builder-piece-counts"></div>
+                        <div class="builder-filter-group">
+                            <h3>Piece-count sampling</h3>
+                            <label class="choice"><input type="checkbox" name="piece_count_sampling">Enable piece-count sampling</label>
+                            <label class="field">Sampling mode<select name="piece_count_mode"><option value="fixed">Fixed keep probabilities</option><option value="target">Target distribution</option></select></label>
+                            <p class="builder-note">Fixed: 1 keeps all, 0 drops all. Target: proportions sum to one; acceptance is clamp(0.5 × target / observed frequency, 0, 1). Counts include kings and use indices 0–32. Other filters run first.</p>
+                            <details class="builder-import"><summary>Import piece-count values</summary>
+                                <div class="builder-import-body">
+                                    <label class="field">33 values<textarea id="builder-piece-import" rows="4"></textarea></label>
+                                    <div class="builder-button-row">
+                                        <button type="button" class="button" id="builder-import-pieces">Import values</button>
+                                        <button type="button" class="button" id="builder-undo-pieces" disabled>Undo import</button>
+                                    </div>
+                                    <p class="builder-note" id="builder-import-pieces-status" role="status"></p>
+                                </div>
+                            </details>
+                            <div id="builder-piece-count-keep" class="builder-piece-counts"></div>
+                        </div>
                     </details>
                     <details class="training-options"><summary>Dataset processing on worker</summary>
-                        <label class="choice"><input type="checkbox" name="shuffle">Shuffle games</label>
-                        <label class="choice"><input type="checkbox" name="interleave">Interleave already-shuffled files</label>
-                        <p class="builder-note">Shuffling mixes games across the whole dataset. Interleaving also mixes files already marked shuffled. Both use the random seed below; completed preparation is reused.</p>
-                        <div class="field-grid">
-                            <div class="field"><label for="builder-shuffle-memory">Shuffle chunk memory (MiB)</label><input id="builder-shuffle-memory" name="shuffle_memory_mb" type="number" min="16" max="65536" required></div>
-                            <div class="field"><label for="builder-interleave-fan-in">Files per merge</label><input id="builder-interleave-fan-in" name="interleave_fan_in" type="number" min="2" max="256" required></div>
-                            <div class="field"><label for="builder-dataset-shard">Output shard size (MiB)</label><input id="builder-dataset-shard" name="dataset_shard_mb" type="number" min="4" max="16384" required></div>
+                        <div class="builder-options-body">
+                            <label class="choice"><input type="checkbox" name="shuffle">Shuffle games</label>
+                            <label class="choice"><input type="checkbox" name="interleave">Interleave already-shuffled files</label>
+                            <p class="builder-note">Shuffling mixes games across the whole dataset. Interleaving also mixes files already marked shuffled. Both use the random seed below; completed preparation is reused.</p>
+                            <div class="field-grid">
+                                <div class="field"><label for="builder-shuffle-memory">Shuffle chunk memory (MiB)</label><input id="builder-shuffle-memory" name="shuffle_memory_mb" type="number" min="16" max="65536" required></div>
+                                <div class="field"><label for="builder-interleave-fan-in">Files per merge</label><input id="builder-interleave-fan-in" name="interleave_fan_in" type="number" min="2" max="256" required></div>
+                                <div class="field"><label for="builder-dataset-shard">Output shard size (MiB)</label><input id="builder-dataset-shard" name="dataset_shard_mb" type="number" min="4" max="16384" required></div>
+                            </div>
                         </div>
                     </details>
                     <details class="training-options"><summary>Loader &amp; initialization</summary><div class="field-grid">

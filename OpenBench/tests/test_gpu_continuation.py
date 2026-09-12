@@ -1,4 +1,4 @@
-"""Opt-in integration test using the compiled fixture from Scripts/verify_builder_rust.py.
+"""Opt-in integration test using the compiled fixture from Scripts/prepare_builder_gpu.py.
 
 Set MATTBENCH_TEST_GPU_BINARY, MATTBENCH_TEST_GPU_SPEC and MATTBENCH_TEST_GPU_DATA.
 The test database and temporary artifact storage are isolated from deployed services.
@@ -18,7 +18,7 @@ import zstandard
 from django.test import TransactionTestCase
 from OpenBench import training_api
 from OpenBench.models import TrainingRun, TrainingCheckpoint
-from OpenBench.schedule_builder import generate_schedule
+from OpenBench.schedule_builder import dataset_stages, generate_schedule
 from OpenBench.training_checkpoints import checkpoint_ready
 from OpenBench.tests.test_training_workloads import WorkloadFixture
 
@@ -28,6 +28,7 @@ class GPUContinuationTests(WorkloadFixture, TransactionTestCase):
     def test_train_yield_resume_finish(self):
         spec = json.loads(Path(os.environ['MATTBENCH_TEST_GPU_SPEC']).read_text())
         _, files, config = generate_schedule(spec)
+        self.assertEqual(dataset_stages(spec), [{'start': 1, 'end': 3}, {'start': 4, 'end': 5}])
         config.update(network_min_bytes=1, checkpoint_keep_last=1)
         self.snapshot = {'files': files, 'settings': config, 'bullet_commit': config['bullet_ref']}
         self.run.snapshot = self.snapshot; self.run.save()

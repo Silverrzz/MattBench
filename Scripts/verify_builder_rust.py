@@ -24,6 +24,9 @@ base.update(layers=[32, 16, 16], pairwise_activation=True, pairwise_layers=[1, 2
 kinds = ['constant', 'linear', 'cosine', 'exponential', 'step', 'drop']
 base['lr_stages'] = [{'start': 1 + i * 100, 'end': (i + 1) * 100 if i < 5 else 800, 'kind': kind, 'initial': 0.01, 'final': 0.001, 'gamma': 0.5, 'interval': 20, 'warmup_batches': 4} for i, kind in enumerate(kinds)]
 variants = [('matrix', base), ('legacy', {**copy.deepcopy(base), 'lr_convention': 'legacy', 'lr_stages': copy.deepcopy(DEFAULT_SPEC['lr_stages'])}), ('unmirrored', {**copy.deepcopy(DEFAULT_SPEC), 'mirrored': False, 'input_buckets': 2, 'king_layout': [0] * 32 + [1] * 32, 'psqt_inputs': False, 'half_move_clock': True})]
+sequence = copy.deepcopy(base)
+sequence['lr_stages'] = [{'start': 1, 'end': 800, 'kind': 'sequence', 'segments': sequence['lr_stages']}]
+variants.append(('nested_sequence', sequence))
 text = manifest.read_text()
 for name, spec in variants:
     name = 'verify_' + name

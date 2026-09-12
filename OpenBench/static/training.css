@@ -31,6 +31,9 @@
 .training-run-settings { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .training-run-settings > summary { padding: 20px 0; }
 .training-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; padding: 4px 0 24px; }
+.training-settings-grid > .field { gap: 10px; }
+.training-settings-grid .field-note { margin: 0; line-height: 1.65; }
+.training-settings-note, .training-checkpoint-settings { grid-column: 1 / -1; }
 .training-environment { grid-column: 1 / -1; }
 .training-preset-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 #content .training-preset-controls > input, #content .training-preset-controls > select { flex: 1 1 180px; width: auto; min-width: 0; }
@@ -84,6 +87,14 @@ body:has(.training-dialog[open]) { overflow: hidden; }
 .training-options[open] > summary { margin-bottom: 18px; }
 .training-options textarea { margin-top: 10px; }
 .training-detail { min-width: 0; }
+#content .training-detail .anchor-container { gap: 12px; }
+.training-detail .anchor-container + .anchor-container { margin-top: 8px; }
+.training-priority-form { display: grid; grid-template-columns: minmax(100px, 1fr) auto; align-items: end; gap: 12px 16px; margin: 24px 0; padding: 20px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.training-priority-form .field-note { grid-column: 1 / -1; margin: 0; line-height: 1.6; }
+@media (max-width: 480px) {
+    .training-priority-form { grid-template-columns: minmax(0, 1fr); }
+    .training-priority-form .button { justify-self: start; }
+}
 progress::-webkit-progress-bar { background: var(--surface-raised); border-radius: 3px; }
 progress::-webkit-progress-value { background: var(--brand); border-radius: 3px; }
 .training-code, .training-log { border: 1px solid var(--line); background: var(--sidebar); padding: 16px; font: 12px/1.7 var(--mono); overflow: auto; max-width: 100%; white-space: pre; tab-size: 4; }

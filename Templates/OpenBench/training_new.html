@@ -26,9 +26,10 @@
         <details class="training-run-settings" id="training-run-settings" {% if form.checkpoint_retention.errors or form.checkpoint_keep_last.errors or form.delete_uploaded_checkpoints.errors or form.environment.errors %}open{% endif %}>
             <summary>Run settings <span id="training-settings-summary"></span></summary>
             <div class="training-settings-grid">
-            <div class="field">{{ form.priority.label_tag }}{{ form.priority }}{{ form.priority.errors }}</div><div class="field">{{ form.workload_size.label_tag }}{{ form.workload_size }}{{ form.workload_size.errors }}<p class="field-note">Compatible builder runs default to 50 SB. Each workload restores optimizer state and global schedule progress; dataset reading, shuffling and adaptive sampling restart.</p></div>
-            <p>Any compatible worker accepting your account's workloads can pick up this run.</p>
-            <div class="field"><label for="train-checkpoint_retention">Checkpoints</label>
+            <div class="field">{{ form.priority.label_tag }}{{ form.priority }}{{ form.priority.errors }}</div>
+            <div class="field">{{ form.workload_size.label_tag }}{{ form.workload_size }}{{ form.workload_size.errors }}<p class="field-note">Compatible builder runs default to 50 SB. Use 0 for uninterrupted training.</p></div>
+            <p class="field-note training-settings-note">Any compatible worker accepting your account's workloads can pick up this run. Optimizer state and schedule progress carry over between workloads; dataset reading, shuffling and adaptive sampling restart.</p>
+            <div class="field training-checkpoint-settings"><label for="train-checkpoint_retention">Checkpoints</label>
                 <div class="training-retention">
                     {{ form.checkpoint_retention }}
                     <div id="training-checkpoint-count"><label class="sr-only" for="train-checkpoint_keep_last">Number to keep</label>{{ form.checkpoint_keep_last }}<span>checkpoints</span></div>

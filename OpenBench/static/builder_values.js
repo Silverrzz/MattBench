@@ -52,17 +52,31 @@
         return {allocated, valid: difference === 0, message: 'Allocated ' + allocated + ' / ' + total + ' SB' + (difference ? ' · ' + Math.abs(difference) + ' SB ' + (difference > 0 ? 'excess' : 'shortfall') : '')};
     };
     const splitStage = stages => {
-        const result = stages.map(stage => ({...stage}));
+        const result = structuredClone(stages);
         const last = result.at(-1);
         if (!last || last.end <= last.start) throw Error('The last stage needs at least two superbatches to split.');
         const end = last.end;
         last.end = Math.floor((last.start + end) / 2);
-        result.push({...last, start: last.end + 1, end, kind: 'constant', initial: last.final, final: last.final});
+        if (last.kind === 'sequence') {
+            const cut = last.end - last.start + 1;
+            const slice = (start, end) => last.segments.filter(s => s.start <= end && s.end >= start)
+                .map(s => ({...s, start: Math.max(s.start, start) - start + 1, end: Math.min(s.end, end) - start + 1}));
+            const first = slice(1, cut), second = slice(cut + 1, end - last.start + 1);
+            last.segments = first;
+            result.push({...last, start: last.end + 1, end, segments: second});
+        } else result.push({...last, start: last.end + 1, end, kind: 'constant', initial: last.final, final: last.final});
         return result;
     };
     const removeStage = (stages, index) => {
         if (stages.length < 2) throw Error('Keep at least one stage.');
-        const result = stages.map(stage => ({...stage}));
+        const result = structuredClone(stages);
+        const duration = result[index].end - result[index].start + 1;
+        const neighbor = result[index ? index - 1 : 1];
+        if (neighbor.kind === 'sequence') {
+            const segments = neighbor.segments.map(s => ({...s, length: s.end - s.start + 1}));
+            segments[index ? segments.length - 1 : 0].length += duration;
+            neighbor.segments = ranges(segments, 'lengths');
+        }
         if (index) result[index - 1].end = result[index].end;
         else result[1].start = 1;
         result.splice(index, 1);

@@ -154,43 +154,56 @@ def validate_spec(value):
     if spec['save_every'] > spec['superbatches']:
         raise ValidationError('Save frequency cannot exceed the total superbatches.')
     for channel in ('lr', 'wdl'):
-        stages = spec[channel + '_stages']
-        if not isinstance(stages, list) or not stages:
-            raise ValidationError('Add at least one %s stage.' % channel.upper())
-        if isinstance(stages[-1], dict) and type(stages[-1].get('end')) is int and stages[-1]['end'] > spec['superbatches']:
-            raise ValidationError('%s stages allocate %d SB; %d SB excess over the run total.' % (channel.upper(), stages[-1]['end'], stages[-1]['end'] - spec['superbatches']))
-        next_start = 1
-        for index, stage in enumerate(stages, 1):
-            label = '%s stage %d' % (channel.upper(), index)
-            required = {'start', 'end', 'kind', 'initial', 'final'}
-            optional = {'gamma', 'interval', 'warmup_batches'} if channel == 'lr' else set()
-            if not isinstance(stage, dict) or not required <= set(stage) or set(stage) - required - optional:
-                raise ValidationError('%s is incomplete.' % label)
-            if type(stage['start']) is not int or type(stage['end']) is not int or stage['start'] != next_start or not stage['start'] <= stage['end'] <= spec['superbatches']:
-                raise ValidationError('%s must start at SB %d and end within the schedule, without gaps or overlaps.' % (label, next_start))
-            if stage['kind'] not in (('constant', 'linear', 'cosine', 'exponential', 'step', 'drop') if channel == 'lr' else ('constant', 'linear', 'cosine')):
-                raise ValidationError('%s has an invalid curve.' % label)
-            if channel == 'lr':
+        _validate_stages(spec[channel + '_stages'], spec['superbatches'], channel.upper(), spec,
+                         allow_sequence=channel == 'lr', is_lr=channel == 'lr')
+    return spec
+
+
+def _validate_stages(stages, total, label, spec, *, allow_sequence=False, is_lr=True):
+    if not isinstance(stages, list) or not stages:
+        raise ValidationError('%s needs at least one stage or sequence segment.' % label)
+    if is_lr and not allow_sequence and len(stages) > 64:
+        raise ValidationError('%s supports at most 64 segments.' % label)
+    next_start = 1
+    for index, stage in enumerate(stages, 1):
+        item = '%s %s %d' % (label, 'stage' if label in ('LR', 'WDL') else 'segment', index)
+        sequence = isinstance(stage, dict) and stage.get('kind') == 'sequence'
+        required = {'start', 'end', 'kind'} | ({'segments'} if sequence else {'initial', 'final'})
+        optional = {'gamma', 'interval', 'warmup_batches'} if is_lr and not sequence else set()
+        if not isinstance(stage, dict) or not required <= set(stage) or set(stage) - required - optional:
+            raise ValidationError('%s is incomplete.' % item)
+        if type(stage['start']) is not int or type(stage['end']) is not int or stage['start'] != next_start or stage['end'] < stage['start']:
+            raise ValidationError('%s must start at SB %d and have a positive inclusive range, without gaps or overlaps.' % (item, next_start))
+        if sequence:
+            if not allow_sequence or spec['lr_convention'] != 'native':
+                raise ValidationError('Sequence is available within native LR stages; its segments must use individual curves.')
+            _validate_stages(stage['segments'], stage['end'] - stage['start'] + 1, item + ' sequence', spec)
+        else:
+            kinds = ('constant', 'linear', 'cosine', 'exponential', 'step', 'drop') if is_lr else ('constant', 'linear', 'cosine')
+            if stage['kind'] not in kinds:
+                raise ValidationError('%s has an invalid curve.' % item)
+            if is_lr:
                 if spec['lr_convention'] == 'legacy' and stage['kind'] not in ('constant', 'linear', 'cosine'):
                     raise ValidationError('Legacy interpolation supports constant, linear and cosine curves.')
                 for key, default in (('gamma', 0.5), ('interval', 1), ('warmup_batches', 0)):
                     stage.setdefault(key, default)
                 if type(stage['gamma']) not in (float, int) or not math.isfinite(stage['gamma']) or not 0 <= stage['gamma'] <= 1:
-                    raise ValidationError('%s gamma must be between zero and one.' % label)
+                    raise ValidationError('%s gamma must be between zero and one.' % item)
                 if type(stage['interval']) is not int or not 1 <= stage['interval'] <= 1000000:
-                    raise ValidationError('%s interval must be a positive integer.' % label)
+                    raise ValidationError('%s interval must be a positive integer.' % item)
                 if type(stage['warmup_batches']) is not int or not 0 <= stage['warmup_batches'] <= spec['batches_per_superbatch']:
-                    raise ValidationError('%s warmup must fit within its first superbatch.' % label)
+                    raise ValidationError('%s warmup must fit within its first superbatch.' % item)
             for key in ('initial', 'final'):
                 if type(stage[key]) not in (int, float) or not math.isfinite(stage[key]) or not 0 <= stage[key] <= 1:
-                    raise ValidationError('%s values must be between 0 and 1.' % label)
+                    raise ValidationError('%s values must be between 0 and 1.' % item)
                 stage[key] = float(stage[key])
-            if channel == 'lr' and stage['kind'] == 'exponential' and min(stage['initial'], stage['final']) <= 0:
-                raise ValidationError('%s exponential rates must be positive.' % label)
-            next_start = stage['end'] + 1
-        if next_start != spec['superbatches'] + 1:
-            raise ValidationError('%s stages allocate %d SB; %d SB short of the run total.' % (channel.upper(), next_start - 1, spec['superbatches'] - next_start + 1))
-    return spec
+            if is_lr and stage['kind'] == 'exponential' and min(stage['initial'], stage['final']) <= 0:
+                raise ValidationError('%s exponential rates must be positive.' % item)
+        next_start = stage['end'] + 1
+    allocated = next_start - 1
+    if allocated != total:
+        raise ValidationError('%s allocates %d / %d SB; %d SB %s.' %
+                              (label, allocated, total, abs(allocated - total), 'excess' if allocated > total else 'shortfall'))
 
 
 @lru_cache(maxsize=1)
@@ -415,8 +428,10 @@ def schedule_dataset_stages(schedule):
 def lr_scheduler(spec):
     def scheduler(stage):
         duration = stage['end'] - stage['start'] + 1
-        initial, final = repr(float(stage['initial'])), repr(float(stage['final']))
         kind = stage['kind']
+        if kind == 'sequence':
+            return sequence(stage['segments'])
+        initial, final = repr(float(stage['initial'])), repr(float(stage['final']))
         if spec['lr_convention'] == 'legacy':
             expression = 'LegacyLR { initial: %s, final_value: %s, duration: %d, kind: %d }' % (initial, final, duration, ('constant', 'linear', 'cosine').index(kind))
         elif kind == 'constant':
@@ -428,8 +443,9 @@ def lr_scheduler(spec):
         if stage['warmup_batches']:
             expression = 'lr::Warmup { inner: %s, warmup_batches: %d }' % (expression, stage['warmup_batches'])
         return expression
-    stages = spec['lr_stages']
-    expression = scheduler(stages[-1])
-    for stage in reversed(stages[:-1]):
-        expression = 'lr::Sequence { first: %s, second: %s, first_scheduler_final_superbatch: %d }' % (scheduler(stage), expression, stage['end'] - stage['start'] + 1)
-    return expression
+    def sequence(stages):
+        expression = scheduler(stages[-1])
+        for stage in reversed(stages[:-1]):
+            expression = 'lr::Sequence { first: %s, second: %s, first_scheduler_final_superbatch: %d }' % (scheduler(stage), expression, stage['end'] - stage['start'] + 1)
+        return expression
+    return sequence(spec['lr_stages'])
