@@ -65,6 +65,24 @@ def windows_build_environment(environment):
     return configured
 
 
+def cuda_build_environment(environment):
+    configured = dict(environment)
+    explicit = configured.get('CUDA_PATH') or configured.get('CUDA_HOME')
+    roots = [Path(explicit)] if explicit else []
+    if not explicit:
+        compiler = shutil.which('nvcc', path=configured.get('PATH', ''))
+        if compiler:
+            roots.append(Path(compiler).resolve().parent.parent)
+        if os.name != 'nt':
+            roots.extend([Path('/usr/local/cuda'), Path('/opt/cuda')])
+    for root in roots:
+        if root.is_dir() and (root / 'include' / 'cuda.h').is_file() and any((root / path).is_dir() for path in ('lib64', 'lib/x64', 'lib')):
+            configured['CUDA_PATH'] = str(root.resolve())
+            configured.setdefault('CUDA_HOME', configured['CUDA_PATH'])
+            return configured
+    raise RuntimeError('CUDA toolkit was not found. Set CUDA_PATH to the toolkit directory containing include/cuda.h and its libraries, or install the CUDA development toolkit before restarting the worker.')
+
+
 def dependency_versions():
     pending = ['requests', 'psutil', 'huggingface_hub', 'hf-xet', 'zstandard']
     packages = {}

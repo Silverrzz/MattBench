@@ -99,4 +99,4 @@ def merge_loss_history(history, samples, timestamp):
         if key not in seen:
             history.append({'time': timestamp, **sample})
             seen.add(key)
-    return history[-600:]
+    return history

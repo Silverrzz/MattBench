@@ -189,7 +189,7 @@ def get_active_tests():
     t = Test.objects.select_related('dev', 'base').filter(approved=True)
     t = t.exclude(finished=True)
     t = t.exclude(deleted=True)
-    return t.order_by('-priority', '-creation', '-pk')
+    return t.order_by('-priority', '-currentllr', '-creation', '-pk')
 
 def get_completed_tests():
     t = Test.objects.select_related('dev', 'base').filter(finished=True)

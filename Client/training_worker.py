@@ -31,13 +31,13 @@ try:
     from .training_checkpoints import CheckpointUploader, download_checkpoint
     from .training_data import prepare_and_publish
     from .training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from .training_runtime import identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
+    from .training_runtime import cuda_build_environment, identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 except ImportError:
     from training_gpu import detect_gpu
     from training_checkpoints import CheckpointUploader, download_checkpoint
     from training_data import prepare_and_publish
     from training_tools import build_dataset_tools, PAWNOCCHIO_REPO, PAWNOCCHIO_REF, COMBINER_REPO, COMBINER_REF
-    from training_runtime import identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
+    from training_runtime import cuda_build_environment, identity, isolated_command, native_command, remove_container, rocm_environment_variable, runtime_info, stop_previous, worker_lock, windows_build_environment, write_json
 
 
 class Stopped(Exception):
@@ -662,6 +662,10 @@ def execute(connection, job, root, pawnocchio):
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.signal(signum, interrupt)
         environment = child_environment(directory, job)
+        if job['snapshot']['settings']['backend'] == 'cuda' and not job['worker_info'].get('execution_image'):
+            environment.update({key: value for key, value in job['snapshot'].get('environment', {}).items() if key in ('CUDA_PATH', 'CUDA_HOME')})
+            environment = cuda_build_environment(environment)
+            reporter.write('Using CUDA toolkit: %s\n' % environment['CUDA_PATH'])
         if environment.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'):
             reporter.write('Using Microsoft linker: %s\n' % environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'])
         source_dataset = job['dataset']

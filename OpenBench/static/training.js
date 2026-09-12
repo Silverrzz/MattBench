@@ -508,7 +508,7 @@
         const padding = (high - low || Math.abs(low) || 1) * 0.15;
         const minimum = low - padding;
         const maximum = high + padding;
-        const first = lossPoints[0].step;
+        const first = 1;
         const last = lossPoints[lossPoints.length - 1].step;
         const x = step => first === last ? (left + right) / 2 : left + (right - left) * (step - first) / (last - first);
         const y = loss => top + (bottom - top) * (maximum - loss) / (maximum - minimum);
@@ -533,7 +533,7 @@
         }
         const points = lossPoints.map(point => `${x(point.step)},${y(point.loss)}`).join(' ');
         if (lossPoints.length > 1) {
-            content.append(element('polygon', {points: `${x(first)},${bottom} ${points} ${x(last)},${bottom}`, fill: 'var(--brand)', class: 'history-chart-area'}));
+            content.append(element('polygon', {points: `${x(lossPoints[0].step)},${bottom} ${points} ${x(last)},${bottom}`, fill: 'var(--brand)', class: 'history-chart-area'}));
             content.append(element('polyline', {points, stroke: 'var(--brand)', class: 'history-chart-path'}));
         }
         const end = lossPoints[lossPoints.length - 1];
