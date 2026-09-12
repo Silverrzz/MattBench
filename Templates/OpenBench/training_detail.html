@@ -16,8 +16,8 @@
                 <tr><td class="td-label">Priority</td><td>{{ run.priority }}</td></tr>
                 <tr><td class="td-label">Workloads</td><td>{% if run.workload_size %}{{ run.workload_size }} SB · {{ run.completed_superbatches }} SB committed{% if run.metrics.workload_start %} · SB {{ run.metrics.workload_start }}–{{ run.metrics.workload_end }}{% endif %}{% if run.state == "QUEUED" and run.completed_superbatches %} · Continuation queued{% endif %}{% else %}Uninterrupted{% endif %}</td></tr>
                 <tr><td class="td-label">Creation</td><td class="timestamp">{{ run.created|date:'U' }}</td></tr>
-                <tr><td class="td-label">Started</td><td>{{ run.started|date:'j M Y, H:i'|default:'—' }}</td></tr>
-                <tr><td class="td-label">Finished</td><td>{{ run.finished|date:'j M Y, H:i'|default:'—' }}</td></tr>
+                <tr><td class="td-label">Started</td><td class="timestamp">{{ run.started|date:'U'|default:'—' }}</td></tr>
+                <tr><td class="td-label">Finished</td><td class="timestamp">{{ run.finished|date:'U'|default:'—' }}</td></tr>
                 <tr><td class="td-label">Schedule</td><td>{% if run.schedule_id %}<a href="/training/schedules/{{ run.schedule_id }}/">{{ run.snapshot.name }}</a>{% else %}{{ run.snapshot.name }}{% endif %} · v{{ run.snapshot.version }}</td></tr>
                 <tr><td class="td-label">Bullet source</td><td><a href="{{ run.snapshot.settings.bullet_repo }}">{{ run.snapshot.settings.bullet_repo }}</a></td></tr>
                 <tr><td class="td-label">Bullet SHA</td><td>{{ run.snapshot.bullet_commit|default:'—' }}</td></tr>

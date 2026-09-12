@@ -6,3 +6,4 @@ scipy==1.17.1
 cryptography==50.0.1
 huggingface_hub==1.31.0
 hf-xet==1.6.0
+zstandard==0.25.0
