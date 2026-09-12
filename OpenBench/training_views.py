@@ -141,7 +141,6 @@ def schedules(request, schedule_id=None, create=False):
     return render(request, 'training_schedules.html', {
         'page_title': selected.name if selected else 'New schedule', 'training_tab': 'schedules', 'schedules': rows, 'selected': selected,
         'schedule_data': payload, 'engines': EngineConfig.objects.filter(enabled=True).order_by('name'),
-        'builder_available': selected and 'mattbench-builder.json' in selected.files,
     })
 
 

@@ -127,7 +127,9 @@
         const dense = [...layers.slice(1).map((size, index) => layerLabel(size, index + 1)), '(' + (heads.join(' + ') || 'no outputs') + ')'].join(' -> ');
         const skip = field('skip_connection').checked ? ' · skip L2 -> L3' : '';
         field('pairwise_activation').setCustomValidity(pairwiseLayers.some(layer => !Number.isInteger(layers[layer - 1]) || layers[layer - 1] % 2) ? 'Each selected pairwise layer must exist and have an even number of neurons.' : '');
-        byId('architecture').textContent = '(' + inputs + ' -> ' + layerLabel(layers[0] ?? '?', 0) + ')x2 -> (' + dense + ')' + ' · ' + field('activation').value.toUpperCase() + skip;
+        const featureSize = layers[0] ?? '?';
+        const featurePairwise = pairwiseLayers.includes(1) ? pairwiseLabel + '=(' + (Number.isInteger(featureSize) ? featureSize / 2 : '?') + ')x2' : '';
+        byId('architecture').textContent = '(' + inputs + ' -> ' + featureSize + ')x2' + featurePairwise + ' -> (' + dense + ')' + ' · ' + field('activation').value.toUpperCase() + skip;
     };
     const syncSkipConnection = () => {
         const pairwiseLayers = selectedPairwiseLayers();

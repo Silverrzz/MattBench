@@ -38,7 +38,7 @@ def upload_dataset(task):
     from huggingface_hub import HfApi, CommitOperationAdd
     from OpenBench.dataset_manifest import MANIFEST_PATH, resolve_dataset
     from huggingface_hub.errors import RepositoryNotFoundError
-    from OpenBench.dataset_upload_metadata import analyse_archive, upload_metadata
+    from OpenBench.dataset_upload_metadata import upload_metadata
     api = HfApi(token=hf_token(task.owner_id))
     source = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % task.workload_id)
     size = source.stat().st_size
@@ -55,10 +55,6 @@ def upload_dataset(task):
                 last = timezone.now()
                 DatasetUpload.objects.filter(pk=task.pk).update(stage='Checking archive', progress=100 * read / max(1, size), updated=last)
     sha256 = digest.hexdigest()
-    DatasetUpload.objects.filter(pk=task.pk).update(stage='Analysing PGN archive', progress=0, updated=timezone.now())
-    def analysis_progress(progress):
-        DatasetUpload.objects.filter(pk=task.pk).update(progress=progress, updated=timezone.now())
-    statistics = analyse_archive(source, analysis_progress)
     if source.stat().st_size != size:
         raise ValidationError('The PGN archive changed while reading it. Wait for all datagen workers to finish.')
     DatasetUpload.objects.filter(pk=task.pk).update(sha256=sha256, stage='Connecting to Hugging Face', progress=0, updated=timezone.now())
@@ -87,7 +83,7 @@ def upload_dataset(task):
         else:
             manifest = {'version': 1, 'files': []}
     entry = {'path': task.filename, 'size': size, 'sha256': sha256, 'format': 'pgn', 'shuffled': False}
-    manifest, reports = upload_metadata(manifest, entry, statistics, task.repo, info.sha, task.workload_id)
+    manifest, reports = upload_metadata(manifest, entry)
     DatasetUpload.objects.filter(pk=task.pk).update(stage='Uploading archive and dataset metadata', progress=0, updated=timezone.now())
     for path, content in reports.items():
         operations.append(CommitOperationAdd(path_in_repo=path, path_or_fileobj=content.encode('utf-8')))

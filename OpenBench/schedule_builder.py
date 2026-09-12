@@ -20,7 +20,7 @@ DEFAULT_SPEC = {
     'score_outputs': True, 'score_buckets': 8, 'wdl_outputs': False, 'wdl_buckets': 1,
     'uncertainty_outputs': False, 'uncertainty_buckets': 1,
     'half_move_clock': False, 'merged_king_planes': False, 'skip_connection': False, 'pairwise_activation': False,
-    'pairwise_layers': [2], 'pairwise_left_activation': 'crelu', 'pairwise_right_activation': 'crelu',
+    'pairwise_layers': [1], 'pairwise_left_activation': 'crelu', 'pairwise_right_activation': 'crelu',
     'random_fen_skip': 0.0, 'position_filtering': True,
     'min_ply': 16, 'max_ply': 100000, 'min_eval': 0, 'max_eval': 31338,
     'min_pieces': 4, 'max_pieces': 32, 'filter_tactical': True, 'filter_check': True, 'filter_castling': False,
@@ -38,7 +38,7 @@ DEFAULT_SPEC = {
 def validate_spec(value):
     if isinstance(value, dict):
         value = {'psqt_inputs': True, **value}
-        value = {'pairwise_layers': [1] if value.get('pairwise_activation') else [2],
+        value = {'pairwise_layers': [1],
                  'pairwise_left_activation': 'crelu', 'pairwise_right_activation': 'crelu', **value}
         value = {**{key: DEFAULT_SPEC[key] for key in ('random_fen_skip', 'position_filtering', 'min_ply', 'max_ply', 'min_eval', 'max_eval', 'min_pieces', 'max_pieces', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling', 'piece_count_keep')}, **value}
         if 'output_buckets' in value:
