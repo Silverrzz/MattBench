@@ -190,17 +190,4 @@ def remaining_steps(dataset, config):
 
 
 def required_disk_bytes(dataset, config):
-    total = 0
-    seen = set()
-    for stage in dataset.get('stages') or [dataset]:
-        indices = stage.get('file_indices', list(range(len(dataset['files']))))
-        key = tuple(indices)
-        if key in seen:
-            continue
-        seen.add(key)
-        source = {**stage, 'files': [dataset['files'][index] for index in indices]}
-        steps = remaining_steps(source, config)
-        size = sum(file['size'] for file in source['files'])
-        factor = config.get('dataset_expansion_factor', 8) * 4 if 'convert' in steps or 'extract' in steps else 4 if 'shuffle' in steps or 'interleave' in steps else 1
-        total += size * factor
-    return total
+    return 5 * sum(file['size'] for file in dataset['files'])
