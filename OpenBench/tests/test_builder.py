@@ -83,3 +83,53 @@ class BuilderTests(SimpleTestCase):
         self.assertEqual(source.count('lr::Sequence {'), 5)
         self.assertIn('lr_schedule.clone().boxed()', source)
         self.assertIn('lr_schedule.lr(step.batch(), superbatch)', source)
+
+    def test_sequence_within_stage_preserves_dataset_ranges_and_reload(self):
+        stages = [
+            {'start': 1, 'end': 100, 'kind': 'constant', 'initial': 0.01, 'final': 0.01},
+            {'start': 101, 'end': 800, 'kind': 'sequence', 'segments': [
+                {'start': 1, 'end': 50, 'kind': 'cosine', 'initial': 0.01, 'final': 0.001, 'warmup_batches': 4},
+                {'start': 51, 'end': 700, 'kind': 'linear', 'initial': 0.001, 'final': 0.0001},
+            ]},
+        ]
+        spec, files, settings = generate_schedule(self.spec(lr_stages=stages))
+        self.assertEqual(dataset_stages(spec), [{'start': 1, 'end': 100}, {'start': 101, 'end': 800}])
+        self.assertEqual(files[SOURCE].count('lr::Sequence {'), 2)
+        self.assertIn('first_scheduler_final_superbatch: 50', files[SOURCE])
+        self.assertIn('first_scheduler_final_superbatch: 100', files[SOURCE])
+        self.assertIn('final_superbatch: 650', files[SOURCE])
+        restored, current = builder_state(SimpleNamespace(files=files, settings=settings))
+        self.assertTrue(current)
+        self.assertEqual(restored, spec)
+        _, boundaries, _ = generate_schedule({**spec, 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'}})
+        self.assertEqual(files[SOURCE], boundaries[SOURCE])
+        # WDL boundaries still create dataset intervals, independently of LR segments.
+        spec['wdl_stages'] = [
+            {'start': 1, 'end': 200, 'kind': 'constant', 'initial': 0, 'final': 0},
+            {'start': 201, 'end': 800, 'kind': 'constant', 'initial': 1, 'final': 1},
+        ]
+        self.assertEqual(dataset_stages(validate_spec(spec)), [
+            {'start': 1, 'end': 100}, {'start': 101, 'end': 200}, {'start': 201, 'end': 800},
+        ])
+
+    def test_sequence_validation_never_repairs_segment_ranges(self):
+        segment = {'start': 1, 'end': 800, 'kind': 'linear', 'initial': 0.01, 'final': 0.001}
+        sequence = {'start': 1, 'end': 800, 'kind': 'sequence', 'segments': [segment]}
+        for update in ({'end': 799}, {'end': 801}, {'start': 2}, {'start': 1.0}, {'end': 0},
+                       {'initial': float('nan')}, {'warmup_batches': 6105}, {'kind': 'exponential', 'final': 0}):
+            with self.subTest(update=update), self.assertRaises(ValidationError):
+                validate_spec(self.spec(lr_stages=[{**sequence, 'segments': [{**segment, **update}]}]))
+        for segments in ([], [sequence], [segment, segment], [None], 'invalid'):
+            with self.subTest(segments=segments), self.assertRaises(ValidationError):
+                validate_spec(self.spec(lr_stages=[{**sequence, 'segments': segments}]))
+        for update in ({'lr_convention': 'legacy'}, {'wdl_stages': [sequence]}):
+            with self.subTest(update=update), self.assertRaises(ValidationError):
+                validate_spec(self.spec(lr_stages=[sequence], **update))
+        ones = [{**segment, 'start': i, 'end': i} for i in range(1, 65)]
+        ones[-1]['end'] = 800
+        validate_spec(self.spec(lr_stages=[{**sequence, 'segments': ones}]))
+        ones[-1]['end'] = 64
+        ones.append({**segment, 'start': 65})
+        with self.assertRaisesMessage(ValidationError, 'at most 64'):
+            validate_spec(self.spec(lr_stages=[{**sequence, 'segments': ones}]))
+        self.assertEqual(segment['end'], 800)

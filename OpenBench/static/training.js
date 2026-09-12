@@ -438,12 +438,13 @@
             document.getElementById('training-checkpoint-count').hidden = !keep;
             updateSettingsSummary();
         }
-        const worker = document.getElementById('train-worker');
+        const priority = document.getElementById('train-priority');
         function updateSettingsSummary() {
-            document.getElementById('training-settings-summary').textContent = (worker.value ? worker.selectedOptions[0].textContent : 'Automatic worker') + ' · ' + (retention.value === 'all' ? 'Keep all checkpoints' : 'Keep latest ' + (keepLast.value || '…'));
+            const workload = Number(workloadSize.value) > 0 ? workloadSize.value + ' SB per workload' : 'Uninterrupted';
+            document.getElementById('training-settings-summary').textContent = 'Priority ' + (priority.value || '0') + ' · ' + workload + ' · ' + (retention.value === 'all' ? 'Keep all checkpoints' : 'Keep latest ' + (keepLast.value || '…'));
         }
-        worker.addEventListener('change', updateSettingsSummary);
-        keepLast.addEventListener('input', updateSettingsSummary);
+        for (const input of [priority, workloadSize, keepLast]) input.addEventListener('input', updateSettingsSummary);
+        for (const select of [engine, schedule, checkpoint]) select.addEventListener('change', updateSettingsSummary);
         form.addEventListener('invalid', event => {
             const details = event.target.closest('details');
             if (details) details.open = true;

@@ -51,6 +51,48 @@ fn legacy_single_and_endpoints_are_preserved() {
     }
 }
 '''.replace('EXPR',lr_scheduler(spec))
+# Place all six curves inside a single dataset stage, following an initial stage.
+# Include the requested 50-SB cosine segment and a one-SB segment.
+nested = copy.deepcopy(spec)
+segments = copy.deepcopy(stages)
+start = 1
+for segment, duration in zip(segments, [1, 2, 50, 4, 5, 6]):
+ segment.update(start=start, end=start + duration - 1)
+ start += duration
+nested.update(superbatches=73, lr_stages=[
+ dict(start=1, end=3, kind='constant', initial=0.02, final=0.02),
+ dict(start=4, end=71, kind='sequence', segments=segments),
+ dict(start=72, end=73, kind='linear', initial=0.001, final=0.0001),
+], wdl_stages=[dict(start=1, end=73, kind='constant', initial=0.5, final=0.5)])
+nested = validate_spec(nested)
+s += '''
+#[test]
+fn nested_sequence_keeps_local_indices_across_outer_stages_and_resumes() {
+    let generated = EXPR;
+    let native: Vec<Box<dyn Fn(bullet_trainer::run::Step) -> f32>> = vec![
+        lr::ConstantLR { value: 0.02 }.boxed(),
+        lr::Warmup { inner: lr::ConstantLR { value: 0.01 }, warmup_batches: 2 }.boxed(),
+        lr::Warmup { inner: lr::LinearDecayLR { initial_lr: 0.01, final_lr: 0.001, final_superbatch: 2 }, warmup_batches: 2 }.boxed(),
+        lr::Warmup { inner: lr::CosineDecayLR { initial_lr: 0.01, final_lr: 0.001, final_superbatch: 50 }, warmup_batches: 2 }.boxed(),
+        lr::Warmup { inner: lr::ExponentialDecayLR { initial_lr: 0.01, final_lr: 0.001, final_superbatch: 4 }, warmup_batches: 2 }.boxed(),
+        lr::Warmup { inner: lr::StepLR { start: 0.01, gamma: 0.5, step: 2 }, warmup_batches: 2 }.boxed(),
+        lr::Warmup { inner: lr::DropLR { start: 0.01, gamma: 0.5, drop: 2 }, warmup_batches: 2 }.boxed(),
+        lr::LinearDecayLR { initial_lr: 0.001, final_lr: 0.0001, final_superbatch: 2 }.boxed(),
+    ];
+    let ranges = [(1,3), (4,4), (5,6), (7,56), (57,60), (61,65), (66,71), (72,73)];
+    for resume_start in 1..=73 {
+        for sb in resume_start..=73 {
+            let index = ranges.iter().position(|&(start,end)| start <= sb && sb <= end).unwrap();
+            for batch in 0..4 {
+                let local = bullet_trainer::run::Step::new(sb - ranges[index].0 + 1, batch, ranges[index].1 - ranges[index].0 + 1, 4);
+                assert_eq!(generated.lr(batch, sb), native[index](local), "SB {sb}, batch {batch}");
+                let global = bullet_trainer::run::Step::new(sb, batch, 73, 4);
+                assert_eq!(generated.clone().boxed()(global), generated.lr(batch, sb));
+            }
+        }
+    }
+}
+'''.replace('EXPR', lr_scheduler(nested))
 (root/'examples/verify_lr.rs').write_text(s)
 p=root/'crates/bullet_lib/Cargo.toml';s=p.read_text()
 if 'name = "verify_lr"' not in s:p.write_text(s+'\n[[example]]\nname = "verify_lr"\npath = "../../examples/verify_lr.rs"\n')

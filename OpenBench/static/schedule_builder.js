@@ -420,113 +420,187 @@
     const totalSuperbatches = () => field('superbatches').valueAsNumber;
     const stageEditors = {};
     for (const channel of ['lr', 'wdl']) {
-        const container = byId(channel + '-stages');
         const modeInput = byId(channel + '-mode');
         let mode = data.spec.presentation[channel];
+        let sync;
         modeInput.value = mode;
-        byId(channel + '-convention').textContent = channel === 'lr' ? (data.spec.lr_convention === 'legacy' ? 'Legacy inclusive interpolation: initial value at the first SB, final at the last.' : 'Bullet native stage-local indexing. Warmup uses batches in the first SB of each stage.') : 'WDL blend is independent of position sampling.';
-        const readDraft = () => [...container.children].map(row => Object.fromEntries([...row.querySelectorAll('[data-stage-field]')].map(input => [input.dataset.stageField, input.tagName === 'SELECT' ? input.value : input.valueAsNumber])));
-        const read = () => V.ranges(readDraft(), mode);
-        const sync = () => {
-            const rows = [...container.children];
-            rows.forEach(row => {
-                const get = name => row.querySelector('[data-stage-field="' + name + '"]');
-                const kind = get('kind').value;
-                for (const key of ['final', 'gamma', 'interval', 'warmup_batches']) {
-                    const input = get(key);
-                    if (!input) continue;
-                    const shown = key === 'final' ? ['linear', 'cosine', 'exponential'].includes(kind) : key === 'warmup_batches' || ['step', 'drop'].includes(kind);
-                    input.parentElement.hidden = !shown;
-                    input.disabled = !shown;
-                }
-            });
-            try {
-                const stages = read();
-                stages.forEach((stage, index) => { rows[index].querySelector('output').textContent = 'SB ' + stage.start + '–' + stage.end; });
-                const status = V.allocation(stages, totalSuperbatches());
-                message(byId(channel + '-allocation'), status.message, !status.valid);
-                modeInput.setCustomValidity(status.valid ? '' : status.message);
-                byId('add-' + channel + '-stage').disabled = stages.at(-1).end <= stages.at(-1).start;
-                return stages;
-            } catch (error) {
-                rows.forEach(row => { row.querySelector('output').textContent = 'Invalid range'; });
-                message(byId(channel + '-allocation'), error.message, true);
-                modeInput.setCustomValidity(error.message);
-                byId('add-' + channel + '-stage').disabled = true;
-                return null;
-            }
+        const conventionText = () => {
+            byId(channel + '-convention').textContent = channel === 'lr' ? (data.spec.lr_convention === 'legacy' ? 'Legacy inclusive interpolation: initial value at the first SB, final at the last. Choose Bullet native to use Sequence.' : 'Bullet native indexing within each curve. Warmup uses batches in the first SB of each curve.') : 'WDL blend is independent of position sampling.';
         };
-        const render = stages => {
-            container.replaceChildren();
-            stages.forEach((stage, index) => {
-                const row = document.createElement('fieldset');
-                row.className = 'builder-stage';
-                const legend = document.createElement('legend');
-                legend.textContent = 'Stage ' + (index + 1);
-                const grid = document.createElement('div');
-                grid.className = 'field-grid';
-                const fields = [[mode === 'lengths' ? 'length' : 'end', mode === 'lengths' ? 'Length (SB)' : 'Inclusive end (SB)'], ['kind', 'Scheduler'], ['initial', 'Initial value'], ['final', 'Final value']];
-                if (channel === 'lr') fields.push(['gamma', 'Gamma'], ['interval', 'Step / drop after (SB)'], ['warmup_batches', 'Warmup (batches; 0 disables)']);
-                for (const [key, title] of fields) {
-                    const label = document.createElement('label');
-                    label.className = 'field';
-                    label.append(document.createTextNode(title));
-                    const input = document.createElement(key === 'kind' ? 'select' : 'input');
-                    input.dataset.stageField = key;
-                    if (key === 'kind') {
-                        const kinds = ['constant', 'linear', 'cosine', ...(channel === 'lr' && data.spec.lr_convention === 'native' ? ['exponential', 'step', 'drop'] : [])];
-                        input.append(...kinds.map(kind => new Option(kind[0].toUpperCase() + kind.slice(1), kind)));
-                    } else {
-                        const integer = ['length', 'end', 'interval', 'warmup_batches'].includes(key);
-                        Object.assign(input, {type: 'number', min: ['length', 'end', 'interval'].includes(key) ? '1' : '0', max: integer ? '1000000' : '1', step: integer ? '1' : 'any', required: true});
-                    }
-                    input.value = key === 'length' ? stage.end - stage.start + 1 : stage[key] ?? ({gamma: 0.5, interval: 1, warmup_batches: 0}[key]);
-                    label.append(input);
-                    grid.append(label);
-                }
-                const range = document.createElement('output');
-                const remove = document.createElement('button');
-                Object.assign(remove, {type: 'button', className: 'button', textContent: 'Remove stage', disabled: stages.length === 1});
-                remove.addEventListener('click', () => {
-                    try { render(V.removeStage(read(), index)); changed(); }
-                    catch (error) { message(byId(channel + '-allocation'), error.message, true); }
-                });
-                grid.addEventListener('input', sync);
-                row.append(legend, range, grid, remove);
-                container.append(row);
+        // A sequence shares its containing stage's dataset; only outer ranges define dataset stages.
+        const makeEditor = (container, allocation, add, nested = false) => {
+            let rows = [];
+            const readRanges = () => V.ranges(rows.map(row => row.plain()), mode);
+            const read = () => readRanges().map((stage, index) => {
+                if (stage.kind !== 'sequence') return stage;
+                const segments = rows[index].sequence.read();
+                const status = V.allocation(segments, stage.end - stage.start + 1);
+                if (!status.valid) throw Error('Stage ' + (index + 1) + ' sequence: ' + status.message);
+                return {...stage, segments};
             });
-            sync();
+            const render = stages => {
+                container.replaceChildren();
+                rows = stages.map((stage, index) => {
+                    const row = document.createElement('fieldset');
+                    row.className = nested ? 'builder-stage builder-segment' : 'builder-stage';
+                    const legend = document.createElement('legend');
+                    legend.textContent = (nested ? 'Segment ' : 'Stage ') + (index + 1);
+                    const grid = document.createElement('div');
+                    grid.className = 'field-grid';
+                    const fields = [[mode === 'lengths' ? 'length' : 'end', mode === 'lengths' ? 'Length (SB)' : nested ? 'End within stage (SB)' : 'Inclusive end (SB)'], ['kind', 'Scheduler'], ['initial', 'Initial value'], ['final', 'Final value']];
+                    if (channel === 'lr') fields.push(['gamma', 'Gamma'], ['interval', 'Step / drop after (SB)'], ['warmup_batches', 'Warmup (batches; 0 disables)']);
+                    const inputs = {};
+                    for (const [key, title] of fields) {
+                        const label = document.createElement('label');
+                        label.className = 'field';
+                        label.append(document.createTextNode(title));
+                        const input = document.createElement(key === 'kind' ? 'select' : 'input');
+                        input.dataset.stageField = key;
+                        if (key === 'kind') {
+                            const kinds = ['constant', 'linear', 'cosine', ...(channel === 'lr' && data.spec.lr_convention === 'native' ? ['exponential', 'step', 'drop', ...(!nested ? ['sequence'] : [])] : [])];
+                            input.append(...kinds.map(kind => new Option(kind[0].toUpperCase() + kind.slice(1), kind)));
+                        } else {
+                            const integer = ['length', 'end', 'interval', 'warmup_batches'].includes(key);
+                            Object.assign(input, {type: 'number', min: ['length', 'end', 'interval'].includes(key) ? '1' : '0', max: integer ? '1000000' : '1', step: integer ? '1' : 'any', required: true});
+                        }
+                        input.value = key === 'length' ? stage.end - stage.start + 1 : stage[key] ?? ({initial: 0.001, final: 0.00001, gamma: 0.5, interval: 1, warmup_batches: 0}[key]);
+                        inputs[key] = input;
+                        label.append(input);
+                        grid.append(label);
+                    }
+                    const values = () => Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.tagName === 'SELECT' ? input.value : input.valueAsNumber]));
+                    const plain = () => {
+                        const value = values();
+                        return value.kind === 'sequence' ? {kind: value.kind, [mode === 'lengths' ? 'length' : 'end']: value[mode === 'lengths' ? 'length' : 'end']} : value;
+                    };
+                    const range = document.createElement('output');
+                    row.append(legend, range, grid);
+                    let sequence, sequenceBox, hasSegments = false;
+                    let simpleKind = stage.kind === 'sequence' ? 'cosine' : stage.kind;
+                    if (channel === 'lr' && !nested) {
+                        sequenceBox = document.createElement('fieldset');
+                        sequenceBox.className = 'builder-sequence';
+                        const heading = document.createElement('legend');
+                        heading.textContent = 'LR sequence';
+                        const note = document.createElement('p');
+                        note.className = 'builder-note';
+                        note.textContent = 'These curves share this stage’s dataset. Their lengths must add up to the stage length.';
+                        const list = document.createElement('div');
+                        list.className = 'builder-segments';
+                        const actions = document.createElement('div');
+                        actions.className = 'builder-stage-actions';
+                        const status = document.createElement('p');
+                        status.className = 'builder-allocation';
+                        status.setAttribute('role', 'status');
+                        const button = document.createElement('button');
+                        Object.assign(button, {type: 'button', className: 'button builder-add-segment', textContent: 'Add segment'});
+                        actions.append(status, button);
+                        sequenceBox.append(heading, note, list, actions);
+                        row.append(sequenceBox);
+                        sequence = makeEditor(list, status, button, true);
+                        if (stage.kind === 'sequence') { sequence.render(stage.segments); hasSegments = true; }
+                    }
+                    const showFields = () => {
+                        const kind = inputs.kind.value;
+                        for (const key of ['initial', 'final', 'gamma', 'interval', 'warmup_batches']) {
+                            const input = inputs[key];
+                            if (!input) continue;
+                            const shown = kind !== 'sequence' && (key === 'final' ? ['linear', 'cosine', 'exponential'].includes(kind) : ['gamma', 'interval'].includes(key) ? ['step', 'drop'].includes(kind) : true);
+                            input.parentElement.hidden = !shown;
+                            input.disabled = !shown;
+                        }
+                        if (sequenceBox) {
+                            sequenceBox.hidden = kind !== 'sequence';
+                            sequenceBox.disabled = kind !== 'sequence';
+                        }
+                        if (kind !== 'sequence') simpleKind = kind;
+                    };
+                    const updateRange = (current, offset) => {
+                        range.textContent = 'SB ' + (offset + current.start) + '–' + (offset + current.end) + (nested && offset ? ' · Stage SB ' + current.start + '–' + current.end : '');
+                        if (current.kind === 'sequence') {
+                            if (!hasSegments) {
+                                sequence.render([{...values(), kind: simpleKind, start: 1, end: current.end - current.start + 1}]);
+                                hasSegments = true;
+                            }
+                            sequence.sync(current.end - current.start + 1, offset + current.start - 1);
+                        }
+                    };
+                    const remove = document.createElement('button');
+                    Object.assign(remove, {type: 'button', className: 'button builder-remove-stage', textContent: nested ? 'Remove segment' : 'Remove stage', disabled: stages.length === 1});
+                    remove.addEventListener('click', () => {
+                        try { render(V.removeStage(read(), index)); sync(); changed(); }
+                        catch (error) { message(allocation, error.message, true); }
+                    });
+                    grid.addEventListener('input', () => sync());
+                    row.append(remove);
+                    container.append(row);
+                    return {plain, range, sequence, showFields, updateRange};
+                });
+            };
+            add.addEventListener('click', () => {
+                try { render(V.splitStage(read())); sync(); changed(); }
+                catch (error) { message(allocation, error.message, true); }
+            });
+            const syncRanges = (total, offset = 0) => {
+                rows.forEach(row => row.showFields());
+                let ranges;
+                try { ranges = readRanges(); }
+                catch (error) {
+                    rows.forEach(row => { row.range.textContent = 'Invalid range'; });
+                    message(allocation, error.message, true);
+                    add.disabled = true;
+                    return {error: error.message};
+                }
+                ranges.forEach((stage, index) => rows[index].updateRange(stage, offset));
+                add.disabled = ranges.at(-1).end <= ranges.at(-1).start || (nested && rows.length >= 64);
+                try {
+                    const stages = read();
+                    const status = V.allocation(stages, total);
+                    message(allocation, status.message, !status.valid);
+                    return {stages, error: status.valid ? '' : status.message};
+                } catch (error) {
+                    message(allocation, error.message, true);
+                    return {error: error.message};
+                }
+            };
+            return {read, render, sync: syncRanges};
+        };
+        const editor = makeEditor(byId(channel + '-stages'), byId(channel + '-allocation'), byId('add-' + channel + '-stage'));
+        sync = () => {
+            const result = editor.sync(totalSuperbatches());
+            modeInput.setCustomValidity(result.error);
+            return result.error ? null : result.stages;
         };
         modeInput.addEventListener('change', () => {
             try {
-                const stages = read();
+                const stages = editor.read();
                 const status = V.allocation(stages, totalSuperbatches());
                 if (!status.valid) throw Error(status.message + '. Correct this before changing entry mode.');
                 mode = modeInput.value;
-                render(stages);
+                editor.render(stages);
+                sync();
                 changed();
             } catch (error) { modeInput.value = mode; message(byId(channel + '-allocation'), error.message, true); }
-        });
-        byId('add-' + channel + '-stage').addEventListener('click', () => {
-            try { render(V.splitStage(read())); changed(); }
-            catch (error) { message(byId(channel + '-allocation'), error.message, true); }
         });
         if (channel === 'lr') field('lr_convention').addEventListener('change', () => {
             const selected = field('lr_convention').value;
             try {
-                const stages = read();
-                if (selected === 'legacy' && stages.some(stage => !['constant', 'linear', 'cosine'].includes(stage.kind))) throw Error('Legacy interpolation supports constant, linear and cosine stages.');
+                const stages = editor.read();
+                if (selected === 'legacy' && stages.some(stage => !['constant', 'linear', 'cosine'].includes(stage.kind))) throw Error('Legacy interpolation supports constant, linear and cosine stages. Sequence requires Bullet native.');
                 data.spec.lr_convention = selected;
-                byId('lr-convention').textContent = selected === 'legacy' ? 'Legacy inclusive interpolation: initial value at the first SB, final at the last.' : 'Bullet native stage-local indexing. Warmup uses batches in the first SB of each stage.';
-                render(stages);
+                conventionText();
+                editor.render(stages);
+                sync();
                 changed();
             } catch (error) {
                 field('lr_convention').value = data.spec.lr_convention;
                 message(byId('lr-allocation'), error.message, true);
             }
         });
-        render(data.spec[channel + '_stages']);
-        stageEditors[channel] = {read, sync, mode: () => mode};
+        conventionText();
+        editor.render(data.spec[channel + '_stages']);
+        sync();
+        stageEditors[channel] = {read: editor.read, sync, mode: () => mode};
     }
     field('superbatches').addEventListener('input', () => { Object.values(stageEditors).forEach(editor => editor.sync()); });
     const readSpec = () => {
