@@ -518,8 +518,18 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
             parsed_games = int(parsed[-1]) if parsed else None
             broken_games = int(broken[-1]) if broken else 0
             temporary.unlink()
-        if not target.is_file() or target.stat().st_size == 0:
-            raise RuntimeError('Conversion produced an empty dataset for %s.' % name)
+        if not target.is_file():
+            raise RuntimeError('Conversion did not produce an output file for %s.' % name)
+        if target.stat().st_size == 0:
+            # A successful conversion can skip every game in an individual file.
+            # The dataset-wide check below still requires nonempty output.
+            with reporter.lock:
+                reporter.metrics['skipped_games'] = reporter.metrics.get('skipped_games', 0) + broken_games
+            details = ' (%d broken games skipped)' % broken_games if broken_games else ''
+            reporter.write('Skipping %s: conversion produced an empty file%s.\n' % (name, details))
+            target.unlink()
+            source_path.unlink(missing_ok=True)
+            return None
         if config['skip_broken_games']:
             cleaned = target.with_suffix('.clean.vf')
             result = command([str(pawnocchio), 'sanitise', '--input', str(target), '--output', str(cleaned)], directory, environment, reporter, cpu_threads=1)
