@@ -82,6 +82,8 @@ def prepare(request, pk):
             plan.update(mode='prepare', branch=source.get('ref', 'main'))
     with transaction.atomic():
         locked = TrainingRun.objects.select_for_update().get(pk=pk)
+        from OpenBench.training_workloads import check_claim
+        check_claim(request, locked)
         previous = locked.preparation.get(stage_key(stage), {})
         if isinstance(previous, dict) and previous.get('published') and previous.get('dataset'):
             plan.update({key: previous[key] for key in ('published', 'dataset') if key in previous})
@@ -205,6 +207,8 @@ def finish_publication(run, stage, source, plan, manifest, files, statistics, re
     dataset = {**source, 'analysis_report': report, 'commit': revision, 'manifest': manifest, 'manifest_present': True, 'statistics': statistics, 'files': files, 'size': sum(file['size'] for file in files)}
     with transaction.atomic():
         locked = TrainingRun.objects.select_for_update().get(pk=run.pk)
+        if run.workload_size and (locked.claim_id != run.claim_id or locked.worker_id != run.worker_id or locked.state != 'CONVERTING'):
+            raise ValidationError('The dataset preparation claim has expired.')
         locked.preparation = {**locked.preparation, stage_key(stage): {**plan, 'published': revision, 'analysis_report': report, 'statistics': statistics, 'dataset': dataset}}
         locked.save(update_fields=['preparation'])
         record_event('dataset.updated', locked, run.owner_id, {'repo': source['repo'], 'revision': revision, 'stage': stage}, key='dataset:%d:%s:%s' % (run.pk, stage_key(stage), revision))

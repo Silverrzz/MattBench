@@ -95,6 +95,8 @@ class CheckpointUploader:
         files = [file for file in files if file.is_file()]
         if not files or len(files) > 10000 or not (checkpoint / 'optimiser_state' / 'weights.bin').is_file():
             raise RuntimeError('A complete Bullet checkpoint must include optimiser_state/weights.bin and its optimiser state.')
+        if self.job.get('workload') and any(not (checkpoint / 'optimiser_state' / name).is_file() or not (checkpoint / 'optimiser_state' / name).stat().st_size for name in ('weights.bin', 'momentum.bin', 'velocity.bin')):
+            raise RuntimeError('Workload continuation requires weights, momentum and velocity in the optimizer checkpoint.')
         network = checkpoint / descriptor.get('network', 'quantised.bin')
         if not network.resolve().is_relative_to(checkpoint) or not network.is_file():
             raise RuntimeError('The checkpoint network is missing.')

@@ -154,7 +154,7 @@ def identity(directory, server):
 def runtime_info(pawnocchio, image):
     root = Path(__file__).parent
     digest = hashlib.sha256()
-    for name in ('training_worker.py', 'training_data.py', 'training_tools.py', 'training_checkpoints.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
+    for name in ('training_worker.py', 'training_data.py', 'training_tools.py', 'training_checkpoints.py', 'training_cache.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
         digest.update(name.encode())
         digest.update((root / name).read_bytes())
     def version(command):

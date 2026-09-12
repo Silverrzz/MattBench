@@ -800,6 +800,9 @@ def client_get_workload(request, machine):
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
         return JsonResponse(settings)
     result = get_workload(request, machine)
+    if result:
+        from OpenBench.models import TrainingWorker
+        TrainingWorker.objects.filter(machine=machine).update(last_allocation_kind='test')
     if not result:
         Machine.objects.filter(pk=machine.pk).update(workload=0, mnps=0, dev_mnps=0, base_mnps=0)
     return JsonResponse({**result, **settings})

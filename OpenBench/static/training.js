@@ -358,7 +358,7 @@
                 if (selectedCheckpoint && range.end !== null && range.end <= selectedCheckpoint.superbatch) title.textContent += ' (already completed)';
                 else if (selectedCheckpoint && range.start !== null && range.start <= selectedCheckpoint.superbatch + 1) title.textContent += ' (resumes at SB ' + (selectedCheckpoint.superbatch + 1) + ')';
                 const bounds = document.createElement('span');
-                bounds.textContent = range.start === null ? 'Entire training run' : 'SB ' + range.start + '–' + range.end;
+                bounds.textContent = range.start === null ? 'Entire training run' : (range.end - range.start + 1) + ' SB · SB ' + range.start + '–' + range.end;
                 stage.append(title, bounds);
                 const root = document.createElement('div');
                 picker(root, override.dataset, 'Dataset for stage ' + (index + 1), value => { override.dataset = value; persist(); });
@@ -367,7 +367,13 @@
             });
             persist();
         }
+        const workloadSize = document.getElementById('train-workload_size');
+        let preferredWorkloadSize = workloadSize.value || '50';
+        workloadSize.addEventListener('input', () => { preferredWorkloadSize = workloadSize.value; });
         function scheduleChanged() {
+            const compatible = options.find(option => option.id === schedule.value)?.workloads;
+            workloadSize.readOnly = !compatible;
+            workloadSize.value = compatible ? preferredWorkloadSize : '0';
             drafts.set(previousSchedule, overrides);
             overrides = drafts.get(schedule.value) || [];
             previousSchedule = schedule.value;

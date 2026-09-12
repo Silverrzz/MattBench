@@ -421,3 +421,4 @@ from OpenBench.training_models import TrainingRun, TrainingArtifact, DatasetUplo
 from OpenBench.training_models import TrainingCheckpoint, LifecycleEvent
 from OpenBench.training_models import TrainingDataset
 from OpenBench.training_models import TrainingServiceLease
+from OpenBench.training_models import TrainingWorkload

@@ -5,6 +5,7 @@ use bullet_lib::{
         outputs::{MaterialCount, OutputBuckets},
     },
     value::save::save_to_checkpoint,
+    trainer::schedule::lr::{self, LrScheduler},
 };
 $loader_import
 use bullet_trainer::{
@@ -24,9 +25,14 @@ const SAVE_EVERY: usize = $save_every;
 const EVAL_SCALE: f32 = $eval_scale;
 const THREADS: usize = $threads;
 
-const LR_STAGES: &[(usize, usize, f32, f32, u8)] = &[
-$lr_rows
-];
+#[derive(Clone, Debug)]
+struct LegacyLR { initial: f32, final_value: f32, duration: usize, kind: u8 }
+impl LrScheduler for LegacyLR {
+    fn lr(&self, _: usize, superbatch: usize) -> f32 {
+        stage_value(&[(1, self.duration, self.initial, self.final_value, self.kind)], superbatch)
+    }
+    fn colourful(&self) -> String { "Legacy inclusive interpolation".to_owned() }
+}
 const WDL_STAGES: &[(usize, usize, f32, f32, u8)] = &[
 $wdl_rows
 ];
@@ -45,6 +51,9 @@ fn stage_value(stages: &[(usize, usize, f32, f32, u8)], superbatch: usize) -> f3
 
 fn main() {
     let job = mattbench::Run::load();
+    let workload_end = std::env::var("MATTBENCH_END_SUPERBATCH").map(|s| s.parse::<usize>().expect("Invalid workload end")).unwrap_or(SUPERBATCHES);
+    assert!(job.start <= workload_end && workload_end <= SUPERBATCHES, "Invalid workload bounds");
+    let lr_schedule = $lr_scheduler;
     assert!(job.start <= SUPERBATCHES, "The checkpoint is already at or beyond the end of the schedule");
     let features = $feature_expression;
     let feature_count = features.num_inputs();
@@ -70,7 +79,8 @@ $saved_format
         job.resumed();
     }
     for (index, &(start, end)) in DATASET_STAGES.iter().enumerate() {
-        if job.start > end { continue; }
+        if job.start > end || start > workload_end { continue; }
+        let end = end.min(workload_end);
         let list = std::env::var(format!("MATTBENCH_STAGE_{}_FILES", index)).expect("Missing stage dataset");
         let stage_data = std::fs::read_to_string(list).expect("Cannot read stage dataset");
         let paths: Vec<&str> = stage_data.lines().filter(|path| !path.is_empty()).collect();
@@ -99,7 +109,7 @@ $targets
             &mut optimiser,
             TrainingSchedule {
                 steps: TrainingSteps { batch_size: BATCH_SIZE, batches_per_superbatch: BATCHES_PER_SUPERBATCH, start_superbatch: job.start.max(start), end_superbatch: end },
-                lr_schedule: Box::new(|step| stage_value(LR_STAGES, step.superbatch())),
+                lr_schedule: lr_schedule.clone().boxed(),
                 log_rate: 128,
             },
             ReadMapLoader::new(reader, mapper, THREADS as u8),
@@ -109,8 +119,9 @@ $targets
                     let loss = loss_sum / BATCHES_PER_SUPERBATCH as f32;
                     let superbatch = step.superbatch();
                     let progress = 100.0 * superbatch as f32 / SUPERBATCHES as f32;
-                    let lr = stage_value(LR_STAGES, superbatch);
-                    println!("MATTBENCH_METRIC {{\"loss\":{loss},\"superbatch\":{superbatch},\"progress\":{progress},\"learning_rate\":{lr}}}");
+                    let lr = lr_schedule.lr(step.batch(), superbatch);
+                    let wdl = stage_value(WDL_STAGES, superbatch);
+                    println!("MATTBENCH_METRIC {{\"loss\":{loss},\"superbatch\":{superbatch},\"progress\":{progress},\"learning_rate\":{lr},\"wdl_blend\":{wdl}}}");
                     loss_sum = 0.0;
                 }
             },

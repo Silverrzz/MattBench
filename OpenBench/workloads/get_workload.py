@@ -37,10 +37,10 @@ from OpenBench.spsa_utils import spsa_workload_assignment_dict
 
 from django.db import transaction
 
-def get_workload(request, machine):
+def get_workload(request, machine, candidates=None, has_engine_preference=False):
 
     # Select a workload from the possible ones, if we can
-    if not (test := select_workload(request, machine)):
+    if not (test := select_workload(request, machine, candidates, has_engine_preference)):
         return {}
 
     # Avoid creating duplicate Result objects
@@ -54,10 +54,11 @@ def get_workload(request, machine):
 
     return { 'workload' : workload_to_dictionary(test, result, machine) }
 
-def select_workload(request, machine):
+def select_workload(request, machine, candidates=None, has_engine_preference=False):
 
     # Step 1: Refine active workloads to the candidate assignments
-    candidates, has_engine_preference = filter_valid_workloads(request, machine)
+    if candidates is None:
+        candidates, has_engine_preference = filter_valid_workloads(request, machine)
     if not candidates:
         return None
 
@@ -93,7 +94,7 @@ def select_workload(request, machine):
     weights = [data['throughput'] for id, data in worker_dist.items() if data['ratio'] == min_ratio]
     return by_id[random.choices(choices, weights=weights)[0]]
 
-def filter_valid_workloads(request, machine):
+def filter_valid_workloads(request, machine, refine=True):
 
     # The ordering of get_active_tests() is for the GUI. It costs a sort that we
     # do not need, since the priority refinement below is done in Python anyway
@@ -108,7 +109,7 @@ def filter_valid_workloads(request, machine):
     workloads = workloads.filter(book_name__in=['NONE', *OPENBENCH_CONFIG['books']])
 
     # Skip workloads that are blacklisted on the machine
-    if blacklisted := request.POST.getlist('blacklist'):
+    if blacklisted := getattr(request, 'workload_blacklist', request.POST.getlist('blacklist')):
         workloads = workloads.exclude(id__in=blacklisted)
 
     # Skip workloads with unmet Syzygy requirements
@@ -122,6 +123,8 @@ def filter_valid_workloads(request, machine):
 
     # Skip workloads that we have insufficient threads to play
     options = [x for x in workloads if valid_execution_assignment(x) and valid_hardware_assignment(x, machine)]
+    if not refine:
+        return options, False
 
     # Possible that no work exists for the machine
     if not options:

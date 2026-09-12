@@ -1498,11 +1498,18 @@ def run_openbench_worker(client_args):
             # Cleanup on each workload request
             cleanup_client()
 
-            if config.training_session and config.training_session.poll((getattr(config, 'workload', None) or {}).get('test', {}).get('id', 0)):
+            if config.training_session and config.training_session.poll((getattr(config, 'workload', None) or {}).get('test', {}).get('id', 0), config.blacklist):
                 continue
 
             # Keep asking for a workload until we get a response
-            try_forever(server_request_workload, [config], connection_error)
+            if config.training_session and config.training_session.pending_test:
+                for key in ('focus', 'force', 'only', 'noisy', 'fleet'):
+                    if key in config.training_session.settings:
+                        setattr(config, key, config.training_session.settings[key])
+                config.workload = config.training_session.pending_test
+                config.training_session.pending_test = None
+            else:
+                try_forever(server_request_workload, [config], connection_error)
 
             # Complete the workload if there was work to be done
             if config.workload: complete_workload(config)

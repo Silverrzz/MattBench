@@ -144,10 +144,12 @@ def schedules(request, schedule_id=None, create=False):
     })
 
 
-from OpenBench.schedule_builder import schedule_dataset_stages
+from OpenBench.schedule_builder import schedule_dataset_stages, builder_state
 
 
 class TrainingForm(forms.Form):
+    priority = forms.IntegerField(min_value=-2147483648, max_value=2147483647, initial=0, required=False)
+    workload_size = forms.IntegerField(label='Workload size (SB; 0 is uninterrupted)', min_value=0, max_value=1000000, initial=50, required=False)
     checkpoint = forms.ModelChoiceField(label='Starting point', queryset=TrainingCheckpoint.objects.none(), required=False, empty_label='Start from scratch')
     wdl = forms.FloatField(label='WDL for remaining training', min_value=0, max_value=1, required=False, widget=forms.NumberInput(attrs={'step': '0.01', 'placeholder': 'Use schedule values'}))
     skip_broken_games = forms.BooleanField(label='Skip invalid games and report discarded data', initial=True, required=False)
@@ -243,6 +245,11 @@ class TrainingForm(forms.Form):
                             stage.update(kind='constant', initial=data['wdl'], final=data['wdl'])
             if current:
                 _, files, _ = generate_schedule(spec)
+            data['priority'] = data.get('priority') or 0
+            if data.get('workload_size') is None:
+                data['workload_size'] = 50 if current else 0
+            if data.get('workload_size') and not current:
+                self.add_error('workload_size', 'This custom schedule requires uninterrupted training (0). Regenerate it with the builder to enable workloads.')
             if checkpoint and data.get('engine'):
                 from OpenBench.training_checkpoints import validate_checkpoint_schedule
                 try:
@@ -293,14 +300,15 @@ def new_training(request):
             with transaction.atomic():
                 run = TrainingRun.objects.create(
                     owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
-                    snapshot=snapshot, resume_from=checkpoint,
+                    snapshot=snapshot, resume_from=checkpoint, priority=data['priority'], workload_size=data['workload_size'],
+                    completed_superbatches=checkpoint.superbatch if checkpoint else 0,
                     dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
                 )
             record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name, 'checkpoint_id': checkpoint.pk if checkpoint else None})
             return redirect(request, '/training/%d/' % run.pk)
         except ValidationError as error:
             form.add_error(None, error)
-    options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'scope': row.scope_label, 'stages': schedule_dataset_stages(row)} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
+    options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'scope': row.scope_label, 'stages': schedule_dataset_stages(row), 'workloads': builder_state(row)[1]} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
     dataset_options = [{'id': str(row.pk), 'name': row.name, 'repo': row.repo, 'revision': row.revision, 'owner': row.owner.username, 'is_owner': row.owner_id == request.user.pk} for row in form.fields['dataset'].queryset.select_related('owner')]
     dataset_options.sort(key=lambda row: (not row['is_owner'], row['name'].casefold(), row['owner'].casefold(), row['id']))
     checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': [stage.get('registry_id', '') for stage in (row.run.dataset.get('stages') or [row.run.dataset])]} for row in form.fields['checkpoint'].queryset]
@@ -320,6 +328,13 @@ def training_detail(request, pk):
         if run.snapshot.get('demo'):
             return redirect(request, '/training/%d/' % pk, error='Demo runs cannot be dispatched or modified.')
         action = request.POST.get('action')
+        if action == 'priority':
+            try:
+                priority = forms.IntegerField(min_value=-2147483648, max_value=2147483647).clean(request.POST.get('priority'))
+                TrainingRun.objects.filter(pk=pk).update(priority=priority, updated=timezone.now())
+            except ValidationError as error:
+                return redirect(request, '/training/%d/' % pk, error=error_text(error))
+            return redirect(request, '/training/%d/' % pk)
         if action in ('delete', 'restore'):
             deleted = action == 'delete'
             TrainingRun.objects.filter(pk=pk).update(deleted=deleted, updated=timezone.now())
@@ -385,7 +400,7 @@ def training_log(request, pk):
 @login_required(login_url='/login/')
 def training_configuration(request, pk):
     run = get_object_or_404(visible_runs(request.user), pk=pk)
-    response = JsonResponse({**run.snapshot, 'dataset': run.dataset, 'parameters': run.parameters}, json_dumps_params={'indent': 2})
+    response = JsonResponse({**run.snapshot, 'dataset': run.dataset, 'parameters': run.parameters, 'priority': run.priority, 'workload_size': run.workload_size, 'completed_superbatches': run.completed_superbatches}, json_dumps_params={'indent': 2})
     response['Content-Disposition'] = 'attachment; filename="training-%d.json"' % pk
     response['Cache-Control'] = 'private, no-store'
     return response
