@@ -71,11 +71,18 @@ class GPUContinuationTests(WorkloadFixture, TransactionTestCase):
                 checkpoint_record = json.loads(record)
                 sb = checkpoint_record['superbatch']; directory = output / checkpoint_record['path']
                 network = directory / 'quantised.bin'
-                if spec.get('export_mode') in ('custom', 'heimdall'):
+                if spec.get('export_mode') == 'custom':
                     from Scripts.verify_builder_export import verify_export
                     self.assertEqual(verify_export(directory, spec), network.stat().st_size)
                 for name in ('weights.bin', 'momentum.bin', 'velocity.bin'):
                     self.assertGreater((directory / 'optimiser_state' / name).stat().st_size, 0)
+                if spec.get('optimizer') == 'ranger':
+                    for name in ('slow.bin', 'step.txt', 'lookahead_step.txt'):
+                        self.assertGreater((directory / 'optimiser_state' / name).stat().st_size, 0)
+                    for name in ('step.txt', 'lookahead_step.txt'):
+                        steps = (directory / 'optimiser_state' / name).read_text().splitlines()
+                        self.assertTrue(steps)
+                        self.assertTrue(all(int(line.rsplit(',', 1)[1]) == sb * spec['batches_per_superbatch'] for line in steps))
                 archive = io.BytesIO()
                 with tarfile.open(fileobj=archive, mode='w') as tar:
                     for file in directory.rglob('*'):

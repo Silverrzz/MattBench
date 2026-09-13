@@ -10,10 +10,11 @@ use bullet_lib::{
 $loader_import
 use bullet_trainer::{
     model::{ModelDefinition, ModelInputs, ModelInputsMapper, ModelWeights, SavedFormat},
-    optimiser::{Optimiser, adam::{AdamW, AdamWParams}},
+    optimiser::Optimiser,
     reader::ReadMapLoader,
     run::{DefaultDevice, TrainingSchedule, TrainingSteps, train},
 };
+$optimizer_import
 
 const KING_BUCKETS: [usize; $map_size] = [
 $bucket_rows
@@ -69,7 +70,8 @@ $loss
     });
     let weights = ModelWeights::new(&definition, $seed);
     let device = DefaultDevice::new(0).unwrap();
-    let mut optimiser = Optimiser::<_, AdamW<_>>::new(definition, weights, device, AdamWParams::default()).unwrap();
+    let base_optimiser_params = $optimizer_defaults;
+    let mut optimiser = Optimiser::<_, $optimizer_type<_>>::new(definition, weights, device, base_optimiser_params).unwrap();
 $optimiser_params
     let saved_format = vec![
 $saved_format

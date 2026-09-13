@@ -2,21 +2,25 @@
 
 Usage: HIP_PATH=/opt/rocm bin/python Scripts/prepare_builder_gpu.py /tmp/bullet
 Add --dual to exercise dual activation on L2 and L3 with output-bucketed hidden layers.
-Add --heimdall or --custom-export to exercise quantized exports and their clipping.
+Add --split-export or --custom-export to exercise quantized exports and their clipping.
+Add --ranger to exercise RAdam/Lookahead and its checkpoint state.
 Then set the MATTBENCH_TEST_GPU_* variables described in docs/builder-workloads.md.
 """
 import copy, os, django, sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]));os.environ['DJANGO_SETTINGS_MODULE']='OpenSite.settings';os.environ['OPENBENCH_DISABLE_WATCHERS']='1';django.setup()
 from OpenBench.schedule_builder import DEFAULT_SPEC,generate_schedule
+from OpenBench.tests.builder_fixtures import integer_export
 root=Path(sys.argv[1]).resolve()
 spec=copy.deepcopy(DEFAULT_SPEC)
 spec.update(layers=[16,8,8],pairwise_activation=True,pairwise_layers=[1,2,3],skip_connection=True,backend='rocm',threads=2,buffer_mb=16,batch_size=32,batches_per_superbatch=4,superbatches=5,save_every=5,position_filtering=False,piece_count_sampling=True,piece_count_mode='target',piece_count_keep=[0.0]*32+[1.0],wdl_filtered=True)
 if '--dual' in sys.argv:
  spec.update(pairwise_layers=[1], dual_activation=True, dual_layers=[2,3], hidden_layers_bucketed=True)
-if '--heimdall' in sys.argv:
+if '--ranger' in sys.argv:
+ spec.update(optimizer='ranger')
+if '--split-export' in sys.argv:
  spec.update(layers=[128,16,32], pairwise_layers=[1], dual_activation=True, dual_layers=[2], hidden_layers_bucketed=True,
-             skip_connection=False, threat_inputs=True, activation='crelu', export_mode='heimdall')
+             skip_connection=False, threat_inputs=True, activation='crelu', **integer_export())
 if '--custom-export' in sys.argv:
  spec.update(export_mode='custom', dense_export={
   'l1':dict(weight_format='i16',weight_scale=255,bias_format='i16',bias_scale=255,transpose=True),

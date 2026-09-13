@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 from OpenBench.builder_values import import_layout, parse_array
 from OpenBench.schedule_builder import DEFAULT_SPEC, MANIFEST, SOURCE, builder_state, dataset_stages, generate_schedule, validate_spec
 from OpenBench.training_checkpoints import validate_checkpoint_schedule
+from OpenBench.tests.builder_fixtures import integer_export
 
 
 class BuilderTests(SimpleTestCase):
@@ -16,7 +17,82 @@ class BuilderTests(SimpleTestCase):
 
     def heimdall(self, **changes):
         return self.spec(**{'layers': [768, 16, 32], 'activation': 'crelu', 'threat_inputs': True,
-                            'pairwise_activation': True, 'dual_activation': True, 'export_mode': 'heimdall', **changes})
+                            'pairwise_activation': True, 'dual_activation': True, **integer_export(), **changes})
+
+    def test_optimizer_legacy_defaults_and_ranger_generation(self):
+        old = self.spec()
+        for key in ('optimizer', 'ranger_alpha', 'ranger_k'):
+            old.pop(key)
+        spec, files, _ = generate_schedule(old)
+        self.assertEqual(spec['optimizer'], 'adamw')
+        self.assertIn('Optimiser::<_, AdamW<_>>', files[SOURCE])
+        self.assertNotIn('mod ranger_support', files[SOURCE])
+        _, files, _ = generate_schedule(self.heimdall(optimizer='ranger', ranger_alpha=0.3, ranger_k=4))
+        source = files[SOURCE]
+        self.assertIn('Optimiser::<_, Ranger<_>>', source)
+        self.assertIn('RangerParams { alpha: 0.3, k: 4, ..Default::default() }', source)
+        self.assertIn('optimiser.set_params_for_weight("l0/ti/w", RangerParams', source)
+        self.assertIn('..base_optimiser_params', source)
+        self.assertNotIn('AdamWParams', source)
+        self.assertIn('mod ranger_support', source)
+        self.assertIn('lookahead_step.txt', source)
+        self.assertIn('single.step = steps.remove(id)', source)
+        metadata = json.loads(files[MANIFEST])['optimizer']
+        self.assertEqual(metadata['name'], 'ranger')
+        self.assertEqual(metadata['beta1'], 0.99)
+        self.assertEqual(metadata['alpha'], 0.3)
+        self.assertEqual(metadata['k'], 4)
+        self.assertEqual(metadata['lookahead_checkpoint_version'], 1)
+
+    def test_optimizer_validation(self):
+        for changes in ({'optimizer': 'adam'}, {'optimizer': True}, {'ranger_alpha': 0}, {'ranger_alpha': 1e-8}, {'ranger_alpha': 1.01},
+                        {'ranger_alpha': True}, {'ranger_alpha': float('nan')}, {'ranger_alpha': float('inf')},
+                        {'ranger_k': 0}, {'ranger_k': -1}, {'ranger_k': True}, {'ranger_k': 1.5}, {'ranger_k': 1000001}):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                validate_spec(self.spec(**changes))
+
+    def test_optimizer_checkpoint_compatibility(self):
+        spec, files, config = generate_schedule(self.spec(optimizer='ranger'))
+        checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
+        for changes in ({'optimizer': 'adamw'}, {'ranger_alpha': 0.3}, {'ranger_k': 4}):
+            _, changed, settings = generate_schedule({**spec, **changes})
+            with self.assertRaisesMessage(ValidationError, 'same optimizer and Lookahead'):
+                validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
+        spec['lr_stages'][0]['initial'] = 0.005
+        _, changed, settings = generate_schedule(spec)
+        validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
+
+    def test_ranger_archive_requires_all_optimizer_state(self):
+        import hashlib
+        import io
+        import tarfile
+        import tempfile
+        from pathlib import Path
+        import zstandard
+        from OpenBench.training_checkpoints import validate_resume_archive
+        _, files, _ = generate_schedule(self.spec(optimizer='ranger'))
+        snapshot = {'files': files}
+        network_data = b'test network'
+        network = SimpleNamespace(size=len(network_data), sha256=hashlib.sha256(network_data).hexdigest())
+        components = {'optimiser_state/' + name: b'state' for name in
+                      ('weights.bin', 'momentum.bin', 'velocity.bin', 'slow.bin', 'step.txt', 'lookahead_step.txt')}
+        components['quantised.bin'] = network_data
+        with tempfile.TemporaryDirectory() as root, self.settings(TRAINING_ROOT=root):
+            for missing in (None, 'slow.bin', 'step.txt', 'lookahead_step.txt'):
+                stream = io.BytesIO()
+                with tarfile.open(fileobj=stream, mode='w') as tar:
+                    for name, data in components.items():
+                        if missing and name == 'optimiser_state/' + missing:
+                            continue
+                        member = tarfile.TarInfo(name)
+                        member.size = len(data)
+                        tar.addfile(member, io.BytesIO(data))
+                Path(root, 'checkpoint.zst').write_bytes(zstandard.ZstdCompressor().compress(stream.getvalue()))
+                if missing:
+                    with self.assertRaisesMessage(ValidationError, missing):
+                        validate_resume_archive(SimpleNamespace(path='checkpoint.zst'), network, snapshot)
+                else:
+                    validate_resume_archive(SimpleNamespace(path='checkpoint.zst'), network, snapshot)
 
     def test_export_legacy_is_not_dense_quantization(self):
         old = self.spec(layers=[768, 16, 32])
@@ -63,15 +139,13 @@ class BuilderTests(SimpleTestCase):
     def test_heimdall_export_matches_reference_types_scales_order_and_clipping(self):
         _, files, _ = generate_schedule(self.heimdall())
         source = files[SOURCE]
-        self.assertIn('l0_psqt.matmul(stm) + l0_ti.forward(stm_ti)', source)
-        self.assertIn('l0_psqt.matmul(ntm) + l0_ti.forward(ntm_ti)', source)
-        self.assertIn('const PSQ_FEATURES: usize = 768;', source)
-        self.assertIn('stm_ti[ti_count] = (us - PSQ_FEATURES)', source)
-        self.assertIn('if psq_count < 32 { stm[psq_count] = -1; ntm[psq_count] = -1; }', source)
+        self.assertIn('l0_psqt.matmul(stm_psqt) + l0_ti.forward(stm_ti)', source)
+        self.assertIn('l0_psqt.matmul(ntm_psqt) + l0_ti.forward(ntm_ti)', source)
+        self.assertIn('stm_ti[ti_count] = (us - 768)', source)
+        self.assertIn('if psqt_count < 32 { stm_psqt[psqt_count] = -1; ntm_psqt[psqt_count] = -1; }', source)
         self.assertNotIn('builder.new_affine("l0/"', source)
-        self.assertIn('min_weight: -(127.0 / 255.0)', source)
-        self.assertIn('(127.0 / 128.0) * (255.0 / 256.0) * (255.0 / 256.0)', source)
-        self.assertIn('f / ((255.0f32 / 256.0) * (255.0 / 256.0))', source)
+        self.assertIn('min_weight: -(0.4980392156862745f32.min(', source)
+        self.assertIn('f / 0.9922027587890625f32', source)
         tensors = json.loads(files[MANIFEST])['export']['tensors']
         self.assertEqual([(t['tensor'], t['dtype'], t['scale'], t['transposed']) for t in tensors], [
             ('l0/psqt', 'i16', 255, False), ('l0/ti/w', 'i8', 255, False), ('l0/ti/b', 'i16', 255, False),
@@ -79,20 +153,51 @@ class BuilderTests(SimpleTestCase):
             ('l2/w', 'i32', 64, False), ('l2/b', 'i32', 262144, False),
             ('score/w', 'i32', 64, False), ('score/b', 'i32', 16777216, False)])
 
-    def test_heimdall_profile_rejects_incompatible_topology(self):
-        for changes in ({'layers': [768]}, {'layers': [768, 32, 32]}, {'layers': [64, 16, 32]},
-                        {'dual_layers': [3]}, {'threat_inputs': False}, {'pawn_pair_inputs': True},
-                        {'score_buckets': 4}, {'wdl_outputs': True}, {'feature_format': 'f32'},
+    def test_split_export_is_not_restricted_to_an_engine_topology(self):
+        for changes in ({'layers': [64, 32, 16]}, {'dual_layers': [3]}, {'threat_inputs': False},
+                        {'pawn_pair_inputs': True}, {'score_buckets': 4}, {'wdl_outputs': True},
                         {'hidden_layers_bucketed': False}, {'pairwise_left_activation': 'relu'},
-                        {'merged_king_planes': True}, {'half_move_clock': True}, {'mirrored': False}):
+                        {'merged_king_planes': True}, {'half_move_clock': True}, {'pairwise_activation': False}):
+            with self.subTest(changes=changes):
+                normalized, files, _ = generate_schedule({**self.heimdall(), **changes})
+                self.assertEqual(normalized['export_mode'], 'custom')
+                self.assertNotIn('Heimdall', files[SOURCE])
+        _, files, _ = generate_schedule(self.heimdall(pawn_pair_inputs=True, half_move_clock=True, merged_king_planes=True))
+        self.assertIn('stm_pp[pp_count] = (us - 715)', files[SOURCE])
+        self.assertIn('stm_ti[ti_count] = (us - 5275)', files[SOURCE])
+
+    def test_retired_preset_reopens_as_custom_controls(self):
+        spec = validate_spec(self.spec(layers=[768, 16, 32], threat_inputs=True, export_mode='heimdall'))
+        self.assertEqual(spec['export_mode'], 'custom')
+        self.assertTrue(spec['split_features'])
+        self.assertEqual(spec['feature_export']['ti']['format'], 'i8')
+        self.assertEqual(spec['dense_export']['l1']['weight_divisor'], (255 / 256) ** 2)
+        _, files, config = generate_schedule(spec)
+        old_files = copy.deepcopy(files)
+        metadata = json.loads(old_files[MANIFEST])
+        metadata['version'] = 5
+        metadata['spec']['export_mode'] = 'heimdall'
+        old_files[MANIFEST] = json.dumps(metadata)
+        checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': old_files, 'settings': config}))
+        with self.assertRaisesMessage(ValidationError, 'retired export preset'):
+            validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), files, config)
+
+    def test_feature_export_and_divisor_validation(self):
+        from OpenBench.builder_export import TENSOR_DEFAULT, DENSE_DEFAULT
+        for row in ({**TENSOR_DEFAULT, 'divisor': 0}, {**TENSOR_DEFAULT, 'clip': float('nan')},
+                    {**TENSOR_DEFAULT, 'scale': True}, {**TENSOR_DEFAULT, 'format': 'u8'}, {}):
+            with self.subTest(row=row), self.assertRaises(ValidationError):
+                validate_spec(self.spec(export_mode='custom', feature_export={'ti': row}))
+        for changes in ({'split_features': 'yes'}, {'feature_export': {'bad': TENSOR_DEFAULT}},
+                        {'dense_export': {'l1': {**DENSE_DEFAULT, 'weight_divisor': float('inf')}}}):
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
-                validate_spec({**self.heimdall(), **changes})
+                validate_spec(self.spec(export_mode='custom', **changes))
 
     def test_checkpoint_export_changes_rejected_but_lr_changes_allowed(self):
         for spec in (self.heimdall(), self.spec(export_mode='custom')):
             normalized, files, config = generate_schedule(spec)
             checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
-            _, changed, settings = generate_schedule({**normalized, 'export_mode': 'legacy'})
+            _, changed, settings = generate_schedule({**normalized, 'export_mode': 'legacy', 'split_features': False})
             with self.assertRaisesMessage(ValidationError, 'same export and training-clipping'):
                 validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
             normalized['lr_stages'][0]['initial'] = 0.005
@@ -104,7 +209,8 @@ class BuilderTests(SimpleTestCase):
         spec, files, config = generate_schedule(self.spec(export_mode='custom'))
         checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
         for changes in ({'dense_export': {'score': {**DENSE_DEFAULT, 'weight_format': 'i8', 'weight_scale': 128}}},
-                        {'feature_format': 'f32'}):
+                        {'feature_format': 'f32'}, {'split_features': True},
+                        {'feature_export': {'combined': dict(format='i8', scale=255, divisor=1.0, clip=0.4)}}):
             _, changed, settings = generate_schedule({**spec, **changes})
             with self.assertRaisesMessage(ValidationError, 'same export and training-clipping'):
                 validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
@@ -235,7 +341,7 @@ class BuilderTests(SimpleTestCase):
         first, files, settings = generate_schedule(self.spec())
         second, other_files, _ = generate_schedule({**first, 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'}})
         self.assertEqual(files[SOURCE], other_files[SOURCE])
-        self.assertEqual(json.loads(files[MANIFEST])['version'], 5)
+        self.assertEqual(json.loads(files[MANIFEST])['version'], 6)
         restored, current = builder_state(SimpleNamespace(files=files, settings=settings))
         self.assertTrue(current)
         self.assertEqual(restored, first)

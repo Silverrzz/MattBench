@@ -9,7 +9,7 @@ from textwrap import indent
 from django.core.exceptions import ValidationError
 
 from OpenBench.training import DEFAULT_SETTINGS, validate_schedule
-from OpenBench.builder_export import export_recipe, heimdall_inputs, validate_export
+from OpenBench.builder_export import export_recipe, split_inputs, upgrade_export, validate_export
 
 
 BULLET_COMMIT = '629ee50000b2afb7b3337595401c830d3b1e0f42'
@@ -39,7 +39,8 @@ DEFAULT_SPEC = {
     'wdl_stages': [{'start': 1, 'end': 800, 'kind': 'constant', 'initial': 0.75, 'final': 0.75}],
     'eval_scale': 400.0,
     'threads': 4, 'buffer_mb': 1024, 'seed': 42, 'backend': 'cuda', 'feature_format': 'i16',
-    'export_mode': 'legacy', 'dense_export': {},
+    'export_mode': 'legacy', 'dense_export': {}, 'split_features': False, 'feature_export': {},
+    'optimizer': 'adamw', 'ranger_alpha': 0.5, 'ranger_k': 6,
     'shuffle': True, 'interleave': True, 'shuffle_memory_mb': 256,
     'interleave_fan_in': 32, 'dataset_shard_mb': 512,
 }
@@ -47,7 +48,8 @@ DEFAULT_SPEC = {
 
 def validate_spec(value):
     if isinstance(value, dict):
-        value = {'export_mode': 'legacy', 'dense_export': {}, **value}
+        value = {'optimizer': 'adamw', 'ranger_alpha': 0.5, 'ranger_k': 6, **value}
+        value = upgrade_export(value)
         # Saved schedules predate dense-stack output bucketing. Preserve their graph.
         value = {'hidden_layers_bucketed': False, **value}
         value = {'dual_activation': False, 'dual_layers': [2], **value}
@@ -80,6 +82,7 @@ def validate_spec(value):
         ('input_buckets', 1, 64), ('score_buckets', 1, 32), ('wdl_buckets', 1, 32), ('uncertainty_buckets', 1, 32), ('batch_size', 1, 1048576),
         ('batches_per_superbatch', 1, 1000000), ('superbatches', 1, 1000000), ('save_every', 1, 1000000),
         ('threads', 1, 255), ('buffer_mb', 16, 65536), ('seed', 0, 2 ** 53 - 1),
+        ('ranger_k', 1, 1000000),
         ('shuffle_memory_mb', 16, 65536), ('interleave_fan_in', 2, 256),
         ('dataset_shard_mb', 4, 16384),
         ('min_ply', 0, 100000), ('max_ply', 0, 100000), ('min_eval', 0, 32768), ('max_eval', 0, 32768),
@@ -131,6 +134,7 @@ def validate_spec(value):
         ('pairwise_left_activation', ('crelu', 'screlu', 'relu', 'identity')),
         ('pairwise_right_activation', ('crelu', 'screlu', 'relu', 'identity')),
         ('backend', ('cuda', 'rocm')), ('feature_format', ('i16', 'f32')),
+        ('optimizer', ('adamw', 'ranger')),
     ):
         if spec[key] not in options:
             raise ValidationError('Choose a valid %s.' % key.replace('_', ' '))
@@ -140,6 +144,9 @@ def validate_spec(value):
         if type(spec[key]) not in (float, int) or not minimum <= spec[key] <= maximum or not math.isfinite(spec[key]):
             raise ValidationError('%s must be between %g and %g.' % (key.replace('_', ' ').capitalize(), minimum, maximum))
         spec[key] = float(spec[key])
+    if type(spec['ranger_alpha']) not in (float, int) or not math.isfinite(spec['ranger_alpha']) or not 0.000001 <= spec['ranger_alpha'] <= 1:
+        raise ValidationError('Ranger Lookahead alpha must be between 0.000001 and 1.')
+    spec['ranger_alpha'] = float(spec['ranger_alpha'])
     layers = spec['layers']
     if not isinstance(layers, list) or not 1 <= len(layers) <= 8 or any(type(size) is not int or not 1 <= size <= 8192 for size in layers):
         raise ValidationError('Use 1–8 hidden layers, with 1–8192 neurons each.')
@@ -244,7 +251,7 @@ def fingerprint(files, settings):
 def builder_state(schedule):
     try:
         metadata = json.loads(schedule.files[MANIFEST])
-        if metadata['version'] not in (1, 2, 3, 4, 5):
+        if metadata['version'] not in (1, 2, 3, 4, 5, 6):
             return None, False
         spec = validate_spec(metadata['spec'])
         return spec, metadata['fingerprint'] == fingerprint(schedule.files, schedule.settings)
@@ -315,19 +322,20 @@ if count < max_active {
     stm[count] = -1;
     ntm[count] = -1;
 }'''
-    split_ft = spec['export_mode'] == 'heimdall'
+    split_ft = spec['split_features']
+    graph_pattern = '(stm, ntm)'
+    feature_sums = {side: 'l0.forward(%s)' % side for side in ('stm', 'ntm')}
     if split_ft:
-        sparse_inputs, graph, feature_mapping = heimdall_inputs(spec)
+        sparse_inputs, graph, feature_mapping, graph_pattern, feature_sums = split_inputs(spec)
     if 1 in pairwise_layers:
         for perspective in ('stm', 'ntm'):
             graph.extend([
-                ('let %s_ft = l0_psqt.matmul(%s) + l0_ti.forward(%s_ti);' % (perspective, perspective, perspective)) if split_ft else
-                'let %s_ft = l0.forward(%s);' % (perspective, perspective),
+                'let %s_ft = %s;' % (perspective, feature_sums[perspective]),
                 'let %s_hidden = %s;' % (perspective, pairwise_expression(perspective + '_ft', sizes[0])),
             ])
         graph.append('let hidden = stm_hidden.concat(ntm_hidden);')
     else:
-        graph.append('let hidden = l0.forward(stm).%s().concat(l0.forward(ntm).%s());' % (activation, activation))
+        graph.append('let hidden = (%s).%s().concat((%s).%s());' % (feature_sums['stm'], activation, feature_sums['ntm'], activation))
     heads = [(name, width) for name, width in (('score', 1), ('wdl', 3), ('uncertainty', 1)) if spec[name + '_outputs']]
     hidden_bucket_head = ('score' if spec['score_outputs'] else 'wdl') if spec['hidden_layers_bucketed'] and len(sizes) > 1 else None
     hidden_bucket_count = spec[hidden_bucket_head + '_buckets'] if hidden_bucket_head else 1
@@ -347,7 +355,6 @@ if count < max_active {
         last_size = size // 2 if index + 1 in pairwise_layers else size * 2 if index + 1 in dual_layers else size
     model_inputs = []
     bucket_mapping = []
-    graph_pattern = '(((stm, ntm), stm_ti), ntm_ti)' if split_ft else '(stm, ntm)'
     for name, width in heads:
         count = spec[name + '_buckets']
         model_inputs.append('.add_sparse("%s_buckets", (%d, 1), 1)' % (name, count))
@@ -393,6 +400,9 @@ if count < max_active {
             '}',
         ])
     formats, optimiser_params, export_tensors = export_recipe(spec)
+    ranger = spec['optimizer'] == 'ranger'
+    if ranger:
+        auxiliary_module += '\nmod ranger_support {\n' + indent((Path(__file__).parent / 'data' / 'builder_ranger.rs').read_text(), '    ') + '\n}\n'
     def stage_rows(channel):
         return ',\n'.join('    (%d, %d, %s, %s, %d)' % (stage['start'], stage['end'], repr(stage['initial']), repr(stage['final']), ('constant', 'linear', 'cosine').index(stage['kind'])) for stage in spec[channel + '_stages'])
     source = template.substitute(
@@ -407,6 +417,9 @@ if count < max_active {
         sparse_inputs=indent('\n'.join(sparse_inputs), '        '),
         feature_mapping=indent(feature_mapping, '            '),
         optimiser_params=indent('\n'.join(optimiser_params), '    '),
+        optimizer_type='Ranger' if ranger else 'AdamW',
+        optimizer_import='use ranger_support::{Ranger, RangerParams};' if ranger else 'use bullet_trainer::optimiser::adam::{AdamW, AdamWParams};',
+        optimizer_defaults=('RangerParams { alpha: %s, k: %d, ..Default::default() }' % (repr(spec['ranger_alpha']), spec['ranger_k'])) if ranger else 'AdamWParams::default()',
         bucket_mapping=indent('\n'.join(bucket_mapping), '            '),
         graph_outputs=', '.join('("%s".to_owned(), %s_output)' % (name, name) for name, _ in heads),
         loss=indent('\n'.join(loss), '        '), targets=indent('\n'.join(targets), '            '),
@@ -419,13 +432,17 @@ if count < max_active {
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
     files[MANIFEST] = json.dumps({
-        'version': 5, 'spec': spec, 'fingerprint': fingerprint(files, settings),
+        'version': 6, 'spec': spec, 'fingerprint': fingerprint(files, settings),
         'workload_bounds': True,
+        'optimizer': {'name': spec['optimizer'], 'decay': 0.01, 'beta1': 0.99 if ranger else 0.9, 'beta2': 0.999,
+                      'alpha': spec['ranger_alpha'] if ranger else None, 'k': spec['ranger_k'] if ranger else None,
+                      'lookahead_checkpoint_version': 1 if ranger else None},
         'bullet_source': 'https://github.com/jw1912/bullet/tree/' + BULLET_COMMIT,
         'export': {'mode': spec['export_mode'], 'tensors': export_tensors, 'byte_order': 'little', 'padding': 'bullet_to_64_bytes',
-                   'feature_weights': 'mixed_i16_i8' if split_ft else spec['feature_format'], 'feature_scale': 255 if spec['feature_format'] == 'i16' else 1,
+                   'feature_weights': 'per_tensor' if spec['export_mode'] == 'custom' and spec['feature_export'] else spec['feature_format'],
+                   'feature_scale': None if spec['export_mode'] == 'custom' and spec['feature_export'] else 255 if spec['feature_format'] == 'i16' else 1,
                    'dense_weights': 'per_tensor' if spec['export_mode'] != 'legacy' else 'f32',
-                   'dense_weights_transposed': False if split_ft else True if spec['export_mode'] == 'legacy' else None,
+                   'dense_weights_transposed': True if spec['export_mode'] == 'legacy' else None,
                    'heads': {name: {'buckets': spec[name + '_buckets'], 'outputs_per_bucket': width,
                                     'activation': {'score': 'sigmoid', 'wdl': 'softmax', 'uncertainty': 'identity'}[name],
                                     'weights': name + '/w', 'biases': name + '/b'} for name, width in heads},

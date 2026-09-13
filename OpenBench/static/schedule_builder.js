@@ -24,6 +24,7 @@
     let endpoint = data.post_url;
     let version = data.version;
     const denseExport = structuredClone(data.spec.dense_export || {});
+    const featureExport = structuredClone(data.spec.feature_export || {});
     let exportSignature = '';
 
     const message = (node, text, error = false) => {
@@ -145,56 +146,84 @@
         });
         return structuredClone(denseExport);
     };
+    const readFeatureExport = () => {
+        byId('feature-export').querySelectorAll('[data-feature-group]').forEach(row => {
+            featureExport[row.dataset.featureGroup] = Object.fromEntries([...row.querySelectorAll('[data-export-key]')].map(input =>
+                [input.dataset.exportKey, input.type === 'number' ? input.valueAsNumber : input.value]));
+        });
+        return structuredClone(featureExport);
+    };
+    const exportRow = (name, values, feature = false) => {
+        const row = document.createElement('fieldset');
+        if (feature) row.dataset.featureGroup = name;
+        else row.dataset.exportLayer = name;
+        row.className = 'builder-group';
+        const legend = document.createElement('legend');
+        legend.textContent = feature ? ({combined: 'Combined feature weights', psqt: 'PSQ / clock weights', pp: 'Pawn-pair weights', ti: 'Threat weights', bias: 'Shared feature bias'})[name]
+            : name.startsWith('l') ? 'Hidden layer L' + (Number(name.slice(1)) + 1) : name + ' output head';
+        row.append(legend);
+        const grid = document.createElement('div');
+        grid.className = 'field-grid';
+        for (const [key, value] of Object.entries(values)) {
+            const label = document.createElement('label');
+            label.className = key === 'transpose' ? 'choice' : 'field';
+            label.append(document.createTextNode(key.replaceAll('_', ' ')));
+            const input = document.createElement(key.endsWith('format') ? 'select' : 'input');
+            input.dataset.exportKey = key;
+            input.setAttribute('aria-label', name + ' ' + key.replaceAll('_', ' '));
+            if (key.endsWith('format')) {
+                for (const dtype of ['f32', 'i8', 'i16', 'i32']) input.add(new Option(dtype, dtype));
+                input.value = value;
+            } else if (key === 'transpose') {
+                input.type = 'checkbox'; input.checked = value;
+            } else {
+                const fractional = key.endsWith('divisor') || key.endsWith('clip');
+                Object.assign(input, {type: 'number', min: fractional ? '0.000001' : '1', max: fractional ? '1000000' : '2147483647', step: fractional ? 'any' : '1', required: true, value: String(value)});
+            }
+            label.append(input); grid.append(label);
+        }
+        row.append(grid);
+        return row;
+    };
     const syncExport = () => {
         const mode = field('export_mode').value;
         const layerCount = byId('layers').querySelectorAll('[data-layer]').length;
         const names = Array.from({length: Math.max(0, layerCount - 1)}, (_, i) => 'l' + (i + 1));
         names.push(...['score', 'wdl', 'uncertainty'].filter(name => field(name + '_outputs').checked));
-        const signature = mode + ':' + names.join(',');
-        if (mode === 'heimdall') field('feature_format').value = 'i16';
-        field('feature_format').disabled = mode === 'heimdall';
+        const groups = field('split_features').checked ? [
+            ...(field('psqt_inputs').checked || field('half_move_clock').checked ? ['psqt'] : []),
+            ...(field('pawn_pair_inputs').checked ? ['pp'] : []), ...(field('threat_inputs').checked ? ['ti'] : []), 'bias'] : ['combined', 'bias'];
+        const signature = mode + ':' + names.join(',') + ':' + groups.join(',');
+        field('split_features').disabled = mode !== 'custom';
+        field('feature_format').disabled = mode === 'custom';
+        byId('feature-export-options').hidden = mode !== 'custom';
         byId('dense-export').hidden = mode !== 'custom';
-        byId('export-note').textContent = mode === 'heimdall'
-            ? 'Heimdall: PSQ i16×255, TI i8×255, dense i8/i32, native input-major layout. Applies training-time PSQ/TI/L2 weight limits. Requires mirrored PSQ+TI, L1 divisible by 128, hidden sizes 16/32, pairwise CReLU L1, dual L2, eight bucketed score outputs only. This preset matches export/clipping, not the reference trainer’s factorizer or regularization.'
-            : mode === 'custom'
-                ? 'Choose weights and biases independently for each dense layer/head. Integer tensors use rounded quantization and training-time clipping to their representable range (within AdamW’s default bounds). Float32 scales must be 1. Transpose means output-major storage; unchecked uses Bullet’s native input-major order.'
-                : 'Only the feature layer is quantized by the i16 option. All dense hidden layers and output heads remain float32, in output-major order. This is not Heimdall’s integer network format.';
+        byId('export-note').textContent = mode === 'custom'
+            ? 'Choose every tensor’s format, scale, export divisor and symmetric training clip. Export divides weights by the divisor before rounding/scaling; training bounds automatically account for it. Clip limits the unscaled trained values. Float32 scales must be 1. Transpose means output-major storage; unchecked uses native input-major order.'
+            : 'Only the feature layer is quantized by the i16 option. All dense hidden layers and output heads remain float32, in output-major order.';
         if (signature === exportSignature) return;
         readDenseExport();
+        readFeatureExport();
         exportSignature = signature;
         byId('dense-export').replaceChildren();
+        byId('feature-export').replaceChildren();
         if (mode !== 'custom') return;
+        for (const name of groups) {
+            const values = featureExport[name] || {format: field('feature_format').value, scale: field('feature_format').value === 'i16' ? 255 : 1, divisor: 1, clip: 1.98};
+            byId('feature-export').append(exportRow(name, values, true));
+        }
         for (const name of names) {
-            const values = denseExport[name] || {weight_format: 'f32', weight_scale: 1, bias_format: 'f32', bias_scale: 1, transpose: true};
-            const row = document.createElement('fieldset');
-            row.dataset.exportLayer = name;
-            row.className = 'builder-group';
-            const legend = document.createElement('legend');
-            legend.textContent = name.startsWith('l') ? 'Hidden layer L' + (Number(name.slice(1)) + 1) : name + ' output head';
-            row.append(legend);
-            const grid = document.createElement('div');
-            grid.className = 'field-grid';
-            for (const [key, value] of Object.entries(values)) {
-                const label = document.createElement('label');
-                label.className = key === 'transpose' ? 'choice' : 'field';
-                label.append(document.createTextNode(key.replaceAll('_', ' ')));
-                const input = document.createElement(key.endsWith('_format') ? 'select' : 'input');
-                input.dataset.exportKey = key;
-                input.setAttribute('aria-label', name + ' ' + key.replaceAll('_', ' '));
-                if (key.endsWith('_format')) {
-                    for (const dtype of ['f32', 'i8', 'i16', 'i32']) input.add(new Option(dtype, dtype));
-                    input.value = value;
-                } else if (key === 'transpose') {
-                    input.type = 'checkbox'; input.checked = value;
-                } else {
-                    Object.assign(input, {type: 'number', min: '1', max: '2147483647', step: '1', required: true, value: String(value)});
-                }
-                label.append(input); grid.append(label);
-            }
-            row.append(grid); byId('dense-export').append(row);
+            const values = {weight_format: 'f32', weight_scale: 1, weight_divisor: 1, weight_clip: 1.98, bias_format: 'f32', bias_scale: 1, bias_divisor: 1, bias_clip: 1.98, transpose: true, ...denseExport[name]};
+            byId('dense-export').append(exportRow(name, values));
         }
     };
     const syncNetwork = () => {
+        const ranger = field('optimizer').value === 'ranger';
+        byId('ranger-options').hidden = !ranger;
+        byId('ranger-options').querySelectorAll('input').forEach(input => { input.disabled = !ranger; });
+        byId('optimizer-note').textContent = ranger
+            ? 'Bullet Ranger: RAdam + Lookahead. β₁=0.99, β₂=0.999, decay=0.01; defaults α=0.5, interval=6 optimizer steps. Export clipping still applies. Checkpoints preserve slow weights and both step counters. Changing optimizer or Lookahead settings requires a new run.'
+            : 'Bullet AdamW: β₁=0.9, β₂=0.999, decay=0.01. Existing schedules remain on AdamW. Export clipping still applies.';
         for (const name of ['score', 'wdl', 'uncertainty']) {
             field(name + '_buckets').disabled = !field(name + '_outputs').checked;
         }
@@ -685,6 +714,8 @@
         spec.pairwise_layers = byId('pairwise-layers').value.split(',').map(Number);
         spec.dual_layers = byId('dual-layers').value.split(',').map(Number);
         spec.dense_export = readDenseExport();
+        spec.feature_export = readFeatureExport();
+        spec.split_features = spec.export_mode === 'custom' && field('split_features').checked;
         for (const key of ['wdl_model_params_a', 'wdl_model_params_b']) spec[key] = [...byId('wdl-coefficients').querySelectorAll('[data-coefficient="' + key + '"]')].map(input => input.valueAsNumber);
         if (!spec.psqt_inputs && !spec.half_move_clock) {
             spec.input_buckets = 1;

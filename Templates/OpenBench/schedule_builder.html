@@ -71,9 +71,14 @@
                     </div>
                     <div class="builder-group">
                         <h2>Network export</h2>
-                        <div class="field"><label for="builder-export-mode">Binary format</label><select id="builder-export-mode" name="export_mode"><option value="legacy">Generic · float32 dense layers (legacy)</option><option value="custom">Custom · per-layer quantization</option><option value="heimdall">Heimdall · integer PSQ+TI multilayer</option></select></div>
+                        <div class="field"><label for="builder-export-mode">Binary format</label><select id="builder-export-mode" name="export_mode"><option value="legacy">Generic · float32 dense layers (legacy)</option><option value="custom">Custom · per-tensor quantization</option></select></div>
                         <div class="field"><label for="builder-feature-format">Feature layer export</label><select id="builder-feature-format" name="feature_format"><option value="i16">i16 · scale 255</option><option value="f32">f32</option></select></div>
                         <p class="builder-note" id="builder-export-note"></p>
+                        <div id="builder-feature-export-options" hidden>
+                            <label class="choice"><input type="checkbox" name="split_features">Separate feature groups</label>
+                            <p class="builder-note">Separate PSQ/clock, pawn-pair and threat weights for independent export formats and training limits. Groups are summed with one shared bias before activation. Stored order: PSQ/clock, pawn pairs, threats, bias, then dense layers and output heads.</p>
+                            <div id="builder-feature-export"></div>
+                        </div>
                         <div id="builder-dense-export" hidden></div>
                         <p class="builder-note">Export settings describe stored weights and biases, not output bucket counts or prediction activations. They must match your engine's loader and integer arithmetic. Changing export/clipping settings requires a new training run; existing artifacts are not converted.</p>
                     </div>
@@ -103,6 +108,15 @@
                     </div>
                 </dialog>
                 <section class="builder-panel" id="panel-training" role="tabpanel" aria-labelledby="tab-training" hidden>
+                    <div class="builder-group">
+                        <h2>Optimizer</h2>
+                        <label class="field">Algorithm<select name="optimizer"><option value="adamw">AdamW (default)</option><option value="ranger">Ranger (RAdam + Lookahead)</option></select></label>
+                        <div id="builder-ranger-options" class="field-grid" hidden>
+                            <label class="field">Lookahead alpha<input name="ranger_alpha" type="number" min="0.000001" max="1" step="any" required></label>
+                            <label class="field">Lookahead interval (steps)<input name="ranger_k" type="number" min="1" max="1000000" step="1" required></label>
+                        </div>
+                        <p class="builder-note" id="builder-optimizer-note"></p>
+                    </div>
                     <div class="builder-group">
                         <div class="field-grid">
                             <div class="field"><label for="builder-superbatches">Superbatches</label><input id="builder-superbatches" name="superbatches" type="number" min="1" max="1000000" required></div>

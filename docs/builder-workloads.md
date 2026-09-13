@@ -1,18 +1,50 @@
-# Builder v5 and sequential training workloads
+# Builder v6 and sequential training workloads
 
-Builder manifests now use version 5. Existing schedules retain their LR interpolation and legacy export conventions when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New builder runs default to 50 SB per workload; custom source requires uninterrupted training. A new run may reuse an architecture-compatible checkpoint.
+Builder manifests now use version 6. Existing schedules retain their LR interpolation and legacy export conventions when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New builder runs default to 50 SB per workload; custom source requires uninterrupted training. A new run may reuse an architecture-compatible checkpoint.
 
 ## Network export and clipping
 
 The old **Feature layer export: i16** setting only quantized the combined feature weights and biases at scale 255. Dense hidden layers and all prediction heads remained float32, transposed to output-major storage. It did not produce Heimdall-compatible files or impose Heimdall's weight limits. Older schedules retain that behavior under **Generic (legacy)**.
 
-**Custom** selects f32/i8/i16/i32, integer scales, and matrix layout separately for each dense layer/head's weights and biases. Biases are never transposed. Float32 scales must be 1; Bullet's i8/i16 quantization multipliers are limited to 32767 and i32 multipliers to 2147483647. Integer tensors receive symmetric training-time clipping to their representable range, capped at AdamW's default 1.98. Exports round ties away from zero and reject overflow; they do not silently clamp at save time. These are weight/bias export settings, not quantization of the model's predicted scores.
+**Custom** selects f32/i8/i16/i32, integer scales, export divisors and symmetric training clips separately for each feature tensor and dense layer/head's weights and biases. Dense weights also have a transpose toggle; biases and feature weights are never transposed. The divisor is applied to float weights before rounding and scaling, without changing the training graph. The clip limits unscaled trained values (default 1.98); integer tensors additionally receive automatic bounds accounting for their scale and divisor, with a small safety margin. Float32 scales must be 1; Bullet's i8/i16 quantization multipliers are limited to 32767 and i32 multipliers to 2147483647. Divisors and clips must be finite and between 0.000001 and 1000000. Exports round ties away from zero and reject overflow; they do not silently clamp at save time. These are weight/bias export settings, not quantization of predicted scores.
 
-**Heimdall** implements the mixed integer layout in `bullet/examples/advanced/main.rs`: PSQ i16×255, TI i8×255, FT biases i16×255, first dense weights i8×128 with the `(255/256)^2` correction, first dense biases i32×16384, later weights i32×64 and biases i32×64³/64⁴. Matrices retain input-major/bucket/neuron ordering. PSQ and TI are separate parameter tensors with separate optimizer limits; they are summed before pairwise activation. The preset requires the supported mirrored PSQ+TI topology, L1 divisible by 128, hidden sizes 16/32, CReLU pairwise L1, dual L2, and eight bucketed score outputs. Input bucket count and L1 width remain configurable; engine build settings must match. Use the schedule's evaluation scale in the engine. This preset covers export and clipping, not the reference trainer's factorizer or activity regularization.
+**Separate feature groups** creates independently clipped/serialized parameter tensors for PSQ/clock, pawn pairs, and threats, followed by one shared feature bias. They are summed before activation. This works with all supported feature combinations, layer sizes, activations and output heads. It does not impose any engine-specific topology. The old Heimdall preset has been removed; saved manifests using it reopen as explicit custom settings for backward compatibility.
+
+For example, to match Heimdall's mixed integer loader, enable separate feature groups, disable pawn pairs/clock, and enter these ordinary custom settings. Leave every transpose unchecked and every divisor at 1 except where shown:
+
+| Tensor | Format | Scale | Divisor | Training clip |
+| --- | --- | --- | --- | --- |
+| PSQ weights | i16 | 255 | 1 | 0.99 |
+| TI weights | i8 | 255 | 1 | 127/255 |
+| Feature bias | i16 | 255 | 1 | 1.98 |
+| L2 weights | i8 | 128 | 0.9922027587890625 | 0.9844511747360229 |
+| L2 bias | i32 | 16384 | 1 | 1.98 |
+| L3 weights / bias | i32 | 64 / 262144 | 1 | 1.98 |
+| Score weights / bias | i32 | 64 / 16777216 | 1 | 1.98 |
+
+The L2 divisor is exactly `(255/256)^2`; its clip is `(127/128)*(255/256)^2`. Numeric inputs accept decimal values, not expressions. This matches export and clipping, not the reference trainer's factorizer or activity regularization. Architecture, bucket layout and evaluation scale must also match the engine.
 
 Changing export mode or custom clipping settings is rejected on checkpoint resume. In particular, old combined-FT checkpoints cannot be loaded into the split PSQ/TI graph. Existing completed networks remain unchanged; converting/fine-tuning them is a separate operation. Manifests list every serialized tensor's type, scale, layout, transform and clipping expression, with little-endian encoding and Bullet padding to 64 bytes.
 
-To check real exported bytes against raw float weights, run `bin/python Scripts/verify_builder_export.py CHECKPOINT_DIRECTORY SPEC_JSON` (requires NumPy). GPU fixture preparation accepts `--heimdall` or `--custom-export`; the GPU continuation test independently verifies every exported tensor for these modes, in addition to checkpoint resume and workload boundaries.
+Run `Deploy/update-builder-schedule.py --help` for a guarded API updater using a local session file. It previews before saving, backs up the current builder payload with owner-only permissions, uses optimistic schedule version checks, verifies the saved settings by reloading the builder, and never starts training. `--check` only previews. Deploy the new builder before applying settings requiring new controls. The retired preset's bounds differ slightly from the generic overflow-safe clipping, so moving one of its old checkpoints to custom export requires a new run.
+
+To check real exported bytes against raw float weights, run `bin/python Scripts/verify_builder_export.py CHECKPOINT_DIRECTORY SPEC_JSON` (requires NumPy). GPU fixture preparation accepts `--split-export` or `--custom-export`; the GPU continuation test independently verifies every exported tensor for these modes, in addition to checkpoint resume and workload boundaries.
+
+## Optimizers and Ranger checkpoints
+
+The Training tab offers **AdamW** (the default for new and existing schedules) and **Ranger**. Both use Bullet's decay 0.01 and beta2 0.999; AdamW uses beta1 0.9 and Ranger uses beta1 0.99. Ranger combines RAdam with Lookahead, defaulting to alpha 0.5 and interval 6 optimizer updates (batches), not superbatches. Alpha is configurable in `0.000001..1` and the interval in `1..1000000`. Export-specific clipping uses the selected optimizer's parameter type and preserves its Lookahead settings. Neither optimizer is selected automatically for an existing schedule.
+
+Pinned Bullet `629ee50000b2afb7b3337595401c830d3b1e0f42` saves Ranger's slow weights and the inner RAdam step counter but omits the outer Lookahead counter. Resuming at step 8 with interval 6 therefore postpones the next Lookahead update from global step 12 to 14. The generated trainer embeds `builder_ranger.rs`, a small adaptation of Bullet's Ranger implementation using Bullet's RAdam and kernels, with the outer counter saved/restored as `optimiser_state/lookahead_step.txt`. It does not modify the Bullet checkout or require companion source files when downloading generated Rust. Bullet's other behavior, including zero-initialized slow weights, is retained.
+
+Ranger archives must include `slow.bin`, `step.txt`, and `lookahead_step.txt` in addition to the normal weights/momentum/velocity and exported network. The server checks these even for uninterrupted Ranger runs. Resuming with another optimizer or changed Lookahead settings is rejected; LR/WDL/duration changes remain supported. Existing AdamW checkpoints keep their current contract.
+
+Reproduce the upstream issue and check the compatibility fix with:
+
+```sh
+HIP_PATH=/opt/rocm bin/python Scripts/verify_ranger_resume.py /tmp/bullet rocm
+```
+
+This optimizer-only GPU test uses deterministic gradients, checks bit-identical updates and clipping across checkpoints at steps 6/8 with interval 6 and step 5 with interval 4, and excludes dataset-reader effects. The unpatched upstream case must diverge at unaligned boundaries; the embedded implementation must match at every step. Add `--ranger --split-export` to `Scripts/prepare_builder_gpu.py`, then run the GPU continuation test to check real training, export, uploads and resumed counters across workloads.
 
 ## Builder behavior
 
@@ -20,7 +52,7 @@ New schedules use the score output's material-count bucket selector throughout t
 
 **Dual activation** can be enabled on L2, L3, or both. It concatenates `CReLU(x)` and `CReLU(x²)` after bucket selection, matching Heimdall's `x.concat(x.abs_pow(2.0)).crelu()`. In particular, negative inputs still contribute to the squared branch. Each selected layer doubles its output width. Pairwise activation remains a separate operation that multiplies activated halves; the two cannot be selected on the same layer. Skip connections compare widths after activation. Checkpoint resumption requires the same dual activation layers.
 
-For Heimdall's activation and dense-bucketing structure, use layers `512, 16, 32`, eight score output buckets, hidden output bucketing, pairwise CReLU × CReLU on the feature layer, dual activation on L2, and CReLU elsewhere. This does not change the builder's generic export format or implement Heimdall's custom weight quantization and regularization.
+For Heimdall's activation and dense-bucketing structure, use layers `512, 16, 32` (or override L1 in the engine), eight score output buckets, hidden output bucketing, pairwise CReLU × CReLU on the feature layer, dual activation on L2, and CReLU elsewhere. Set the custom export controls separately as above.
 
 Both LR and WDL editors accept lengths or inclusive boundaries. The run total is explicit: changing it does not adjust stages. Each channel must cover that total independently. Adding a stage splits the last stage; removing one transfers its duration to its neighbor. Entry modes are presentation metadata; execution uses canonical inclusive ranges. Dataset selectors use the union of both channels’ boundaries.
 

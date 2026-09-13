@@ -45,8 +45,8 @@ def checkpoint_ready(request, pk):
             raise ValidationError('Checkpoint artifacts belong to another workload attempt.')
         archive_replicated = verify_artifact(archive)
         network_replicated = verify_artifact(network)
-        if workload:
-            validate_resume_archive(archive, network)
+        if workload or ranger_checkpoint(run.snapshot):
+            validate_resume_archive(archive, network, run.snapshot)
         checkpoint = TrainingCheckpoint.objects.create(run=run, superbatch=superbatch, archive=archive, network=network, metadata=metadata)
         if workload and superbatch > run.completed_superbatches:
             run.completed_superbatches = superbatch
@@ -56,11 +56,21 @@ def checkpoint_ready(request, pk):
     return JsonResponse({'checkpoint': checkpoint.pk, 'superbatch': superbatch, 'stored': True, 'replicated': archive_replicated and network_replicated})
 
 
-def validate_resume_archive(archive, network):
+def ranger_checkpoint(snapshot):
+    from OpenBench.schedule_builder import MANIFEST
+    try:
+        return json.loads(snapshot.get('files', {}).get(MANIFEST, '{}')).get('spec', {}).get('optimizer') == 'ranger'
+    except (TypeError, ValueError, AttributeError):
+        raise ValidationError('Cannot verify the checkpoint optimizer configuration.') from None
+
+
+def validate_resume_archive(archive, network, snapshot=None):
     import hashlib
     import tarfile
     import zstandard
     required = {'optimiser_state/weights.bin', 'optimiser_state/momentum.bin', 'optimiser_state/velocity.bin', 'quantised.bin'}
+    if snapshot and ranger_checkpoint(snapshot):
+        required |= {'optimiser_state/slow.bin', 'optimiser_state/step.txt', 'optimiser_state/lookahead_step.txt'}
     found = set()
     total = 0
     try:
@@ -85,7 +95,7 @@ def validate_resume_archive(archive, network):
     except (OSError, tarfile.TarError, zstandard.ZstdError):
         raise ValidationError('Cannot read the optimizer checkpoint archive.') from None
     if found != required:
-        raise ValidationError('Workload checkpoints require weights, momentum, velocity and the exported network.')
+        raise ValidationError('Incomplete optimizer checkpoint. Missing: %s.' % ', '.join(sorted(required - found)))
 
 
 def checkpoint_users(checkpoints):
@@ -230,6 +240,8 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
             after_manifest = json.loads(files[MANIFEST])
             before = validate_spec(before_manifest['spec'])
             after = validate_spec(after_manifest['spec'])
+            if before_manifest['spec'].get('export_mode') == 'heimdall' and after_manifest.get('version', 1) >= 6:
+                raise ValidationError('The retired export preset uses different training-clipping bounds. Start a new training run with custom exports.')
             if (before_manifest.get('version', 1) >= 3) != (after_manifest.get('version', 1) >= 3):
                 raise ValidationError('Independent output heads require a new training run. This checkpoint uses a different output architecture.')
             before_threats = before_manifest.get('export', {}).get('threat_features', 59808 if before['threat_inputs'] else 0)
@@ -241,9 +253,11 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
         architecture = ('layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
                         'half_move_clock', 'merged_king_planes', 'score_outputs', 'score_buckets', 'wdl_outputs', 'wdl_buckets',
                         'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation', 'dual_activation')
+        if before['optimizer'] != after['optimizer'] or (before['optimizer'] == 'ranger' and any(before[key] != after[key] for key in ('ranger_alpha', 'ranger_k'))):
+            raise ValidationError('The checkpoint requires the same optimizer and Lookahead settings. Start a new run to change them.')
         if any(before[key] != after[key] for key in architecture):
             raise ValidationError('The checkpoint requires the same network architecture. You can change WDL, learning rate and training duration.')
-        if any(before[key] != after[key] for key in ('export_mode', 'feature_format')) or (before['export_mode'] == 'custom' and before['dense_export'] != after['dense_export']):
+        if any(before[key] != after[key] for key in ('export_mode', 'feature_format', 'split_features')) or (before['export_mode'] == 'custom' and any(before[key] != after[key] for key in ('dense_export', 'feature_export'))):
             raise ValidationError('The checkpoint requires the same export and training-clipping settings. Changing the export contract requires a new training run.')
         if len(before['layers']) > 1 and before['hidden_layers_bucketed'] != after['hidden_layers_bucketed']:
             raise ValidationError('The checkpoint requires the same hidden-layer output bucketing.')

@@ -16,6 +16,7 @@ os.environ.setdefault('OPENBENCH_DISABLE_WATCHERS', '1')
 import django
 django.setup()
 from OpenBench.schedule_builder import BULLET_COMMIT, DEFAULT_SPEC, generate_schedule
+from OpenBench.tests.builder_fixtures import integer_export
 
 root = Path(sys.argv[1]).resolve()
 manifest = root / 'crates/bullet_lib/Cargo.toml'
@@ -33,7 +34,13 @@ for name, changes in (
     ('dual_both', dict(layers=[32, 8, 8], dual_activation=True, dual_layers=[2, 3], skip_connection=True)),
     ('wdl_buckets', dict(layers=[32, 8, 8], score_outputs=False, wdl_outputs=True, wdl_buckets=4, uncertainty_outputs=True, uncertainty_buckets=2)),
     ('shared_hidden', dict(layers=[32, 8, 8], hidden_layers_bucketed=False)),
-    ('heimdall_integer', dict(layers=[768, 16, 32], pairwise_activation=True, dual_activation=True, activation='crelu', threat_inputs=True, export_mode='heimdall')),
+    ('split_integer', dict(layers=[768, 16, 32], pairwise_activation=True, dual_activation=True, activation='crelu', threat_inputs=True, **integer_export())),
+    ('split_all_groups', dict(layers=[32, 8, 16], pawn_pair_inputs=True, half_move_clock=True, merged_king_planes=True, threat_inputs=True, **integer_export())),
+    ('split_ti_only', dict(layers=[32], psqt_inputs=False, threat_inputs=True, **integer_export())),
+    ('ranger', dict(optimizer='ranger', ranger_alpha=0.3, ranger_k=4)),
+    ('ranger_split', dict(layers=[768, 16, 32], pairwise_activation=True, dual_activation=True, activation='crelu', threat_inputs=True, optimizer='ranger', **integer_export())),
+    ('ranger_custom', dict(layers=[32, 8], optimizer='ranger', export_mode='custom', dense_export={
+        'score': dict(weight_format='i8', weight_scale=128, bias_format='i32', bias_scale=16384, transpose=False)})),
     ('custom_integer', dict(layers=[32, 8, 8], export_mode='custom', dense_export={
         'l1': dict(weight_format='i8', weight_scale=128, bias_format='i32', bias_scale=16384, transpose=False),
         'l2': dict(weight_format='i16', weight_scale=255, bias_format='i16', bias_scale=255, transpose=True),

@@ -16,14 +16,23 @@ def verify_export(directory, spec):
     binary = (directory / 'quantised.bin').read_bytes()
     raw_offset = byte_offset = 0
     l1 = spec['layers'][0]
-    heimdall = spec.get('export_mode') == 'heimdall'
-    if heimdall:
-        shapes = [('l0/psqt', (spec['input_buckets'] * 768, l1)), ('l0/ti/w', (60144, l1)), ('l0/ti/b', (l1,))]
+    features = ((704 if spec['merged_king_planes'] else 768) if spec['psqt_inputs'] else 0) + (11 if spec['half_move_clock'] else 0)
+    features *= spec['input_buckets']
+    groups = [(name, size) for name, size in [('psqt', features), ('pp', 4560 if spec['pawn_pair_inputs'] else 0),
+              ('ti', (59808 if spec['pawn_pair_inputs'] else 60144) if spec['threat_inputs'] else 0)] if size]
+    feature_rows = {}
+    if spec.get('split_features'):
+        shapes = []
+        for index, (name, size) in enumerate(groups):
+            tensor = 'l0/' + name + ('/w' if index == len(groups) - 1 else '')
+            shapes.append((tensor, (size, l1)))
+            feature_rows[tensor] = spec.get('feature_export', {}).get(name)
+        tensor = 'l0/' + groups[-1][0] + '/b'
+        shapes.append((tensor, (l1,)))
+        feature_rows[tensor] = spec.get('feature_export', {}).get('bias')
     else:
-        features = ((704 if spec['merged_king_planes'] else 768) if spec['psqt_inputs'] else 0) + (11 if spec['half_move_clock'] else 0)
-        features *= spec['input_buckets']
-        features += ((59808 if spec['pawn_pair_inputs'] else 60144) if spec['threat_inputs'] else 0) + (4560 if spec['pawn_pair_inputs'] else 0)
-        shapes = [('l0/w', (features, l1)), ('l0/b', (l1,))]
+        shapes = [('l0/w', (sum(size for _, size in groups), l1)), ('l0/b', (l1,))]
+        feature_rows = {tensor: spec.get('feature_export', {}).get(name) for name, tensor in [('combined', 'l0/w'), ('bias', 'l0/b')]}
     pairwise = spec['pairwise_layers'] if spec['pairwise_activation'] else []
     dual = spec['dual_layers'] if spec['dual_activation'] else []
     width = l1 if 1 in pairwise else 2 * l1
@@ -37,26 +46,18 @@ def verify_export(directory, spec):
         if spec[name + '_outputs']:
             count = outputs * spec[name + '_buckets']
             shapes += [(name + '/w', (width, count)), (name + '/b', (count,))]
-    integer_recipe = [('i16', 255), ('i8', 255), ('i16', 255), ('i8', 128), ('i32', 16384),
-                      ('i32', 64), ('i32', 262144), ('i32', 64), ('i32', 16777216)]
     for index, (tensor, shape) in enumerate(shapes):
         count = int(np.prod(shape))
         values = raw[raw_offset:raw_offset + count].reshape(shape)
         raw_offset += count
         assert np.isfinite(values).all(), tensor
-        if heimdall:
-            dtype, scale = integer_recipe[index]
-            if tensor == 'l0/psqt':
-                assert np.abs(values).max() <= np.float32(0.99), tensor
-            if tensor == 'l0/ti/w':
-                assert np.abs(values).max() <= np.float32(127) / np.float32(255), tensor
-            if tensor == 'l1/w':
-                ratio = np.float32(255) / np.float32(256)
-                assert np.abs(values).max() <= np.float32(127 / 128) * ratio * ratio, tensor
-                values = values / np.float32(ratio * ratio)
-        elif tensor.startswith('l0/'):
-            dtype = spec['feature_format']
-            scale = 255 if dtype == 'i16' else 1
+        if tensor.startswith('l0/'):
+            row = feature_rows[tensor] if spec.get('export_mode') == 'custom' else None
+            if row is None:
+                dtype = spec['feature_format']
+                scale = 255 if dtype == 'i16' else 1
+            else:
+                dtype, scale = row['format'], row['scale']
         else:
             name, suffix = tensor.split('/')
             row = spec.get('dense_export', {}).get(name, {}) if spec.get('export_mode') == 'custom' else {}
@@ -64,6 +65,16 @@ def verify_export(directory, spec):
             dtype, scale = row.get(kind + '_format', 'f32'), row.get(kind + '_scale', 1)
             if suffix == 'w' and row.get('transpose', True):
                 values = values.T
+            row = {key: row.get(kind + '_' + key, default) for key, default in [('divisor', 1), ('clip', 1.98)]}
+        if row is not None and spec.get('export_mode') == 'custom':
+            divisor = np.float32(row.get('divisor', 1))
+            limit = np.float32(row.get('clip', 1.98))
+            if dtype != 'f32':
+                maximum = {'i8': 127, 'i16': 32767, 'i32': 2147483647}[dtype]
+                limit = min(limit, np.float32(0.999999) * (np.float32(maximum) / np.float32(scale)) * divisor)
+            assert np.abs(values).max() <= limit, tensor
+            if divisor != 1:
+                values = values / divisor
         if dtype == 'f32':
             expected = values.astype('<f4').tobytes()
         else:
