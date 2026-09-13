@@ -22,11 +22,21 @@ def preset_version(rows):
     return fingerprint([[str(row.pk), row.name, row.settings, row.position] for row in rows])
 
 
+def editable_engines(user):
+    engines = EngineConfig.objects.filter(enabled=True)
+    if not user.is_active:
+        return engines.none()
+    if user.is_staff or user.is_superuser:
+        return engines
+    return engines.filter(maintainers=user)
+
+
 def preset_data(user, kind):
     engines = list(EngineConfig.objects.filter(enabled=True))
     rows = list(WorkloadPreset.objects.filter(engine__in=engines, workload_type=kind).filter(Q(owner=None) | Q(owner=user)).select_related('engine'))
     hidden = {row.engine_id for row in rows if row.owner_id is None and row.name != 'default'}
-    editable = {engine.name: user.is_active and user.is_superuser for engine in engines}
+    editable_ids = set(editable_engines(user).values_list('pk', flat=True))
+    editable = {engine.name: engine.pk in editable_ids for engine in engines}
     return {
         'versions': {engine.name: {scope: preset_version([row for row in rows if row.engine_id == engine.pk and
                      (row.owner_id is None if scope == 'engine' else row.owner_id == user.pk)])
@@ -44,7 +54,7 @@ def change_preset(user, kind, data):
     if data.get('scope') not in ('personal', 'engine'):
         raise ValidationError('Choose where to save the preset')
     owner = user if data['scope'] == 'personal' else None
-    if not user.is_active or (owner is None and not user.is_superuser):
+    if not user.is_active or (owner is None and not editable_engines(user).filter(pk=engine.pk).exists()):
         raise PermissionDenied
     siblings = engine.presets.filter(owner=owner, workload_type=kind)
     if data.get('version') != preset_version(siblings):
