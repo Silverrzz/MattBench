@@ -72,15 +72,30 @@ def remove_work_directory(path, root):
         raise RuntimeError('Could not clean up %s: %s' % (path, error)) from error
 
 
+def preserve_work_directory(path, root):
+    root = root.resolve()
+    target = path.resolve()
+    if target == root or not target.is_relative_to(root) or path.is_symlink():
+        raise RuntimeError('Preservation path escapes the worker directory: %s' % path)
+    if path.exists():
+        destination = root / ('failed-%s-%s' % (path.name, uuid.uuid4().hex))
+        try:
+            path.rename(destination)
+        except OSError as error:
+            print('Unfinished training files retained in %s; could not rename the directory: %s' % (path, error))
+            return
+        print('Unfinished training files preserved in %s. They are not automatically resumed or deleted.' % destination)
+
+
 def cleanup_runs(root):
     for record in root.glob('.process-*.json'):
-        match = re.fullmatch(r'\.process-([0-9]+)(?:-[a-f0-9]+)?\.json', record.name)
+        match = re.fullmatch(r'\.process-([0-9]+(?:-[a-f0-9]{32})?)(?:-[a-f0-9]+)?\.json', record.name)
         if match:
             stop_previous(root / match[1])
     for directory in root.iterdir():
-        if re.fullmatch(r'[0-9]+', directory.name):
+        if re.fullmatch(r'[0-9]+(?:-[a-f0-9]{32})?', directory.name):
             stop_previous(directory)
-            remove_work_directory(directory, root)
+            preserve_work_directory(directory, root)
     remove_work_directory(root / 'transfer-cache', root)
 
 
@@ -519,6 +534,14 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
             broken_games = int(broken[-1]) if broken else 0
             temporary.unlink()
         if not target.is_file() or target.stat().st_size == 0:
+            if config['skip_broken_games'] and not is_viri:
+                target.unlink(missing_ok=True)
+                source_path.unlink(missing_ok=True)
+                with reporter.lock:
+                    reporter.metrics['skipped_files'] = reporter.metrics.get('skipped_files', 0) + 1
+                    reporter.metrics['skipped_games'] = reporter.metrics.get('skipped_games', 0) + broken_games
+                reporter.write('%s: conversion produced no training games; skipping this member.\n' % name)
+                return None
             raise RuntimeError('Conversion produced an empty dataset for %s.' % name)
         if config['skip_broken_games']:
             cleaned = target.with_suffix('.clean.vf')
@@ -656,6 +679,11 @@ def execute(connection, job, root, pawnocchio):
         connection = Connection(connection.server, connection.headers['X-Training-Worker'], connection.headers['Authorization'].removeprefix('Bearer '))
         connection.headers['X-Training-Claim'] = job['workload']['claim_token']
     directory = root / str(job['id'])
+    if directory.exists():
+        stop_previous(directory)
+        preserve_work_directory(directory, root)
+        if directory.exists():
+            directory = root / ('%d-%s' % (job['id'], uuid.uuid4().hex))
     cache_root = root / 'cache'
     training_cache.evict(cache_root, job.get('required_disk_bytes', (job['snapshot']['settings'].get('disk_reserve_gb', 10) * 1024 ** 3) + job['dataset'].get('size', 0)))
     directory.mkdir(exist_ok=False)
@@ -871,7 +899,10 @@ def execute(connection, job, root, pawnocchio):
                     repository = directory / 'bullet'
                     executable = repository / job['snapshot']['settings']['run'][0]
                     training_cache.put(cache_root / 'builds', build_cache_key, repository, [executable, repository / 'Cargo.lock'])
-            remove_work_directory(directory, root)
+            if reporter and reporter.state == 'COMPLETED':
+                remove_work_directory(directory, root)
+            else:
+                preserve_work_directory(directory, root)
             remove_work_directory(root / 'transfer-cache', root)
     return interrupted.is_set()
 

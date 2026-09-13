@@ -65,6 +65,7 @@ urlpatterns = [
     django.urls.path('api/training/<int:pk>/resume/', training_checkpoints.resume_download),
     django.urls.path('api/training/<int:pk>/dataset/prepare/', training_datasets.prepare),
     django.urls.path('api/training/<int:pk>/dataset/prepare/token/', training_datasets.dataset_token),
+    django.urls.path('api/training/<int:pk>/dataset/prepare/upload/', training_datasets.dataset_upload),
     django.urls.path('api/training/<int:pk>/dataset/prepare/publish/', training_datasets.publish_dataset),
     django.urls.path('api/lifecycle/events/', training_views.lifecycle_events),
 

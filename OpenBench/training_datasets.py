@@ -2,7 +2,7 @@ import base64
 import json
 import hashlib
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 from django.core.exceptions import ValidationError
@@ -112,6 +112,49 @@ def dataset_token(request, pk):
     result['X-Xet-Cas-Url'] = token['casUrl']
     result['X-Xet-Access-Token'] = token['accessToken']
     result['X-Xet-Token-Expiration'] = str(token['exp'])
+    return result
+
+
+@worker_endpoint
+@require_POST
+def dataset_upload(request, pk):
+    run, stage, source, plan = publication_context(request, pk)
+    data = json_body(request, limit=4096)
+    path, size, oid = data.get('path'), data.get('size'), data.get('sha256')
+    if not isinstance(path, str) or not re.fullmatch(re.escape(plan['prefix']) + r'[0-9]{5}\.vf', path):
+        raise ValidationError('Invalid prepared dataset path.')
+    if type(size) is not int or size <= 0 or not isinstance(oid, str) or not re.fullmatch(r'[a-f0-9]{64}', oid):
+        raise ValidationError('Invalid prepared dataset size or checksum.')
+    token = hf_token(run.owner_id)
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.git-lfs+json', 'Content-Type': 'application/vnd.git-lfs+json'}
+    response = requests.post('https://huggingface.co/datasets/%s.git/info/lfs/objects/batch' % source['repo'], headers=headers,
+                             json={'operation': 'upload', 'transfers': ['basic', 'multipart'], 'hash_algo': 'sha256',
+                                   'ref': {'name': plan['branch']}, 'objects': [{'oid': oid, 'size': size}]}, timeout=(15, 60))
+    response.raise_for_status()
+    objects = response.json().get('objects', [])
+    if len(objects) != 1 or objects[0].get('oid') != oid or objects[0].get('size') != size or objects[0].get('error'):
+        raise ValidationError('Hugging Face rejected the prepared file upload.')
+    actions = objects[0].get('actions') or {}
+    if data.get('verify'):
+        if verify := actions.get('verify'):
+            if urlsplit(verify['href']).scheme != 'https' or urlsplit(verify['href']).netloc != 'huggingface.co':
+                raise ValidationError('Hugging Face returned an invalid verification URL.')
+            response = requests.post(verify['href'], headers=headers, json={'oid': oid, 'size': size}, timeout=(15, 60))
+            response.raise_for_status()
+        elif actions.get('upload'):
+            raise ValidationError('Hugging Face has not acknowledged the uploaded file.')
+        result = {'stored': True}
+    elif not actions:
+        result = {'stored': True}
+    else:
+        upload = actions.get('upload')
+        if not isinstance(upload, dict) or not isinstance(upload.get('href'), str):
+            raise ValidationError('Hugging Face did not provide an upload URL.')
+        if token in json.dumps(upload):
+            raise ValidationError('Hugging Face returned an upload requiring account credentials.')
+        result = {'stored': False, 'upload': upload}
+    result = JsonResponse(result)
+    result['Cache-Control'] = 'no-store'
     return result
 
 

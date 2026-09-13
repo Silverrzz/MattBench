@@ -1,10 +1,126 @@
 import hashlib
+import json
 import mmap
+import os
 import random
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import requests
+
+
+class UploadStream:
+    def __init__(self, source, size, progress):
+        self.source = source
+        self.size = size
+        self.remaining = size
+        self.progress = progress
+
+    def __len__(self):
+        return self.size
+
+    def read(self, size=-1):
+        amount = self.remaining if size < 0 else min(size, self.remaining)
+        data = self.source.read(min(amount, 1024 ** 2))
+        if self.remaining and not data:
+            raise RuntimeError('Prepared dataset file changed during upload.')
+        self.remaining -= len(data)
+        self.progress(len(data))
+        return data
+
+
+def upload_prepared_files(connection, job, paths, descriptors, reporter):
+    if not paths or len(paths) != len(descriptors):
+        raise RuntimeError('Prepared upload files are missing.')
+    workers = int(os.environ.get('MATTBENCH_HF_UPLOAD_WORKERS', '8'))
+    if not 1 <= workers <= 32:
+        raise RuntimeError('MATTBENCH_HF_UPLOAD_WORKERS must be between 1 and 32.')
+    endpoint = '%d/dataset/prepare/upload/' % job['id']
+    lock = threading.Lock()
+    stopped = threading.Event()
+    sent = [0] * len(paths)
+    completed = set()
+    total = sum(file['size'] for file in descriptors)
+
+    def check():
+        reporter.check()
+        if stopped.is_set():
+            raise RuntimeError('Dataset upload stopped after another shard failed.')
+
+    def report(index, amount):
+        check()
+        with lock:
+            sent[index] = min(descriptors[index]['size'], sent[index] + amount)
+            uploaded = sum(sent)
+            reporter.update(current_file='Uploading prepared dataset: %d/%d files confirmed' % (len(completed), len(paths)),
+                            uploaded_bytes=uploaded, upload_total_bytes=total, uploaded_files=len(completed),
+                            progress=100 * uploaded / max(1, total))
+
+    def upload(index):
+        descriptor = descriptors[index]
+        for attempt in range(5):
+            check()
+            with lock:
+                sent[index] = 0
+            try:
+                instruction = connection.request('POST', endpoint, json=descriptor, timeout=(15, 90)).json()
+                if not instruction.get('stored'):
+                    action = instruction['upload']
+                    header = action.get('header', {})
+                    chunk_size = int(header.get('chunk_size', descriptor['size']))
+                    if chunk_size <= 0:
+                        raise RuntimeError('Invalid upload chunk size.')
+                    parts = []
+                    with paths[index].open('rb') as source:
+                        if os.fstat(source.fileno()).st_size != descriptor['size']:
+                            raise RuntimeError('Prepared dataset file changed during upload.')
+                        for part, offset in enumerate(range(0, descriptor['size'], chunk_size), 1):
+                            check()
+                            size = min(chunk_size, descriptor['size'] - offset)
+                            stream = UploadStream(source, size, lambda amount: report(index, amount))
+                            url = header[str(part)] if 'chunk_size' in header else action['href']
+                            upload_headers = {} if 'chunk_size' in header else dict(header)
+                            with requests.put(url, data=stream, headers=upload_headers, timeout=(15, 60)) as response:
+                                response.raise_for_status()
+                                if stream.remaining:
+                                    raise RuntimeError('Upload ended before all file bytes were read.')
+                                if 'chunk_size' in header:
+                                    etag = response.headers.get('etag')
+                                    if not etag:
+                                        raise RuntimeError('Multipart upload returned no ETag.')
+                                    parts.append({'partNumber': part, 'etag': etag})
+                    if parts:
+                        with requests.post(action['href'], json={'oid': descriptor['sha256'], 'parts': parts},
+                                           headers={'Content-Type': 'application/vnd.git-lfs+json'}, timeout=(15, 60)) as response:
+                            response.raise_for_status()
+                    check()
+                    verified = connection.request('POST', endpoint, json={**descriptor, 'verify': True}, timeout=(15, 90)).json()
+                    if not verified.get('stored'):
+                        raise RuntimeError('Uploaded dataset file was not acknowledged.')
+                with lock:
+                    completed.add(index)
+                    sent[index] = descriptor['size']
+                report(index, 0)
+                reporter.write('Uploaded prepared shard %s (%d/%d).\n' % (descriptor['path'], len(completed), len(paths)))
+                return
+            except (requests.RequestException, RuntimeError, ValueError, KeyError) as error:
+                check()
+                if attempt == 4:
+                    raise RuntimeError('Prepared shard upload failed after five attempts: %s (%s). Local files were retained.' % (descriptor['path'], type(error).__name__)) from None
+                reporter.write('Retrying prepared shard %s after %s (attempt %d/5).\n' % (descriptor['path'], type(error).__name__, attempt + 2))
+                reporter.stop.wait(min(30, 2 ** attempt))
+    report(0, 0)
+    with ThreadPoolExecutor(max_workers=min(workers, max(1, len(paths))), thread_name_prefix='dataset-upload') as executor:
+        futures = [executor.submit(upload, index) for index in range(len(paths))]
+        try:
+            for future in as_completed(futures):
+                future.result()
+        except BaseException:
+            stopped.set()
+            for future in futures:
+                future.cancel()
+            raise
 
 
 def file_digest(path, reporter):
@@ -215,15 +331,9 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
     interleaved = 'shuffle' in steps or 'interleave' in steps or all(file.get('interleaved', False) for file in job['dataset']['files'])
     if changed:
         descriptors = [{'path': plan['prefix'] + ('%05d.vf' % index), 'size': path.stat().st_size, 'sha256': file_digest(path, reporter), 'format': 'vf', 'shuffled': shuffled, 'interleaved': interleaved} for index, path in enumerate(selected)]
-        from huggingface_hub.utils._xet import get_xet_session
-        reporter.update(current_file='Publishing dataset files to Hugging Face')
-        def progress(*args):
-            reporter.check()
-        with get_xet_session().new_upload_commit(token_refresh_url=connection.url('%d/dataset/prepare/token/' % job['id']), token_refresh_headers=connection.headers, custom_headers={}, progress_callback=progress) as commit:
-            handles = [commit.start_upload_file(str(path), sha256=descriptor['sha256']) for path, descriptor in zip(selected, descriptors)]
-        for handle, descriptor in zip(handles, descriptors):
-            if handle.result().xet_info.sha256 != descriptor['sha256']:
-                raise RuntimeError('Dataset upload checksum mismatch.')
+        (directory / 'prepared-upload.json').write_text(json.dumps({'files': descriptors, 'statistics': statistics,
+            'paths': [path.relative_to(directory).as_posix() for path in selected]}, indent=2))
+        upload_prepared_files(connection, job, selected, descriptors, reporter)
     else:
         descriptors = [{**{key: file[key] for key in ('path', 'size', 'sha256', 'format', 'shuffled')}, 'interleaved': file.get('interleaved', False)} for file in job['dataset']['files']]
     payload = {'files': descriptors, 'statistics': statistics}
