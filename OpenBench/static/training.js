@@ -596,9 +596,13 @@
     };
     function update(data) {
         if (data.state) detail.dataset.runState = data.state;
-        const progress = detail.dataset.runState === 'COMPLETED' ? 100 : Number(data.metrics.progress || 0);
-        const stage = detail.dataset.runState === 'SAVING' ? ' (Uploading)' : detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
+        const phase = {DOWNLOADING: 'Downloading', CONVERTING: 'Converting', COMPILING: 'Compiling', SAVING: 'Uploading'}[detail.dataset.runState];
+        const overall = Number(data.metrics.progress || 0);
+        const hasPhaseProgress = Boolean(phase) && data.metrics.phase_progress != null;
+        const progress = detail.dataset.runState === 'COMPLETED' ? 100 : hasPhaseProgress ? Number(data.metrics.phase_progress) : overall;
+        const stage = phase ? ` (${phase})` : detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
         const lines = [`Progress: ${progress.toFixed(1)}%${stage}`];
+        if (hasPhaseProgress) lines.push(`Overall training: ${overall.toFixed(1)}%`);
         for (const [key, [label, unit]] of Object.entries(labels)) {
             const value = data.metrics[key];
             if (value === undefined) continue;
