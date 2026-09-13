@@ -1,0 +1,20 @@
+{
+  "host": "heimdall",
+  "files": {
+    "gunicorn_config.py": ["/etc/mattbench-prod/gunicorn_config.py"],
+    "production-service.conf": ["/etc/systemd/system/OpenBench.service.d/zz-mattbench.conf"],
+    "automount.conf": [
+      "/etc/systemd/system/OpenBench.service.d/zzzz-automount.conf",
+      "/etc/systemd/system/mattbench-prod-training.service.d/zzzz-automount.conf"
+    ],
+    "backup.sh": ["/home/nocturn9x/openbench-postgres/backup.sh"],
+    "openbench-db-backup.service": ["/etc/systemd/system/openbench-db-backup.service"],
+    "openbench-db-backup.timer": ["/etc/systemd/system/openbench-db-backup.timer"]
+  },
+  "python_requirements": "requirements.txt",
+  "preserve_on_host": [
+    "/etc/mattbench-prod/production.env",
+    "/etc/mattbench-prod/credential.key",
+    "/home/nocturn9x/openbench-postgres/database.json"
+  ]
+}
