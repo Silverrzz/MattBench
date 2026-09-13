@@ -1,4 +1,11 @@
 {% extends "OpenBench/base.html" %}
+{% load static %}
+{% block scripts %}
+{% if section == 'engines' and can_manage_maintainers %}
+<link rel="stylesheet" href="{% static 'engine-maintainers.css' %}?{{ static_version }}">
+<script src="{% static 'engine-maintainers.js' %}?{{ static_version }}" defer></script>
+{% endif %}
+{% endblock %}
 
 {% block heading %}{% if editing %}{% if is_new %}Add {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}Manage{% endif %}{% endblock %}
 {% block page_actions %}
@@ -43,13 +50,29 @@
             {% endif %}
             {% if section == 'engines' %}
                 {% if can_manage_maintainers %}
-                <fieldset class="form-section">
+                <fieldset class="form-section" id="engine-maintainers">
                     <legend>Maintainers</legend>
-                    <label for="maintainers">OpenBench accounts</label>
-                    <select id="maintainers" name="maintainers" multiple size="8" aria-describedby="maintainers-help">
-                        {% for account in maintainer_accounts %}<option value="{{ account.pk }}"{% if account.pk|stringformat:'s' in selected_maintainers %} selected{% endif %}>{{ account.username }}{% if not account.is_active %} (inactive){% endif %}</option>{% endfor %}
-                    </select>
-                    <p id="maintainers-help">Maintainers can edit this engine’s configuration only. Only staff can change this list. Hold Ctrl or Command to select multiple accounts; clear the selection to remove all maintainers.</p>
+                    <div class="maintainer-picker-row">
+                        <details class="maintainer-picker">
+                            <summary><span data-picker-label>Select an account</span></summary>
+                            <div class="maintainer-menu">
+                                <label for="maintainer-search">Search accounts</label>
+                                <input id="maintainer-search" type="search" placeholder="Search by username…" autocomplete="off">
+                                <select id="maintainer-account" size="6" aria-label="Matching accounts">
+                                    {% for account in maintainer_accounts %}<option value="{{ account.pk }}">{{ account.username }}{% if not account.is_active %} (inactive){% endif %}</option>{% endfor %}
+                                </select>
+                                <p data-no-matches hidden>No matching accounts.</p>
+                            </div>
+                        </details>
+                        <button type="button" class="button maintainer-icon" data-add-maintainer aria-label="Add selected account as maintainer" disabled>+</button>
+                    </div>
+                    <ul class="maintainer-list" aria-label="Engine maintainers">
+                        {% for account in maintainer_accounts %}{% if account.pk|stringformat:'s' in selected_maintainers %}
+                        <li data-maintainer="{{ account.pk }}"><span>{{ account.username }}{% if not account.is_active %} (inactive){% endif %}</span><input type="hidden" name="maintainers" value="{{ account.pk }}"><button type="button" class="button maintainer-icon" data-remove-maintainer aria-label="Remove {{ account.username }} as maintainer" disabled>×</button></li>
+                        {% endif %}{% endfor %}
+                    </ul>
+                    <p data-empty-maintainers{% if selected_maintainers %} hidden{% endif %}>No maintainers added.</p>
+                    <span class="maintainer-status" role="status" aria-live="polite"></span>
                 </fieldset>
                 {% endif %}
                 <label class="choice"><input type="checkbox" name="private" {% if values.private %}checked{% endif %}> Private engine</label>
