@@ -33,6 +33,11 @@ for name, changes in (
     ('dual_both', dict(layers=[32, 8, 8], dual_activation=True, dual_layers=[2, 3], skip_connection=True)),
     ('wdl_buckets', dict(layers=[32, 8, 8], score_outputs=False, wdl_outputs=True, wdl_buckets=4, uncertainty_outputs=True, uncertainty_buckets=2)),
     ('shared_hidden', dict(layers=[32, 8, 8], hidden_layers_bucketed=False)),
+    ('heimdall_integer', dict(layers=[768, 16, 32], pairwise_activation=True, dual_activation=True, activation='crelu', threat_inputs=True, export_mode='heimdall')),
+    ('custom_integer', dict(layers=[32, 8, 8], export_mode='custom', dense_export={
+        'l1': dict(weight_format='i8', weight_scale=128, bias_format='i32', bias_scale=16384, transpose=False),
+        'l2': dict(weight_format='i16', weight_scale=255, bias_format='i16', bias_scale=255, transpose=True),
+        'score': dict(weight_format='i32', weight_scale=64, bias_format='i8', bias_scale=64, transpose=False)})),
 ):
     variants.append((name, {**copy.deepcopy(DEFAULT_SPEC), **changes}))
 text = manifest.read_text()

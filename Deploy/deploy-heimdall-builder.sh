@@ -28,7 +28,7 @@ git merge-base --is-ancestor "$before" "$target"
 # This deployment intentionally has no database, dependency or service-config changes.
 while IFS= read -r path; do
     case "$path" in
-        OpenBench/schedule_builder.py|OpenBench/static/schedule_builder.js|OpenBench/training_checkpoints.py|Templates/OpenBench/schedule_builder.html|OpenBench/tests/test_builder.py|Scripts/prepare_builder_gpu.py|Scripts/test_builder_browser.cjs|Scripts/verify_builder_rust.py|docs/builder-workloads.md|Deploy/deploy-heimdall-builder.sh) ;;
+        OpenBench/schedule_builder.py|OpenBench/builder_export.py|OpenBench/data/builder_main.rs|OpenBench/static/schedule_builder.js|OpenBench/training_checkpoints.py|Templates/OpenBench/schedule_builder.html|OpenBench/tests/test_builder.py|OpenBench/tests/test_gpu_continuation.py|Scripts/prepare_builder_gpu.py|Scripts/test_builder_browser.cjs|Scripts/verify_builder_rust.py|Scripts/verify_builder_export.py|docs/builder-workloads.md|Deploy/deploy-heimdall-builder.sh) ;;
         *) echo "Unexpected release change: $path. Review a separate deployment." >&2; exit 1 ;;
     esac
 done < <(git diff --name-only "$before" "$target")

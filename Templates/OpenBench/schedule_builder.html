@@ -70,7 +70,12 @@
                         <div class="field"><label for="builder-activation">Activation</label><select id="builder-activation" name="activation"><option value="screlu">SCReLU</option><option value="crelu">CReLU</option></select></div>
                     </div>
                     <div class="builder-group">
+                        <h2>Network export</h2>
+                        <div class="field"><label for="builder-export-mode">Binary format</label><select id="builder-export-mode" name="export_mode"><option value="legacy">Generic · float32 dense layers (legacy)</option><option value="custom">Custom · per-layer quantization</option><option value="heimdall">Heimdall · integer PSQ+TI multilayer</option></select></div>
                         <div class="field"><label for="builder-feature-format">Feature layer export</label><select id="builder-feature-format" name="feature_format"><option value="i16">i16 · scale 255</option><option value="f32">f32</option></select></div>
+                        <p class="builder-note" id="builder-export-note"></p>
+                        <div id="builder-dense-export" hidden></div>
+                        <p class="builder-note">Export settings describe stored weights and biases, not output bucket counts or prediction activations. They must match your engine's loader and integer arithmetic. Changing export/clipping settings requires a new training run; existing artifacts are not converted.</p>
                     </div>
                 </section>
                 <dialog id="builder-bucket-dialog" class="builder-bucket-dialog" aria-labelledby="builder-bucket-title">

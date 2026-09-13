@@ -59,8 +59,7 @@ fn main() {
     let feature_count = features.num_inputs();
     let max_active = features.max_active();
     let inputs = ModelInputs::default()
-        .add_sparse("stm", (feature_count, 1), max_active)
-        .add_sparse("ntm", (feature_count, 1), max_active)
+$sparse_inputs
 $model_inputs
         .add_dense("targets", ($target_count, 1));
     let definition = ModelDefinition::build(&inputs, |builder, $graph_pattern| {
@@ -71,6 +70,7 @@ $loss
     let weights = ModelWeights::new(&definition, $seed);
     let device = DefaultDevice::new(0).unwrap();
     let mut optimiser = Optimiser::<_, AdamW<_>>::new(definition, weights, device, AdamWParams::default()).unwrap();
+$optimiser_params
     let saved_format = vec![
 $saved_format
     ];
@@ -87,17 +87,7 @@ $saved_format
         assert!(!paths.is_empty(), "Empty stage dataset");
         let features = $feature_expression;
         let mapper = ModelInputsMapper::build(&inputs, move |pos: &ChessBoard, step, $graph_pattern| {
-            let mut count = 0;
-            features.map_features(pos, |us, them| {
-                assert!(us < feature_count && them < feature_count);
-                stm[count] = us.try_into().unwrap();
-                ntm[count] = them.try_into().unwrap();
-                count += 1;
-            });
-            if count < max_active {
-                stm[count] = -1;
-                ntm[count] = -1;
-            }
+$feature_mapping
 $bucket_mapping
             let blend = stage_value(WDL_STAGES, step.superbatch());
             let score = 1.0 / (1.0 + (-f32::from(pos.score) / EVAL_SCALE).exp());

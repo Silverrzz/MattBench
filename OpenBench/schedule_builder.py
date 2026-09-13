@@ -9,6 +9,7 @@ from textwrap import indent
 from django.core.exceptions import ValidationError
 
 from OpenBench.training import DEFAULT_SETTINGS, validate_schedule
+from OpenBench.builder_export import export_recipe, heimdall_inputs, validate_export
 
 
 BULLET_COMMIT = '629ee50000b2afb7b3337595401c830d3b1e0f42'
@@ -38,6 +39,7 @@ DEFAULT_SPEC = {
     'wdl_stages': [{'start': 1, 'end': 800, 'kind': 'constant', 'initial': 0.75, 'final': 0.75}],
     'eval_scale': 400.0,
     'threads': 4, 'buffer_mb': 1024, 'seed': 42, 'backend': 'cuda', 'feature_format': 'i16',
+    'export_mode': 'legacy', 'dense_export': {},
     'shuffle': True, 'interleave': True, 'shuffle_memory_mb': 256,
     'interleave_fan_in': 32, 'dataset_shard_mb': 512,
 }
@@ -45,6 +47,7 @@ DEFAULT_SPEC = {
 
 def validate_spec(value):
     if isinstance(value, dict):
+        value = {'export_mode': 'legacy', 'dense_export': {}, **value}
         # Saved schedules predate dense-stack output bucketing. Preserve their graph.
         value = {'hidden_layers_bucketed': False, **value}
         value = {'dual_activation': False, 'dual_layers': [2], **value}
@@ -168,6 +171,7 @@ def validate_spec(value):
         raise ValidationError('Mirrored layouts must assign matching files to the same bucket.')
     if spec['save_every'] > spec['superbatches']:
         raise ValidationError('Save frequency cannot exceed the total superbatches.')
+    validate_export(spec)
     for channel in ('lr', 'wdl'):
         _validate_stages(spec[channel + '_stages'], spec['superbatches'], channel.upper(), spec,
                          allow_sequence=channel == 'lr', is_lr=channel == 'lr')
@@ -240,7 +244,7 @@ def fingerprint(files, settings):
 def builder_state(schedule):
     try:
         metadata = json.loads(schedule.files[MANIFEST])
-        if metadata['version'] not in (1, 2, 3, 4):
+        if metadata['version'] not in (1, 2, 3, 4, 5):
             return None, False
         spec = validate_spec(metadata['spec'])
         return spec, metadata['fingerprint'] == fingerprint(schedule.files, schedule.settings)
@@ -298,9 +302,26 @@ def generate_schedule(value):
         'let l0 = builder.new_affine("l0/", feature_count, %d);' % sizes[0],
         'l0.init_with_effective_input_size(32);',
     ]
+    sparse_inputs = ['.add_sparse("stm", (feature_count, 1), max_active)',
+                     '.add_sparse("ntm", (feature_count, 1), max_active)']
+    feature_mapping = '''let mut count = 0;
+features.map_features(pos, |us, them| {
+    assert!(us < feature_count && them < feature_count);
+    stm[count] = us.try_into().unwrap();
+    ntm[count] = them.try_into().unwrap();
+    count += 1;
+});
+if count < max_active {
+    stm[count] = -1;
+    ntm[count] = -1;
+}'''
+    split_ft = spec['export_mode'] == 'heimdall'
+    if split_ft:
+        sparse_inputs, graph, feature_mapping = heimdall_inputs(spec)
     if 1 in pairwise_layers:
         for perspective in ('stm', 'ntm'):
             graph.extend([
+                ('let %s_ft = l0_psqt.matmul(%s) + l0_ti.forward(%s_ti);' % (perspective, perspective, perspective)) if split_ft else
                 'let %s_ft = l0.forward(%s);' % (perspective, perspective),
                 'let %s_hidden = %s;' % (perspective, pairwise_expression(perspective + '_ft', sizes[0])),
             ])
@@ -326,7 +347,7 @@ def generate_schedule(value):
         last_size = size // 2 if index + 1 in pairwise_layers else size * 2 if index + 1 in dual_layers else size
     model_inputs = []
     bucket_mapping = []
-    graph_pattern = '(stm, ntm)'
+    graph_pattern = '(((stm, ntm), stm_ti), ntm_ti)' if split_ft else '(stm, ntm)'
     for name, width in heads:
         count = spec[name + '_buckets']
         model_inputs.append('.add_sparse("%s_buckets", (%d, 1), 1)' % (name, count))
@@ -371,16 +392,7 @@ def generate_schedule(value):
             '    target[index + 1] = blend * result + (1.0 - blend) * teacher[index];',
             '}',
         ])
-    formats = []
-    weight_layers = ['l%d' % index for index in range(len(sizes))] + [name for name, _ in heads]
-    for name in weight_layers:
-        for kind in ('w', 'b'):
-            expression = 'SavedFormat::id("%s/%s")' % (name, kind)
-            if name != 'l0' and kind == 'w':
-                expression += '.transpose()'
-            if name == 'l0' and spec['feature_format'] == 'i16':
-                expression += '.round().quantise::<i16>(255)'
-            formats.append(expression + ',')
+    formats, optimiser_params, export_tensors = export_recipe(spec)
     def stage_rows(channel):
         return ',\n'.join('    (%d, %d, %s, %s, %d)' % (stage['start'], stage['end'], repr(stage['initial']), repr(stage['final']), ('constant', 'linear', 'cosine').index(stage['kind'])) for stage in spec[channel + '_stages'])
     source = template.substitute(
@@ -392,6 +404,9 @@ def generate_schedule(value):
         loader_import=loader_import, target_count=4 if spec['wdl_outputs'] else 1,
         filter_expression=filter_expression,
         model_inputs=indent('\n'.join(model_inputs), '        '), graph_pattern=graph_pattern,
+        sparse_inputs=indent('\n'.join(sparse_inputs), '        '),
+        feature_mapping=indent(feature_mapping, '            '),
+        optimiser_params=indent('\n'.join(optimiser_params), '    '),
         bucket_mapping=indent('\n'.join(bucket_mapping), '            '),
         graph_outputs=', '.join('("%s".to_owned(), %s_output)' % (name, name) for name, _ in heads),
         loss=indent('\n'.join(loss), '        '), targets=indent('\n'.join(targets), '            '),
@@ -404,10 +419,13 @@ def generate_schedule(value):
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
     files[MANIFEST] = json.dumps({
-        'version': 4, 'spec': spec, 'fingerprint': fingerprint(files, settings),
+        'version': 5, 'spec': spec, 'fingerprint': fingerprint(files, settings),
         'workload_bounds': True,
         'bullet_source': 'https://github.com/jw1912/bullet/tree/' + BULLET_COMMIT,
-        'export': {'feature_weights': spec['feature_format'], 'feature_scale': 255 if spec['feature_format'] == 'i16' else 1, 'dense_weights': 'f32', 'dense_weights_transposed': True,
+        'export': {'mode': spec['export_mode'], 'tensors': export_tensors, 'byte_order': 'little', 'padding': 'bullet_to_64_bytes',
+                   'feature_weights': 'mixed_i16_i8' if split_ft else spec['feature_format'], 'feature_scale': 255 if spec['feature_format'] == 'i16' else 1,
+                   'dense_weights': 'per_tensor' if spec['export_mode'] != 'legacy' else 'f32',
+                   'dense_weights_transposed': False if split_ft else True if spec['export_mode'] == 'legacy' else None,
                    'heads': {name: {'buckets': spec[name + '_buckets'], 'outputs_per_bucket': width,
                                     'activation': {'score': 'sigmoid', 'wdl': 'softmax', 'uncertainty': 'identity'}[name],
                                     'weights': name + '/w', 'biases': name + '/b'} for name, width in heads},
@@ -442,7 +460,7 @@ def schedule_dataset_stages(schedule):
     if not spec or not current:
         return []
     metadata = json.loads(schedule.files[MANIFEST])
-    if metadata['version'] not in (2, 3, 4):
+    if metadata['version'] not in (2, 3, 4, 5):
         return []
     stored = metadata['spec']
     return dataset_stages(stored if 'lr_stages' in stored and 'wdl_stages' in stored else spec)

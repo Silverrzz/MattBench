@@ -243,6 +243,8 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
                         'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation', 'dual_activation')
         if any(before[key] != after[key] for key in architecture):
             raise ValidationError('The checkpoint requires the same network architecture. You can change WDL, learning rate and training duration.')
+        if any(before[key] != after[key] for key in ('export_mode', 'feature_format')) or (before['export_mode'] == 'custom' and before['dense_export'] != after['dense_export']):
+            raise ValidationError('The checkpoint requires the same export and training-clipping settings. Changing the export contract requires a new training run.')
         if len(before['layers']) > 1 and before['hidden_layers_bucketed'] != after['hidden_layers_bucketed']:
             raise ValidationError('The checkpoint requires the same hidden-layer output bucketing.')
         if before['dual_activation'] and before['dual_layers'] != after['dual_layers']:

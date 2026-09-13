@@ -1,6 +1,18 @@
-# Builder v4 and sequential training workloads
+# Builder v5 and sequential training workloads
 
-Builder manifests now use version 4. Existing schedules retain their LR interpolation convention when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New builder runs default to 50 SB per workload; custom source requires uninterrupted training. A new run may reuse an architecture-compatible checkpoint.
+Builder manifests now use version 5. Existing schedules retain their LR interpolation and legacy export conventions when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New builder runs default to 50 SB per workload; custom source requires uninterrupted training. A new run may reuse an architecture-compatible checkpoint.
+
+## Network export and clipping
+
+The old **Feature layer export: i16** setting only quantized the combined feature weights and biases at scale 255. Dense hidden layers and all prediction heads remained float32, transposed to output-major storage. It did not produce Heimdall-compatible files or impose Heimdall's weight limits. Older schedules retain that behavior under **Generic (legacy)**.
+
+**Custom** selects f32/i8/i16/i32, integer scales, and matrix layout separately for each dense layer/head's weights and biases. Biases are never transposed. Float32 scales must be 1; Bullet's i8/i16 quantization multipliers are limited to 32767 and i32 multipliers to 2147483647. Integer tensors receive symmetric training-time clipping to their representable range, capped at AdamW's default 1.98. Exports round ties away from zero and reject overflow; they do not silently clamp at save time. These are weight/bias export settings, not quantization of the model's predicted scores.
+
+**Heimdall** implements the mixed integer layout in `bullet/examples/advanced/main.rs`: PSQ i16×255, TI i8×255, FT biases i16×255, first dense weights i8×128 with the `(255/256)^2` correction, first dense biases i32×16384, later weights i32×64 and biases i32×64³/64⁴. Matrices retain input-major/bucket/neuron ordering. PSQ and TI are separate parameter tensors with separate optimizer limits; they are summed before pairwise activation. The preset requires the supported mirrored PSQ+TI topology, L1 divisible by 128, hidden sizes 16/32, CReLU pairwise L1, dual L2, and eight bucketed score outputs. Input bucket count and L1 width remain configurable; engine build settings must match. Use the schedule's evaluation scale in the engine. This preset covers export and clipping, not the reference trainer's factorizer or activity regularization.
+
+Changing export mode or custom clipping settings is rejected on checkpoint resume. In particular, old combined-FT checkpoints cannot be loaded into the split PSQ/TI graph. Existing completed networks remain unchanged; converting/fine-tuning them is a separate operation. Manifests list every serialized tensor's type, scale, layout, transform and clipping expression, with little-endian encoding and Bullet padding to 64 bytes.
+
+To check real exported bytes against raw float weights, run `bin/python Scripts/verify_builder_export.py CHECKPOINT_DIRECTORY SPEC_JSON` (requires NumPy). GPU fixture preparation accepts `--heimdall` or `--custom-export`; the GPU continuation test independently verifies every exported tensor for these modes, in addition to checkpoint resume and workload boundaries.
 
 ## Builder behavior
 

@@ -71,6 +71,9 @@ class GPUContinuationTests(WorkloadFixture, TransactionTestCase):
                 checkpoint_record = json.loads(record)
                 sb = checkpoint_record['superbatch']; directory = output / checkpoint_record['path']
                 network = directory / 'quantised.bin'
+                if spec.get('export_mode') in ('custom', 'heimdall'):
+                    from Scripts.verify_builder_export import verify_export
+                    self.assertEqual(verify_export(directory, spec), network.stat().st_size)
                 for name in ('weights.bin', 'momentum.bin', 'velocity.bin'):
                     self.assertGreater((directory / 'optimiser_state' / name).stat().st_size, 0)
                 archive = io.BytesIO()

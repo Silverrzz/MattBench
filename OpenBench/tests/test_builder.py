@@ -14,6 +14,101 @@ class BuilderTests(SimpleTestCase):
     def spec(self, **changes):
         return {**copy.deepcopy(DEFAULT_SPEC), **changes}
 
+    def heimdall(self, **changes):
+        return self.spec(**{'layers': [768, 16, 32], 'activation': 'crelu', 'threat_inputs': True,
+                            'pairwise_activation': True, 'dual_activation': True, 'export_mode': 'heimdall', **changes})
+
+    def test_export_legacy_is_not_dense_quantization(self):
+        old = self.spec(layers=[768, 16, 32])
+        old.pop('export_mode')
+        old.pop('dense_export')
+        spec, files, _ = generate_schedule(old)
+        self.assertEqual(spec['export_mode'], 'legacy')
+        self.assertEqual(spec['dense_export'], {})
+        self.assertIn('SavedFormat::id("l0/w").round().quantise::<i16>(255)', files[SOURCE])
+        self.assertIn('SavedFormat::id("score/w").transpose(),', files[SOURCE])
+        self.assertNotIn('set_params_for_weight', files[SOURCE])
+
+    def test_custom_dense_export_has_per_tensor_types_scales_layout_and_clips(self):
+        from OpenBench.builder_export import DENSE_DEFAULT
+        row = {**DENSE_DEFAULT, 'weight_format': 'i8', 'weight_scale': 128,
+               'bias_format': 'i32', 'bias_scale': 16384, 'transpose': False}
+        _, files, _ = generate_schedule(self.spec(layers=[32, 16], export_mode='custom', dense_export={'l1': row, 'score': row}))
+        source = files[SOURCE]
+        for name in ('l1', 'score'):
+            self.assertIn('SavedFormat::id("%s/w").round().quantise::<i8>(128)' % name, source)
+            self.assertIn('SavedFormat::id("%s/b").round().quantise::<i32>(16384)' % name, source)
+            self.assertIn('optimiser.set_params_for_weight("%s/w"' % name, source)
+            self.assertIn('optimiser.set_params_for_weight("%s/b"' % name, source)
+        metadata = json.loads(files[MANIFEST])['export']
+        self.assertEqual(metadata['mode'], 'custom')
+        self.assertEqual(metadata['dense_weights'], 'per_tensor')
+        self.assertEqual(metadata['tensors'][-2]['dtype'], 'i8')
+        self.assertFalse(metadata['tensors'][-2]['transposed'])
+        self.assertIsNotNone(metadata['tensors'][-2]['training_clip'])
+
+    def test_custom_export_validation(self):
+        from OpenBench.builder_export import DENSE_DEFAULT
+        for row in ({'weight_format': 'i8'}, {**DENSE_DEFAULT, 'weight_scale': 2},
+                    {**DENSE_DEFAULT, 'weight_format': 'i8', 'weight_scale': 32768},
+                    {**DENSE_DEFAULT, 'bias_format': 'i32', 'bias_scale': 2147483648},
+                    {**DENSE_DEFAULT, 'bias_scale': True}, {**DENSE_DEFAULT, 'transpose': 1},
+                    {**DENSE_DEFAULT, 'weight_format': 'rust injection'}):
+            with self.subTest(row=row), self.assertRaises(ValidationError):
+                validate_spec(self.spec(export_mode='custom', dense_export={'score': row}))
+        for changes in ({'export_mode': 'bad'}, {'dense_export': []}, {'dense_export': {'l0': DENSE_DEFAULT}}):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                validate_spec(self.spec(**changes))
+
+    def test_heimdall_export_matches_reference_types_scales_order_and_clipping(self):
+        _, files, _ = generate_schedule(self.heimdall())
+        source = files[SOURCE]
+        self.assertIn('l0_psqt.matmul(stm) + l0_ti.forward(stm_ti)', source)
+        self.assertIn('l0_psqt.matmul(ntm) + l0_ti.forward(ntm_ti)', source)
+        self.assertIn('const PSQ_FEATURES: usize = 768;', source)
+        self.assertIn('stm_ti[ti_count] = (us - PSQ_FEATURES)', source)
+        self.assertIn('if psq_count < 32 { stm[psq_count] = -1; ntm[psq_count] = -1; }', source)
+        self.assertNotIn('builder.new_affine("l0/"', source)
+        self.assertIn('min_weight: -(127.0 / 255.0)', source)
+        self.assertIn('(127.0 / 128.0) * (255.0 / 256.0) * (255.0 / 256.0)', source)
+        self.assertIn('f / ((255.0f32 / 256.0) * (255.0 / 256.0))', source)
+        tensors = json.loads(files[MANIFEST])['export']['tensors']
+        self.assertEqual([(t['tensor'], t['dtype'], t['scale'], t['transposed']) for t in tensors], [
+            ('l0/psqt', 'i16', 255, False), ('l0/ti/w', 'i8', 255, False), ('l0/ti/b', 'i16', 255, False),
+            ('l1/w', 'i8', 128, False), ('l1/b', 'i32', 16384, False),
+            ('l2/w', 'i32', 64, False), ('l2/b', 'i32', 262144, False),
+            ('score/w', 'i32', 64, False), ('score/b', 'i32', 16777216, False)])
+
+    def test_heimdall_profile_rejects_incompatible_topology(self):
+        for changes in ({'layers': [768]}, {'layers': [768, 32, 32]}, {'layers': [64, 16, 32]},
+                        {'dual_layers': [3]}, {'threat_inputs': False}, {'pawn_pair_inputs': True},
+                        {'score_buckets': 4}, {'wdl_outputs': True}, {'feature_format': 'f32'},
+                        {'hidden_layers_bucketed': False}, {'pairwise_left_activation': 'relu'},
+                        {'merged_king_planes': True}, {'half_move_clock': True}, {'mirrored': False}):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                validate_spec({**self.heimdall(), **changes})
+
+    def test_checkpoint_export_changes_rejected_but_lr_changes_allowed(self):
+        for spec in (self.heimdall(), self.spec(export_mode='custom')):
+            normalized, files, config = generate_schedule(spec)
+            checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
+            _, changed, settings = generate_schedule({**normalized, 'export_mode': 'legacy'})
+            with self.assertRaisesMessage(ValidationError, 'same export and training-clipping'):
+                validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
+            normalized['lr_stages'][0]['initial'] = 0.005
+            _, changed, settings = generate_schedule(normalized)
+            validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
+
+    def test_checkpoint_rejects_custom_quantization_scale_and_feature_format_changes(self):
+        from OpenBench.builder_export import DENSE_DEFAULT
+        spec, files, config = generate_schedule(self.spec(export_mode='custom'))
+        checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
+        for changes in ({'dense_export': {'score': {**DENSE_DEFAULT, 'weight_format': 'i8', 'weight_scale': 128}}},
+                        {'feature_format': 'f32'}):
+            _, changed, settings = generate_schedule({**spec, **changes})
+            with self.assertRaisesMessage(ValidationError, 'same export and training-clipping'):
+                validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed, settings)
+
     def test_output_bucket_selection_precedes_hidden_activation(self):
         _, files, _ = generate_schedule(self.spec(layers=[512, 16, 32], pairwise_activation=True,
                                                 dual_activation=True, activation='crelu'))
@@ -140,7 +235,7 @@ class BuilderTests(SimpleTestCase):
         first, files, settings = generate_schedule(self.spec())
         second, other_files, _ = generate_schedule({**first, 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'}})
         self.assertEqual(files[SOURCE], other_files[SOURCE])
-        self.assertEqual(json.loads(files[MANIFEST])['version'], 4)
+        self.assertEqual(json.loads(files[MANIFEST])['version'], 5)
         restored, current = builder_state(SimpleNamespace(files=files, settings=settings))
         self.assertTrue(current)
         self.assertEqual(restored, first)

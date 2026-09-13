@@ -23,6 +23,8 @@
     let sourceCurrent = true;
     let endpoint = data.post_url;
     let version = data.version;
+    const denseExport = structuredClone(data.spec.dense_export || {});
+    let exportSignature = '';
 
     const message = (node, text, error = false) => {
         node.textContent = text;
@@ -136,6 +138,62 @@
             changed();
         } catch (error) { message(byId('import-pieces-status'), error.message, true); }
     });
+    const readDenseExport = () => {
+        byId('dense-export').querySelectorAll('[data-export-layer]').forEach(row => {
+            denseExport[row.dataset.exportLayer] = Object.fromEntries([...row.querySelectorAll('[data-export-key]')].map(input =>
+                [input.dataset.exportKey, input.type === 'checkbox' ? input.checked : input.type === 'number' ? input.valueAsNumber : input.value]));
+        });
+        return structuredClone(denseExport);
+    };
+    const syncExport = () => {
+        const mode = field('export_mode').value;
+        const layerCount = byId('layers').querySelectorAll('[data-layer]').length;
+        const names = Array.from({length: Math.max(0, layerCount - 1)}, (_, i) => 'l' + (i + 1));
+        names.push(...['score', 'wdl', 'uncertainty'].filter(name => field(name + '_outputs').checked));
+        const signature = mode + ':' + names.join(',');
+        if (mode === 'heimdall') field('feature_format').value = 'i16';
+        field('feature_format').disabled = mode === 'heimdall';
+        byId('dense-export').hidden = mode !== 'custom';
+        byId('export-note').textContent = mode === 'heimdall'
+            ? 'Heimdall: PSQ i16×255, TI i8×255, dense i8/i32, native input-major layout. Applies training-time PSQ/TI/L2 weight limits. Requires mirrored PSQ+TI, L1 divisible by 128, hidden sizes 16/32, pairwise CReLU L1, dual L2, eight bucketed score outputs only. This preset matches export/clipping, not the reference trainer’s factorizer or regularization.'
+            : mode === 'custom'
+                ? 'Choose weights and biases independently for each dense layer/head. Integer tensors use rounded quantization and training-time clipping to their representable range (within AdamW’s default bounds). Float32 scales must be 1. Transpose means output-major storage; unchecked uses Bullet’s native input-major order.'
+                : 'Only the feature layer is quantized by the i16 option. All dense hidden layers and output heads remain float32, in output-major order. This is not Heimdall’s integer network format.';
+        if (signature === exportSignature) return;
+        readDenseExport();
+        exportSignature = signature;
+        byId('dense-export').replaceChildren();
+        if (mode !== 'custom') return;
+        for (const name of names) {
+            const values = denseExport[name] || {weight_format: 'f32', weight_scale: 1, bias_format: 'f32', bias_scale: 1, transpose: true};
+            const row = document.createElement('fieldset');
+            row.dataset.exportLayer = name;
+            row.className = 'builder-group';
+            const legend = document.createElement('legend');
+            legend.textContent = name.startsWith('l') ? 'Hidden layer L' + (Number(name.slice(1)) + 1) : name + ' output head';
+            row.append(legend);
+            const grid = document.createElement('div');
+            grid.className = 'field-grid';
+            for (const [key, value] of Object.entries(values)) {
+                const label = document.createElement('label');
+                label.className = key === 'transpose' ? 'choice' : 'field';
+                label.append(document.createTextNode(key.replaceAll('_', ' ')));
+                const input = document.createElement(key.endsWith('_format') ? 'select' : 'input');
+                input.dataset.exportKey = key;
+                input.setAttribute('aria-label', name + ' ' + key.replaceAll('_', ' '));
+                if (key.endsWith('_format')) {
+                    for (const dtype of ['f32', 'i8', 'i16', 'i32']) input.add(new Option(dtype, dtype));
+                    input.value = value;
+                } else if (key === 'transpose') {
+                    input.type = 'checkbox'; input.checked = value;
+                } else {
+                    Object.assign(input, {type: 'number', min: '1', max: '2147483647', step: '1', required: true, value: String(value)});
+                }
+                label.append(input); grid.append(label);
+            }
+            row.append(grid); byId('dense-export').append(row);
+        }
+    };
     const syncNetwork = () => {
         for (const name of ['score', 'wdl', 'uncertainty']) {
             field(name + '_buckets').disabled = !field(name + '_outputs').checked;
@@ -185,6 +243,7 @@
         byId('architecture').textContent = '(' + inputs + ' -> ' + featureSize + ')x2' + featurePairwise + ' -> ' + dense + skip;
         byId('activations').textContent = 'Activation: ' + field('activation').value.toUpperCase() + (pairwise ? ' · Pairwise: ' + field('pairwise_left_activation').value.toUpperCase() + ' × ' + field('pairwise_right_activation').value.toUpperCase() + ' (halves each selected layer’s width)' : '') + (layers.length < 2 ? ' · No dense hidden layers.' : bucketHidden ? ' · Hidden layers use ' + hiddenBuckets + ' ' + hiddenBucketHead.toUpperCase() + ' output buckets.' : ' · Hidden layers are shared; output heads are bucketed.');
         if (dualLayers.length) byId('activations').textContent += ' · Dual: concatenate CReLU(x) and CReLU(x²) at ' + dualLayers.map(layer => 'L' + layer).join(', ') + ' (doubles width).';
+        syncExport();
     };
     const syncSkipConnection = () => {
         const pairwiseLayers = selectedPairwiseLayers();
@@ -625,6 +684,7 @@
         spec.presentation = Object.fromEntries(Object.entries(stageEditors).map(([channel, editor]) => [channel, editor.mode()]));
         spec.pairwise_layers = byId('pairwise-layers').value.split(',').map(Number);
         spec.dual_layers = byId('dual-layers').value.split(',').map(Number);
+        spec.dense_export = readDenseExport();
         for (const key of ['wdl_model_params_a', 'wdl_model_params_b']) spec[key] = [...byId('wdl-coefficients').querySelectorAll('[data-coefficient="' + key + '"]')].map(input => input.valueAsNumber);
         if (!spec.psqt_inputs && !spec.half_move_clock) {
             spec.input_buckets = 1;
