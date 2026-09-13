@@ -243,4 +243,21 @@ def detail(request, pk):
                     record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected'}, actor_id=request.user.pk)
             record_event('worker.disconnected', machine or capability, request.user.pk, actor_id=request.user.pk)
         return redirect(request, worker['url'])
-    return render(request, 'worker_detail.html', {'page_title': worker['name'], 'worker': worker, 'engine_names': sorted(OPENBENCH_CONFIG['engines'])})
+    from OpenBench.worker_diagnostics import diagnose_test, diagnose_training
+    tests = Test.objects.filter(finished=False, deleted=False).exclude(execution__has_key='demo').select_related('dev', 'base').order_by('-pk')
+    selected = request.GET.get('diagnose', '')
+    trains = TrainingRun.objects.filter(state__in=['QUEUED', *TRAINING_ACTIVE], deleted=False).exclude(snapshot__has_key='demo').select_related('engine').order_by('-pk')
+    choices = [{'value': 'test:%s' % test.pk, 'label': '#%s · %s · %s vs %s%s' % (test.pk, test.dev_engine, test.dev.name, test.base.name, ' · Awaiting approval' if not test.approved else '')} for test in tests]
+    training_choices = [{'value': 'training:%s' % run.pk, 'label': '#%s · %s · %s' % (run.pk, run.engine.name, run.name)} for run in trains]
+    diagnosis = None
+    if selected:
+        kind, _, identifier = selected.partition(':')
+        valid = identifier.isascii() and identifier.isdigit() and len(identifier) < 12
+        item = (Test.objects.filter(pk=int(identifier)).first() if kind == 'test' else TrainingRun.objects.select_related('engine').filter(pk=int(identifier), deleted=False).first() if kind == 'training' else None) if valid else None
+        if item:
+            machine = Machine.objects.filter(pk=pk).first() if str(pk).isdigit() else None
+            diagnosis = diagnose_training(request, machine, worker, item) if kind == 'training' else diagnose_test(request, machine, worker, item)
+        else:
+            diagnosis = {'eligible': False, 'reasons': ['Select an existing test or training run.'], 'notes': []}
+    return render(request, 'worker_detail.html', {'page_title': worker['name'], 'worker': worker, 'engine_names': sorted(OPENBENCH_CONFIG['engines']),
+        'diagnostic_tests': choices, 'diagnostic_trains': training_choices, 'diagnostic_selected': selected, 'diagnosis': diagnosis})

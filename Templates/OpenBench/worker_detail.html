@@ -18,6 +18,26 @@
             {% if worker.manage and worker.current_workload %}<form method="post">{% csrf_token %}<input type="hidden" name="workload" value="{{ worker.current_workload }}"><button class="button" type="submit" name="action" value="stop">Stop current workload</button></form>{% endif %}
         </section>
     </div>
+    <section class="workspace-panel workspace-stack" id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <p>Check whether this worker can pick up an active test or training run using its latest reported settings.</p>
+        <form method="get" action="{{ worker.url }}#troubleshooting" class="workspace-stack">
+            <label for="diagnostic-test">Test or training run</label>
+            <select id="diagnostic-test" name="diagnose" required>
+                <option value="">Select a workload</option>
+                <optgroup label="Tests, tunes and datagen">{% for choice in diagnostic_tests %}<option value="{{ choice.value }}"{% if diagnostic_selected == choice.value %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</optgroup>
+                <optgroup label="Training">{% for choice in diagnostic_trains %}<option value="{{ choice.value }}"{% if diagnostic_selected == choice.value %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</optgroup>
+            </select>
+            <button type="submit" class="button">Check eligibility</button>
+        </form>
+        {% if diagnosis %}
+        <div role="status" class="workspace-stack">
+            <h3>{% if diagnosis.eligible %}Eligible to be picked up{% else %}Not eligible to be picked up now{% endif %}</h3>
+            {% if diagnosis.reasons %}<ul>{% for reason in diagnosis.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+            {% for note in diagnosis.notes %}<p>{{ note }}</p>{% endfor %}
+        </div>
+        {% elif not diagnostic_tests and not diagnostic_trains %}<p>No active workloads are available.</p>{% endif %}
+    </section>
     {% if worker.manage %}
     <section class="workspace-panel workspace-stack">
         <h2>Worker settings</h2>
