@@ -3,7 +3,7 @@
 {% block heading %}{% if editing %}{% if is_new %}Add {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}Manage{% endif %}{% endblock %}
 {% block page_actions %}
     {% if editing %}<a class="button" href="/manage/{{ section }}/">Back to {{ title|lower }}</a>
-    {% elif section != 'site' %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
+    {% elif section != 'site' and can_create %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -42,6 +42,16 @@
                 </fieldset>
             {% endif %}
             {% if section == 'engines' %}
+                {% if can_manage_maintainers %}
+                <fieldset class="form-section">
+                    <legend>Maintainers</legend>
+                    <label for="maintainers">OpenBench accounts</label>
+                    <select id="maintainers" name="maintainers" multiple size="8" aria-describedby="maintainers-help">
+                        {% for account in maintainer_accounts %}<option value="{{ account.pk }}"{% if account.pk|stringformat:'s' in selected_maintainers %} selected{% endif %}>{{ account.username }}{% if not account.is_active %} (inactive){% endif %}</option>{% endfor %}
+                    </select>
+                    <p id="maintainers-help">Maintainers can edit this engine’s configuration only. Only staff can change this list. Hold Ctrl or Command to select multiple accounts; clear the selection to remove all maintainers.</p>
+                </fieldset>
+                {% endif %}
                 <label class="choice"><input type="checkbox" name="private" {% if values.private %}checked{% endif %}> Private engine</label>
                 <div class="field">
                     <label for="nps">Reference NPS</label>

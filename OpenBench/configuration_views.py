@@ -1,6 +1,7 @@
 import copy
 
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.http import Http404
@@ -23,6 +24,8 @@ def entry_version(instance):
     related = [str(getattr(instance, field + '_id')) for field in ('variant', 'runner_release', 'runner') if hasattr(instance, field + '_id')]
     if isinstance(instance, (EngineConfig, OpeningBook)) and not instance._state.adding:
         related += sorted(str(pk) for pk in instance.variants.values_list('pk', flat=True))
+    if isinstance(instance, EngineConfig) and not instance._state.adding:
+        related.append(['maintainers', *sorted(str(pk) for pk in instance.maintainers.values_list('pk', flat=True))])
     return fingerprint([instance.name, instance.enabled, instance.settings, related])
 
 
@@ -32,13 +35,21 @@ def manage(request, section='engines', identifier=None):
 
     if section not in SECTIONS or section == 'notifications':
         raise Http404
-    if not request.user.is_active or not request.user.is_superuser:
+    staff = request.user.is_staff or request.user.is_superuser
+    if not request.user.is_active:
+        raise PermissionDenied
+    if not request.user.is_superuser and section != 'engines':
+        raise PermissionDenied
+    if not staff and (identifier == 'new' or not EngineConfig.objects.filter(maintainers=request.user).exists()):
+        raise PermissionDenied
+    if not staff and 'maintainers' in request.POST:
         raise PermissionDenied
     title, model = SECTIONS[section]
     context = {'title': title, 'page_title': 'Manage', 'section': section, 'admin': True,
                'active_section': 'runners' if section == 'releases' else section,
                'singular': {'engines': 'engine', 'books': 'book', 'variants': 'variant', 'runners': 'runner', 'releases': 'release'}.get(section),
-               'navigation': [(key, label) for key, (label, _) in SECTIONS.items() if key != 'releases']}
+               'can_create': staff, 'can_manage_maintainers': staff,
+               'navigation': [(key, label) for key, (label, _) in SECTIONS.items() if key != 'releases' and (request.user.is_superuser or key == 'engines')]}
     if section == 'site':
         if request.method != 'GET' or identifier is not None:
             raise PermissionDenied
@@ -48,6 +59,8 @@ def manage(request, section='engines', identifier=None):
         if request.method != 'GET':
             raise PermissionDenied
         objects = model.objects.order_by('name')
+        if not staff:
+            objects = objects.filter(maintainers=request.user)
         if model in RELATIONS:
             objects = objects.select_related(RELATIONS[model][0])
         if model in (EngineConfig, OpeningBook):
@@ -58,6 +71,8 @@ def manage(request, section='engines', identifier=None):
         return render(request, 'configuration.html', context)
 
     instance = model() if identifier == 'new' else get_object_or_404(model, pk=identifier)
+    if not staff and not instance.maintainers.filter(pk=request.user.pk).exists():
+        raise PermissionDenied
     original = entry_version(instance)
     values = copy.deepcopy(instance.settings)
     values.update(name=instance.name, enabled=instance.enabled)
@@ -71,6 +86,9 @@ def manage(request, section='engines', identifier=None):
         context['variants'] = Variant.objects.order_by('name')
         context['selected_variants'] = [str(pk) for pk in instance.variants.values_list('pk', flat=True)] if identifier != 'new' else [request.GET.get('variant', '')]
     if section == 'engines':
+        if staff:
+            context['maintainer_accounts'] = get_user_model().objects.order_by('username')
+            context['selected_maintainers'] = [str(pk) for pk in instance.maintainers.values_list('pk', flat=True)] if identifier != 'new' else []
         build = values.pop('build', {})
         values.update(path=build.get('path', ''), compilers='\n'.join(build.get('compilers', [])),
                       systems='\n'.join(build.get('systems', [])), cpuflags='\n'.join(build.get('cpuflags', [])))
@@ -82,10 +100,14 @@ def manage(request, section='engines', identifier=None):
             values[field] = request.POST.get(field) == 'on'
         if section in ('engines', 'books'):
             context['selected_variants'] = request.POST.getlist('variants')
+        if section == 'engines' and staff:
+            context['selected_maintainers'] = request.POST.getlist('maintainers')
         try:
             with transaction.atomic():
                 if identifier != 'new':
                     instance = get_object_or_404(model.objects.select_for_update(), pk=identifier)
+                    if not staff and not instance.maintainers.filter(pk=request.user.pk).exists():
+                        raise PermissionDenied
                     if request.POST.get('version') != entry_version(instance):
                         raise ValidationError('This entry changed; reload before saving')
                     if request.POST.get('name') != instance.name:
@@ -136,6 +158,14 @@ def manage(request, section='engines', identifier=None):
                 instance.save()
                 if section in ('engines', 'books'):
                     instance.variants.set(selected)
+                if section == 'engines' and staff:
+                    identifiers = context['selected_maintainers']
+                    if any(not value.isascii() or not value.isdigit() or len(value) > 20 for value in identifiers):
+                        raise ValidationError('Choose existing OpenBench accounts as maintainers.')
+                    maintainers = list(get_user_model().objects.filter(pk__in=identifiers))
+                    if len(maintainers) != len(set(identifiers)):
+                        raise ValidationError('Unknown maintainer account.')
+                    instance.maintainers.set(maintainers)
             request.session['status_message'] = '%s saved.' % instance
             return redirect('/manage/%s/' % ('runners' if section == 'releases' else section))
         except (ValidationError, IntegrityError, ValueError) as error:

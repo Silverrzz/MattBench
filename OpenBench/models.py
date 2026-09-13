@@ -370,6 +370,7 @@ class EngineConfig(Model):
     settings = JSONField(default=dict, blank=True)
     updated  = DateTimeField(auto_now=True)
     variants = ManyToManyField(Variant, related_name='engines', blank=True)
+    maintainers = ManyToManyField(User, related_name='maintained_engines', blank=True)
 
     def clean(self):
         from OpenBench.config import verify_engine_config
