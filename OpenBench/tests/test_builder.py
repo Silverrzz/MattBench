@@ -6,12 +6,32 @@ from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
 from OpenBench.builder_values import import_layout, parse_array
-from OpenBench.schedule_builder import DEFAULT_SPEC, MANIFEST, SOURCE, builder_state, dataset_stages, generate_schedule, validate_spec
+from OpenBench.schedule_builder import DEFAULT_SPEC, MANIFEST, MANIFEST_VERSION, SOURCE, builder_state, dataset_stages, generate_schedule, schedule_dataset_stages, validate_spec
 from OpenBench.training_checkpoints import validate_checkpoint_schedule
 from OpenBench.tests.builder_fixtures import integer_export
 
 
 class BuilderTests(SimpleTestCase):
+    def test_dataset_stage_discovery_for_all_supported_manifests(self):
+        spec = self.spec(superbatches=1100,
+            lr_stages=[dict(start=1, end=100, kind='constant', initial=0.001, final=0.001),
+                       dict(start=101, end=1100, kind='linear', initial=0.001, final=0.00001)],
+            wdl_stages=[dict(start=1, end=900, kind='constant', initial=0.2, final=0.2),
+                        dict(start=901, end=1100, kind='constant', initial=1.0, final=1.0)])
+        _, files, settings = generate_schedule(spec)
+        expected = [dict(start=1, end=100), dict(start=101, end=900), dict(start=901, end=1100)]
+        for version in range(1, MANIFEST_VERSION + 2):
+            with self.subTest(version=version):
+                metadata = json.loads(files[MANIFEST])
+                metadata['version'] = version
+                files[MANIFEST] = json.dumps(metadata)
+                schedule = SimpleNamespace(files=files, settings=settings)
+                self.assertEqual(schedule_dataset_stages(schedule), expected if 2 <= version <= MANIFEST_VERSION else [])
+        metadata['version'] = MANIFEST_VERSION
+        files[MANIFEST] = json.dumps(metadata)
+        files[SOURCE] += '\n// Source edited outside builder\n'
+        self.assertEqual(schedule_dataset_stages(SimpleNamespace(files=files, settings=settings)), [])
+
     def spec(self, **changes):
         return {**copy.deepcopy(DEFAULT_SPEC), **changes}
 

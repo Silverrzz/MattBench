@@ -14,6 +14,7 @@ from OpenBench.builder_export import export_recipe, split_inputs, upgrade_export
 
 BULLET_COMMIT = '629ee50000b2afb7b3337595401c830d3b1e0f42'
 MANIFEST = 'mattbench-builder.json'
+MANIFEST_VERSION = 6
 SOURCE = 'examples/mattbench.rs'
 DEFAULT_SPEC = {
     'layers': [768], 'activation': 'screlu', 'psqt_inputs': True, 'threat_inputs': False, 'pawn_pair_inputs': False,
@@ -251,7 +252,7 @@ def fingerprint(files, settings):
 def builder_state(schedule):
     try:
         metadata = json.loads(schedule.files[MANIFEST])
-        if metadata['version'] not in (1, 2, 3, 4, 5, 6):
+        if metadata['version'] not in range(1, MANIFEST_VERSION + 1):
             return None, False
         spec = validate_spec(metadata['spec'])
         return spec, metadata['fingerprint'] == fingerprint(schedule.files, schedule.settings)
@@ -432,7 +433,7 @@ if count < max_active {
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
     files[MANIFEST] = json.dumps({
-        'version': 6, 'spec': spec, 'fingerprint': fingerprint(files, settings),
+        'version': MANIFEST_VERSION, 'spec': spec, 'fingerprint': fingerprint(files, settings),
         'workload_bounds': True,
         'optimizer': {'name': spec['optimizer'], 'decay': 0.01, 'beta1': 0.99 if ranger else 0.9, 'beta2': 0.999,
                       'alpha': spec['ranger_alpha'] if ranger else None, 'k': spec['ranger_k'] if ranger else None,
@@ -477,7 +478,9 @@ def schedule_dataset_stages(schedule):
     if not spec or not current:
         return []
     metadata = json.loads(schedule.files[MANIFEST])
-    if metadata['version'] not in (2, 3, 4, 5):
+    # builder_state already rejects unsupported versions. Only v1 predates
+    # per-stage datasets; don't maintain a second version allowlist here.
+    if metadata['version'] == 1:
         return []
     stored = metadata['spec']
     return dataset_stages(stored if 'lr_stages' in stored and 'wdl_stages' in stored else spec)

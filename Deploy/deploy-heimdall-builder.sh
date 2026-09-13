@@ -30,6 +30,7 @@ while IFS= read -r path; do
     case "$path" in
         OpenBench/data/builder_ranger.rs|Scripts/verify_ranger_resume.py|Scripts/verify_ranger_resume.rs) ;;
         OpenBench/tests/builder_fixtures.py) ;;
+        OpenBench/tests/test_training_stage_datasets.py) ;;
         Deploy/update-builder-schedule.py|OpenBench/tests/test_builder_update.py) ;;
         OpenBench/schedule_builder.py|OpenBench/builder_export.py|OpenBench/data/builder_main.rs|OpenBench/static/schedule_builder.js|OpenBench/training_checkpoints.py|Templates/OpenBench/schedule_builder.html|OpenBench/tests/test_builder.py|OpenBench/tests/test_gpu_continuation.py|Scripts/prepare_builder_gpu.py|Scripts/test_builder_browser.cjs|Scripts/verify_builder_rust.py|Scripts/verify_builder_export.py|docs/builder-workloads.md|Deploy/deploy-heimdall-builder.sh) ;;
         *) echo "Unexpected release change: $path. Review a separate deployment." >&2; exit 1 ;;
