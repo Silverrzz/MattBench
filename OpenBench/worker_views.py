@@ -150,7 +150,8 @@ def detail(request, pk):
     if not str(pk).isdigit():
         linked = TrainingWorker.objects.filter(pk=pk, machine__isnull=False).first()
         if linked:
-            return redirect(request, '/workers/%s/' % linked.machine_id)
+            query = request.GET.urlencode()
+            return redirect(request, '/workers/%s/%s' % (linked.machine_id, '?' + query if query else ''))
     rows = worker_rows(request.user, pk)
     worker = next((row for row in rows if row['id'] == str(pk)), None)
     if worker is None:

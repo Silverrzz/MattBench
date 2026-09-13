@@ -23,7 +23,7 @@
         <p>Check whether this worker can pick up an active test or training run using its latest reported settings.</p>
         <form method="get" action="{{ worker.url }}#troubleshooting" class="workspace-stack">
             <label for="diagnostic-test">Test or training run</label>
-            <select id="diagnostic-test" name="diagnose" required>
+            <select id="diagnostic-test" name="diagnose" required data-preserve-live>
                 <option value="">Select a workload</option>
                 <optgroup label="Tests, tunes and datagen">{% for choice in diagnostic_tests %}<option value="{{ choice.value }}"{% if diagnostic_selected == choice.value %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</optgroup>
                 <optgroup label="Training">{% for choice in diagnostic_trains %}<option value="{{ choice.value }}"{% if diagnostic_selected == choice.value %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</optgroup>
