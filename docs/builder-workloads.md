@@ -4,6 +4,12 @@ Builder manifests now use version 4. Existing schedules retain their LR interpol
 
 ## Builder behavior
 
+New schedules use the score output's material-count bucket selector throughout the dense hidden layers and final score head. With score output disabled, hidden layers use the WDL output's selector instead. Other heads retain their independently configured output buckets. Hidden layer sizes specify neurons per bucket; input king buckets remain separate. The **Use output buckets in hidden layers** checkbox can retain shared hidden layers. Existing schedules without this setting reopen with shared hidden layers, preserving their architecture. Changing dense bucketing requires a compatible new checkpoint or training from scratch.
+
+**Dual activation** can be enabled on L2, L3, or both. It concatenates `CReLU(x)` and `CReLU(x²)` after bucket selection, matching Heimdall's `x.concat(x.abs_pow(2.0)).crelu()`. In particular, negative inputs still contribute to the squared branch. Each selected layer doubles its output width. Pairwise activation remains a separate operation that multiplies activated halves; the two cannot be selected on the same layer. Skip connections compare widths after activation. Checkpoint resumption requires the same dual activation layers.
+
+For Heimdall's activation and dense-bucketing structure, use layers `512, 16, 32`, eight score output buckets, hidden output bucketing, pairwise CReLU × CReLU on the feature layer, dual activation on L2, and CReLU elsewhere. This does not change the builder's generic export format or implement Heimdall's custom weight quantization and regularization.
+
 Both LR and WDL editors accept lengths or inclusive boundaries. The run total is explicit: changing it does not adjust stages. Each channel must cover that total independently. Adding a stage splits the last stage; removing one transfers its duration to its neighbor. Entry modes are presentation metadata; execution uses canonical inclusive ranges. Dataset selectors use the union of both channels’ boundaries.
 
 Each native LR stage can use Constant, Linear, Cosine, Exponential, Step, Drop, or **Sequence**. Choose Sequence and add segments to combine curves within one stage: an 800-SB stage can contain cosine for 50 SB followed by linear for 750 SB. Each segment has its own curve parameters and optional Warmup. Internal segment boundaries do not create dataset stages or restart the reader. Segment lengths must sum to their containing stage’s length; changing an outer length leaves segments unchanged and reports the exact mismatch. Entry mode also applies to segments; their canonical inclusive ranges start at 1 within the containing stage. Up to 64 segments are supported. Explicitly adding/removing outer stages splits or extends the contained segments along with the outer range.
@@ -58,6 +64,8 @@ MATTBENCH_TEST_GPU_SPEC=/tmp/bullet/verify_gpu_spec.json \
 MATTBENCH_TEST_GPU_DATA=/tmp/bullet/verify_gpu_data.vf \
 bin/python manage.py test OpenBench.tests.test_gpu_continuation
 ```
+
+Repeat GPU fixture preparation with `--dual` and rerun the continuation test to exercise dual activation on both L2 and L3, output-bucketed hidden layers, the feature-layer pairwise activation, and a skip connection together.
 
 The GPU fixture uses ROCm, five SB, small batches, an LR sequence within one stage, pairwise layers, WDL filtering and adaptive sampling. It alternates two runs, restores optimizer checkpoints, and verifies LR/WDL numbering and cumulative history on the first run through completion. Numerical identity across reader restarts is not required.
 

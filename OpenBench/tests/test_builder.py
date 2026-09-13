@@ -7,11 +7,86 @@ from django.test import SimpleTestCase
 
 from OpenBench.builder_values import import_layout, parse_array
 from OpenBench.schedule_builder import DEFAULT_SPEC, MANIFEST, SOURCE, builder_state, dataset_stages, generate_schedule, validate_spec
+from OpenBench.training_checkpoints import validate_checkpoint_schedule
 
 
 class BuilderTests(SimpleTestCase):
     def spec(self, **changes):
         return {**copy.deepcopy(DEFAULT_SPEC), **changes}
+
+    def test_output_bucket_selection_precedes_hidden_activation(self):
+        _, files, _ = generate_schedule(self.spec(layers=[512, 16, 32], pairwise_activation=True,
+                                                dual_activation=True, activation='crelu'))
+        source = files[SOURCE]
+        self.assertIn('builder.new_affine("l1/", 512, 128)', source)
+        self.assertIn('builder.new_affine("l2/", 32, 256)', source)
+        self.assertIn('builder.new_affine("score/", 32, 8)', source)
+        self.assertIn('let preactivation = l1.forward(hidden).select(score_buckets);\n'
+                      '        let hidden = preactivation.concat(preactivation.abs_pow(2.0)).crelu();', source)
+        self.assertIn('let preactivation = l2.forward(hidden).select(score_buckets);', source)
+        metadata = json.loads(files[MANIFEST])['export']
+        self.assertTrue(metadata['hidden_layers_bucketed'])
+        self.assertEqual(metadata['hidden_bucket_count'], 8)
+        self.assertEqual(metadata['hidden_bucket_head'], 'score')
+        self.assertEqual(metadata['dual']['layers'], [2])
+
+    def test_wdl_buckets_and_independent_auxiliary_heads(self):
+        _, files, _ = generate_schedule(self.spec(layers=[32, 8], score_outputs=False, wdl_outputs=True,
+                                                wdl_buckets=4, uncertainty_outputs=True, uncertainty_buckets=2))
+        source = files[SOURCE]
+        self.assertIn('builder.new_affine("l1/", 64, 32)', source)
+        self.assertIn('l1.forward(hidden).select(wdl_buckets)', source)
+        self.assertIn('builder.new_affine("wdl/", 8, 12)', source)
+        self.assertIn('builder.new_affine("uncertainty/", 8, 2)', source)
+        self.assertEqual(json.loads(files[MANIFEST])['export']['hidden_bucket_head'], 'wdl')
+
+    def test_dual_layer_widths_and_skip_connection(self):
+        for dual_layers, l2_inputs, head_inputs in (([2], 16, 16), ([3], 8, 32), ([2, 3], 16, 32)):
+            with self.subTest(dual_layers=dual_layers):
+                _, files, _ = generate_schedule(self.spec(layers=[32, 8, 16], dual_activation=True, dual_layers=dual_layers))
+                self.assertIn('builder.new_affine("l2/", %d, 128)' % l2_inputs, files[SOURCE])
+                self.assertIn('builder.new_affine("score/", %d, 8)' % head_inputs, files[SOURCE])
+                self.assertEqual(files[SOURCE].count('preactivation.concat(preactivation.abs_pow(2.0)).crelu()'), len(dual_layers))
+        validate_spec(self.spec(layers=[32, 8, 16], dual_activation=True, skip_connection=True))
+        validate_spec(self.spec(layers=[32, 16, 8], dual_activation=True, dual_layers=[3], skip_connection=True))
+        for changes in ({'layers': [32]}, {'dual_layers': [1]}, {'dual_layers': [2, 2]}, {'dual_layers': [True]},
+                        {'dual_layers': []}, {'dual_layers': [4]}, {'dual_activation': 1},
+                        {'pairwise_activation': True, 'pairwise_layers': [2]}, {'skip_connection': True}):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                validate_spec(self.spec(**{'layers': [32, 8, 8], 'dual_activation': True, **changes}))
+
+    def test_old_schedules_preserve_shared_layers_and_checkpoint_compatibility(self):
+        old = self.spec(layers=[32, 8, 8])
+        for key in ('hidden_layers_bucketed', 'dual_activation', 'dual_layers'):
+            old.pop(key)
+        spec, files, config = generate_schedule(old)
+        self.assertFalse(spec['hidden_layers_bucketed'])
+        self.assertFalse(spec['dual_activation'])
+        self.assertIn('let preactivation = l1.forward(hidden);', files[SOURCE])
+        manifest = json.loads(files[MANIFEST])
+        manifest['spec'] = old
+        files[MANIFEST] = json.dumps(manifest)
+        restored, current = builder_state(SimpleNamespace(files=files, settings=config))
+        self.assertTrue(current)
+        self.assertEqual(restored, spec)
+        checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
+        engine = SimpleNamespace(pk=1)
+        _, regenerated, updated = generate_schedule(restored)
+        validate_checkpoint_schedule(checkpoint, engine, regenerated, updated)
+        for changes in ({'hidden_layers_bucketed': True}, {'dual_activation': True}):
+            _, changed_files, changed_config = generate_schedule({**restored, **changes})
+            with self.assertRaises(ValidationError):
+                validate_checkpoint_schedule(checkpoint, engine, changed_files, changed_config)
+
+    def test_dual_checkpoint_rejects_changed_layers_but_accepts_lr_changes(self):
+        spec, files, config = generate_schedule(self.spec(layers=[32, 8, 8], dual_activation=True))
+        checkpoint = SimpleNamespace(superbatch=10, run=SimpleNamespace(engine_id=1, snapshot={'files': files, 'settings': config}))
+        _, changed_files, changed_config = generate_schedule({**spec, 'dual_layers': [3]})
+        with self.assertRaisesMessage(ValidationError, 'same dual activation layers'):
+            validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed_files, changed_config)
+        spec['lr_stages'][0]['initial'] = 0.005
+        _, changed_files, changed_config = generate_schedule(spec)
+        validate_checkpoint_schedule(checkpoint, SimpleNamespace(pk=1), changed_files, changed_config)
 
     def test_legacy_probabilities_preserve_piece_indices(self):
         old = self.spec(piece_count_keep=[i / 32 for i in range(2, 33)])

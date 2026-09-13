@@ -240,9 +240,13 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
             raise ValidationError('The checkpoint’s network configuration could not be verified.') from None
         architecture = ('layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
                         'half_move_clock', 'merged_king_planes', 'score_outputs', 'score_buckets', 'wdl_outputs', 'wdl_buckets',
-                        'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation')
+                        'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation', 'dual_activation')
         if any(before[key] != after[key] for key in architecture):
             raise ValidationError('The checkpoint requires the same network architecture. You can change WDL, learning rate and training duration.')
+        if len(before['layers']) > 1 and before['hidden_layers_bucketed'] != after['hidden_layers_bucketed']:
+            raise ValidationError('The checkpoint requires the same hidden-layer output bucketing.')
+        if before['dual_activation'] and before['dual_layers'] != after['dual_layers']:
+            raise ValidationError('The checkpoint requires the same dual activation layers.')
         if before['pairwise_activation'] and any(before[key] != after[key] for key in ('pairwise_layers', 'pairwise_left_activation', 'pairwise_right_activation')):
             raise ValidationError('The checkpoint requires the same pairwise layers and activations.')
         if checkpoint.superbatch >= after['superbatches']:

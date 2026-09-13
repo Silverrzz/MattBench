@@ -27,6 +27,14 @@ variants = [('matrix', base), ('legacy', {**copy.deepcopy(base), 'lr_convention'
 sequence = copy.deepcopy(base)
 sequence['lr_stages'] = [{'start': 1, 'end': 800, 'kind': 'sequence', 'segments': sequence['lr_stages']}]
 variants.append(('nested_sequence', sequence))
+for name, changes in (
+    ('heimdall', dict(layers=[512, 16, 32], pairwise_activation=True, dual_activation=True, activation='crelu', threat_inputs=True)),
+    ('dual_l3', dict(layers=[32, 16, 8], dual_activation=True, dual_layers=[3], skip_connection=True)),
+    ('dual_both', dict(layers=[32, 8, 8], dual_activation=True, dual_layers=[2, 3], skip_connection=True)),
+    ('wdl_buckets', dict(layers=[32, 8, 8], score_outputs=False, wdl_outputs=True, wdl_buckets=4, uncertainty_outputs=True, uncertainty_buckets=2)),
+    ('shared_hidden', dict(layers=[32, 8, 8], hidden_layers_bucketed=False)),
+):
+    variants.append((name, {**copy.deepcopy(DEFAULT_SPEC), **changes}))
 text = manifest.read_text()
 for name, spec in variants:
     name = 'verify_' + name

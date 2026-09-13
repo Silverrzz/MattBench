@@ -71,6 +71,8 @@
     }
     byId('pairwise-layers').value = initialPairwiseLayers;
     const selectedPairwiseLayers = () => field('pairwise_activation').checked ? byId('pairwise-layers').value.split(',').map(Number) : [];
+    byId('dual-layers').value = data.spec.dual_layers.join(',');
+    const selectedDualLayers = () => field('dual_activation').checked ? byId('dual-layers').value.split(',').map(Number) : [];
     data.spec.piece_count_keep.forEach((value, index) => {
         const label = document.createElement('label');
         label.className = 'field';
@@ -163,22 +165,31 @@
         if (field('wdl_outputs').checked) heads.push('WDLx' + count('wdl_buckets'));
         if (field('uncertainty_outputs').checked) heads.push('UNCx' + count('uncertainty_buckets'));
         const pairwiseLayers = selectedPairwiseLayers();
+        const dualLayers = selectedDualLayers();
+        byId('dual-options').hidden = !field('dual_activation').checked;
+        byId('dual-layers').disabled = !field('dual_activation').checked;
+        field('dual_activation').setCustomValidity(dualLayers.some(layer => layer > layers.length) ? 'Each dual activation layer must exist.' : dualLayers.some(layer => pairwiseLayers.includes(layer)) ? 'Choose either pairwise or dual activation for each layer.' : '');
         const pairwise = field('pairwise_activation').checked;
         byId('pairwise-options').hidden = !pairwise;
         byId('pairwise-options').querySelectorAll('select').forEach(input => { input.disabled = !pairwise; });
         const pairwiseLabel = '-pw';
-        const layerLabel = (size, index) => pairwiseLayers.includes(index + 1) ? size + pairwiseLabel : size;
+        const hiddenBucketHead = field('score_outputs').checked ? 'score' : 'wdl';
+        const bucketHidden = field('hidden_layers_bucketed').checked;
+        const hiddenBuckets = count(hiddenBucketHead + '_buckets');
+        const layerLabel = (size, index) => (pairwiseLayers.includes(index + 1) ? size + pairwiseLabel : dualLayers.includes(index + 1) ? size + '-dual' : size) + (bucketHidden ? 'x' + hiddenBuckets : '');
         const dense = [...layers.slice(1).map((size, index) => layerLabel(size, index + 1)), '(' + (heads.join(' + ') || 'no outputs') + ')'].join(' -> ');
         const skip = field('skip_connection').checked ? ' · skip L2 -> L3' : '';
         field('pairwise_activation').setCustomValidity(pairwiseLayers.some(layer => !Number.isInteger(layers[layer - 1]) || layers[layer - 1] % 2) ? 'Each selected pairwise layer must exist and have an even number of neurons.' : '');
         const featureSize = layers[0] ?? '?';
         const featurePairwise = pairwiseLayers.includes(1) ? pairwiseLabel : '';
         byId('architecture').textContent = '(' + inputs + ' -> ' + featureSize + ')x2' + featurePairwise + ' -> ' + dense + skip;
-        byId('activations').textContent = 'Activation: ' + field('activation').value.toUpperCase() + (pairwise ? ' · Pairwise: ' + field('pairwise_left_activation').value.toUpperCase() + ' × ' + field('pairwise_right_activation').value.toUpperCase() + ' (halves each selected layer’s width)' : '') + ' · Hidden layers are shared; output heads are bucketed.';
+        byId('activations').textContent = 'Activation: ' + field('activation').value.toUpperCase() + (pairwise ? ' · Pairwise: ' + field('pairwise_left_activation').value.toUpperCase() + ' × ' + field('pairwise_right_activation').value.toUpperCase() + ' (halves each selected layer’s width)' : '') + (layers.length < 2 ? ' · No dense hidden layers.' : bucketHidden ? ' · Hidden layers use ' + hiddenBuckets + ' ' + hiddenBucketHead.toUpperCase() + ' output buckets.' : ' · Hidden layers are shared; output heads are bucketed.');
+        if (dualLayers.length) byId('activations').textContent += ' · Dual: concatenate CReLU(x) and CReLU(x²) at ' + dualLayers.map(layer => 'L' + layer).join(', ') + ' (doubles width).';
     };
     const syncSkipConnection = () => {
         const pairwiseLayers = selectedPairwiseLayers();
-        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map((input, index) => input.valueAsNumber / (pairwiseLayers.includes(index + 1) ? 2 : 1));
+        const dualLayers = selectedDualLayers();
+        const layers = [...byId('layers').querySelectorAll('[data-layer]')].map((input, index) => input.valueAsNumber * (pairwiseLayers.includes(index + 1) ? 0.5 : dualLayers.includes(index + 1) ? 2 : 1));
         const invalid = field('skip_connection').checked && (layers.length < 3 || layers[1] !== layers[2]);
         field('skip_connection').setCustomValidity(invalid ? 'The skip connection requires Layer 2 and Layer 3 to have equal output widths after activation.' : '');
     };
@@ -613,6 +624,7 @@
         spec.wdl_stages = stageEditors.wdl.read();
         spec.presentation = Object.fromEntries(Object.entries(stageEditors).map(([channel, editor]) => [channel, editor.mode()]));
         spec.pairwise_layers = byId('pairwise-layers').value.split(',').map(Number);
+        spec.dual_layers = byId('dual-layers').value.split(',').map(Number);
         for (const key of ['wdl_model_params_a', 'wdl_model_params_b']) spec[key] = [...byId('wdl-coefficients').querySelectorAll('[data-coefficient="' + key + '"]')].map(input => input.valueAsNumber);
         if (!spec.psqt_inputs && !spec.half_move_clock) {
             spec.input_buckets = 1;

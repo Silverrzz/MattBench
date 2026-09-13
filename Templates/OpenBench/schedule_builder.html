@@ -53,6 +53,8 @@
                     <div class="builder-group">
                         <div class="builder-group-heading"><h2>Hidden layers</h2><button class="button" id="builder-add-layer" type="button">+ Add layer</button></div>
                         <div id="builder-layers"></div>
+                        <label class="choice"><input type="checkbox" name="hidden_layers_bucketed">Use output buckets in hidden layers</label>
+                        <p class="builder-note">Dense hidden layers use the score output's material buckets, or the WDL output's buckets when score output is disabled. Layer sizes are per bucket. Other output heads retain their own bucket counts.</p>
                         <label class="choice"><input type="checkbox" name="pairwise_activation">Pairwise activation</label>
                         <div id="builder-pairwise-options" class="field-grid" hidden>
                             <label class="field">Layers<select id="builder-pairwise-layers"><option value="1">Feature layer (L1)</option><option value="2">L2</option><option value="3">L3</option><option value="2,3">L2 and L3</option></select></label>
@@ -60,6 +62,11 @@
                             <label class="field">Second half activation<select name="pairwise_right_activation"><option value="crelu">CReLU</option><option value="screlu">SCReLU</option><option value="relu">ReLU</option><option value="identity">Identity</option></select></label>
                         </div>
                         <label class="choice"><input type="checkbox" name="skip_connection">Skip connection</label>
+                        <label class="choice"><input type="checkbox" name="dual_activation">Dual activation</label>
+                        <div id="builder-dual-options" hidden>
+                            <label class="field">Layers<select id="builder-dual-layers"><option value="2">L2</option><option value="3">L3</option><option value="2,3">L2 and L3</option></select></label>
+                            <p class="builder-note">Concatenates CReLU(x) and CReLU(x²), doubling each selected layer's width. Output bucket selection happens first. Cannot share a layer with pairwise activation.</p>
+                        </div>
                         <div class="field"><label for="builder-activation">Activation</label><select id="builder-activation" name="activation"><option value="screlu">SCReLU</option><option value="crelu">CReLU</option></select></div>
                     </div>
                     <div class="builder-group">

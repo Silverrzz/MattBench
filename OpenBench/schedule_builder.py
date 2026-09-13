@@ -20,6 +20,8 @@ DEFAULT_SPEC = {
     'score_outputs': True, 'score_buckets': 8, 'wdl_outputs': False, 'wdl_buckets': 1,
     'uncertainty_outputs': False, 'uncertainty_buckets': 1,
     'half_move_clock': False, 'merged_king_planes': False, 'skip_connection': False, 'pairwise_activation': False,
+    'hidden_layers_bucketed': True,
+    'dual_activation': False, 'dual_layers': [2],
     'pairwise_layers': [1], 'pairwise_left_activation': 'crelu', 'pairwise_right_activation': 'crelu',
     'random_fen_skip': 0.0, 'position_filtering': True,
     'min_ply': 16, 'max_ply': 100000, 'min_eval': 0, 'max_eval': 31338,
@@ -43,6 +45,9 @@ DEFAULT_SPEC = {
 
 def validate_spec(value):
     if isinstance(value, dict):
+        # Saved schedules predate dense-stack output bucketing. Preserve their graph.
+        value = {'hidden_layers_bucketed': False, **value}
+        value = {'dual_activation': False, 'dual_layers': [2], **value}
         value = {'lr_convention': 'legacy', 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'},
                  **{key: DEFAULT_SPEC[key] for key in ('piece_count_mode', 'result_filtering', 'max_eval_incorrectness',
                     'wdl_filtered', 'wdl_model_params_a', 'wdl_model_params_b', 'material_min', 'material_max', 'mom_target', 'wdl_heuristic_scale')}, **value}
@@ -82,7 +87,7 @@ def validate_spec(value):
         if type(spec[key]) is not int or not minimum <= spec[key] <= maximum:
             raise ValidationError('%s must be between %d and %d.' % (key.replace('_', ' ').capitalize(), minimum, maximum))
     for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave',
-                'score_outputs', 'wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation',
+                'score_outputs', 'wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation', 'hidden_layers_bucketed', 'dual_activation',
                 'position_filtering', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling', 'result_filtering', 'wdl_filtered'):
         if type(spec[key]) is not bool:
             raise ValidationError('Invalid %s selection.' % key.replace('_', ' '))
@@ -141,7 +146,17 @@ def validate_spec(value):
     spec['pairwise_layers'] = sorted(pairwise_layers)
     if spec['pairwise_activation'] and any(layer > len(layers) or layers[layer - 1] % 2 for layer in pairwise_layers):
         raise ValidationError('Each selected pairwise layer must exist and have an even number of neurons.')
-    effective_sizes = [size // 2 if spec['pairwise_activation'] and index + 1 in pairwise_layers else size for index, size in enumerate(layers)]
+    dual_layers = spec['dual_layers']
+    if not isinstance(dual_layers, list) or not dual_layers or any(type(layer) is not int or layer not in (2, 3) for layer in dual_layers) or len(set(dual_layers)) != len(dual_layers):
+        raise ValidationError('Choose L2, L3 or both for dual activation.')
+    spec['dual_layers'] = sorted(dual_layers)
+    if spec['dual_activation']:
+        if any(layer > len(layers) for layer in dual_layers):
+            raise ValidationError('Each dual activation layer must exist.')
+        if spec['pairwise_activation'] and set(dual_layers) & set(pairwise_layers):
+            raise ValidationError('Choose either pairwise or dual activation for each layer.')
+    effective_sizes = [size // 2 if spec['pairwise_activation'] and index + 1 in pairwise_layers else
+                       size * 2 if spec['dual_activation'] and index + 1 in dual_layers else size for index, size in enumerate(layers)]
     if spec['skip_connection'] and (len(layers) < 3 or effective_sizes[1] != effective_sizes[2]):
         raise ValidationError('The skip connection requires Layer 2 and Layer 3 to have equal output widths after activation.')
     layout = spec['king_layout']
@@ -269,6 +284,7 @@ def generate_schedule(value):
     sizes = spec['layers']
     activation = spec['activation']
     pairwise_layers = spec['pairwise_layers'] if spec['pairwise_activation'] else []
+    dual_layers = spec['dual_layers'] if spec['dual_activation'] else []
     def pairwise_expression(node, size):
         halves = []
         for side, start, end in (('left', 0, size // 2), ('right', size // 2, size)):
@@ -291,19 +307,23 @@ def generate_schedule(value):
         graph.append('let hidden = stm_hidden.concat(ntm_hidden);')
     else:
         graph.append('let hidden = l0.forward(stm).%s().concat(l0.forward(ntm).%s());' % (activation, activation))
+    heads = [(name, width) for name, width in (('score', 1), ('wdl', 3), ('uncertainty', 1)) if spec[name + '_outputs']]
+    hidden_bucket_head = ('score' if spec['score_outputs'] else 'wdl') if spec['hidden_layers_bucketed'] and len(sizes) > 1 else None
+    hidden_bucket_count = spec[hidden_bucket_head + '_buckets'] if hidden_bucket_head else 1
     last_size = sizes[0] if 1 in pairwise_layers else sizes[0] * 2
     for index, size in enumerate(sizes[1:], 1):
         if spec['skip_connection'] and index == 2:
             graph.append('let skip = hidden;')
         graph.extend([
-            'let l%d = builder.new_affine("l%d/", %d, %d);' % (index, index, last_size, size),
-            'let preactivation = l%d.forward(hidden);' % index,
-            'let hidden = %s;' % (pairwise_expression('preactivation', size) if index + 1 in pairwise_layers else 'preactivation.%s()' % activation),
+            'let l%d = builder.new_affine("l%d/", %d, %d);' % (index, index, last_size, size * hidden_bucket_count),
+            'let preactivation = l%d.forward(hidden)%s;' % (index, '.select(%s_buckets)' % hidden_bucket_head if hidden_bucket_head else ''),
+            'let hidden = %s;' % (pairwise_expression('preactivation', size) if index + 1 in pairwise_layers else
+                                 'preactivation.concat(preactivation.abs_pow(2.0)).crelu()' if index + 1 in dual_layers else
+                                 'preactivation.%s()' % activation),
         ])
         if spec['skip_connection'] and index == 2:
             graph.append('let hidden = hidden + skip;')
-        last_size = size // 2 if index + 1 in pairwise_layers else size
-    heads = [(name, width) for name, width in (('score', 1), ('wdl', 3), ('uncertainty', 1)) if spec[name + '_outputs']]
+        last_size = size // 2 if index + 1 in pairwise_layers else size * 2 if index + 1 in dual_layers else size
     model_inputs = []
     bucket_mapping = []
     graph_pattern = '(stm, ntm)'
@@ -391,11 +411,14 @@ def generate_schedule(value):
                    'heads': {name: {'buckets': spec[name + '_buckets'], 'outputs_per_bucket': width,
                                     'activation': {'score': 'sigmoid', 'wdl': 'softmax', 'uncertainty': 'identity'}[name],
                                     'weights': name + '/w', 'biases': name + '/b'} for name, width in heads},
-                   'hidden_layers_bucketed': False, 'head_order': [name for name, _ in heads],
+                   'hidden_layers_bucketed': hidden_bucket_head is not None,
+                   'hidden_bucket_head': hidden_bucket_head, 'hidden_bucket_count': hidden_bucket_count,
+                   'head_order': [name for name, _ in heads],
                    'threat_features': (59808 if spec['pawn_pair_inputs'] else 60144) if spec['threat_inputs'] else 0,
                    'feature_activation': 'pairwise' if 1 in pairwise_layers else spec['activation'],
                    'feature_outputs_per_perspective': sizes[0] // 2 if 1 in pairwise_layers else sizes[0],
                    'pairwise': {'layers': pairwise_layers, 'left_activation': spec['pairwise_left_activation'], 'right_activation': spec['pairwise_right_activation'], 'operation': 'multiply_activated_halves'},
+                   'dual': {'layers': dual_layers, 'operation': 'concat_crelu_x_crelu_x_squared'},
                    'loss': ' + '.join(errors), 'uncertainty_target': ('score_mse' if spec['score_outputs'] else 'wdl_mse') if spec['uncertainty_outputs'] else None,
                    'skip_connection': {'from_layer': 2, 'to_layer': 3, 'addition': 'after_activation', 'extra_weights': False,
                                        'source': 'https://github.com/Ciekce/Stormphrax/blob/d1468d99e3d3733100d20d682ac627998cce94b2/src/eval/nnue/arch/multilayer.h'} if spec['skip_connection'] else None,

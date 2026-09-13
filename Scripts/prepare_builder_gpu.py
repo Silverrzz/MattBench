@@ -1,6 +1,7 @@
 """Build a small GPU trainer and dataset for the optional continuation integration test.
 
 Usage: HIP_PATH=/opt/rocm bin/python Scripts/prepare_builder_gpu.py /tmp/bullet
+Add --dual to exercise dual activation on L2 and L3 with output-bucketed hidden layers.
 Then set the MATTBENCH_TEST_GPU_* variables described in docs/builder-workloads.md.
 """
 import copy, os, django, sys
@@ -10,6 +11,8 @@ from OpenBench.schedule_builder import DEFAULT_SPEC,generate_schedule
 root=Path(sys.argv[1]).resolve()
 spec=copy.deepcopy(DEFAULT_SPEC)
 spec.update(layers=[16,8,8],pairwise_activation=True,pairwise_layers=[1,2,3],skip_connection=True,backend='rocm',threads=2,buffer_mb=16,batch_size=32,batches_per_superbatch=4,superbatches=5,save_every=5,position_filtering=False,piece_count_sampling=True,piece_count_mode='target',piece_count_keep=[0.0]*32+[1.0],wdl_filtered=True)
+if '--dual' in sys.argv:
+ spec.update(pairwise_layers=[1], dual_activation=True, dual_layers=[2,3], hidden_layers_bucketed=True)
 spec['lr_stages']=[dict(start=1,end=5,kind='sequence',segments=[dict(start=1,end=2,kind='linear',initial=0.01,final=0.001,warmup_batches=2),dict(start=3,end=5,kind='cosine',initial=0.001,final=0.0001,warmup_batches=2)])]
 spec['wdl_stages']=[dict(start=1,end=3,kind='linear',initial=0.2,final=0.8),dict(start=4,end=5,kind='constant',initial=0.8,final=0.8)]
 _,files,_=generate_schedule(spec)
