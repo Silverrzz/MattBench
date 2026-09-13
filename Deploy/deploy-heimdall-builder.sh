@@ -31,6 +31,7 @@ while IFS= read -r path; do
         OpenBench/data/builder_ranger.rs|Scripts/verify_ranger_resume.py|Scripts/verify_ranger_resume.rs) ;;
         OpenBench/tests/builder_fixtures.py) ;;
         OpenBench/tests/test_training_stage_datasets.py) ;;
+        OpenBench/static/training.js|Templates/OpenBench/training_detail.html|Templates/OpenBench/Blocks/training_progress.html|OpenBench/tests/test_training_progress.py|Scripts/test_training_progress.cjs) ;;
         Deploy/update-builder-schedule.py|OpenBench/tests/test_builder_update.py) ;;
         OpenBench/schedule_builder.py|OpenBench/builder_export.py|OpenBench/data/builder_main.rs|OpenBench/static/schedule_builder.js|OpenBench/training_checkpoints.py|Templates/OpenBench/schedule_builder.html|OpenBench/tests/test_builder.py|OpenBench/tests/test_gpu_continuation.py|Scripts/prepare_builder_gpu.py|Scripts/test_builder_browser.cjs|Scripts/verify_builder_rust.py|Scripts/verify_builder_export.py|docs/builder-workloads.md|Deploy/deploy-heimdall-builder.sh) ;;
         *) echo "Unexpected release change: $path. Review a separate deployment." >&2; exit 1 ;;
@@ -110,10 +111,12 @@ sudo rsync -rt --chmod=D755,F644 "$record/static/" "$static/"
 sudo systemctl start "${services[@]}"
 curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 2 \
     --connect-timeout 5 --max-time 15 https://chess.n9x.co/login/ > /dev/null
-curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
-    --connect-timeout 5 --max-time 15 \
-    "https://chess.n9x.co/static/schedule_builder.js?v=$target" > "$record/served-schedule-builder.js"
-cmp OpenBench/static/schedule_builder.js "$record/served-schedule-builder.js"
+for asset in schedule_builder.js training.js; do
+    curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 5 --max-time 15 \
+        "https://chess.n9x.co/static/$asset?v=$target" > "$record/served-$asset"
+    cmp "OpenBench/static/$asset" "$record/served-$asset"
+done
 for service in "${services[@]}"; do systemctl is-active "$service"; done
 [[ $(git rev-parse HEAD) == "$target" ]]
 trap - ERR INT TERM
