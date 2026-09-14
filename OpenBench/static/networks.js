@@ -1,35 +1,25 @@
-
 var Networks = JSON.parse(document.getElementById('json-networks').textContent);
 var network_sort_fields = ['default', 'engine', 'name'];
 
-function is_greater_than(a, b, attrs) {
-
-    for (const attr of attrs) {
-        if (a[attr] === b[attr])
-            continue;
-        return a[attr] > b[attr];
-    }
-
-    return false; // Objects are equal
-}
-
-function swap_networks(index1, index2) {
-
-    var temp = Networks[index1];
-    Networks[index1] = Networks[index2];
-    Networks[index2] = temp;
-
-    var table = document.getElementById("network-table");
-    var temp_row = table.rows[index1+1].innerHTML
-    table.rows[index1+1].innerHTML = table.rows[index2+1].innerHTML;
-    table.rows[index2+1].innerHTML = temp_row;
-}
-
 function sort_networks(fields) {
     network_sort_fields = fields;
-
-    for (let i = 0; i != Networks.length; i++)
-        for (let j = i + 1; j != Networks.length; j++)
-            if (is_greater_than(Networks[j], Networks[i], fields))
-                swap_networks(i, j);
+    const body = document.querySelector('#network-table tbody');
+    if (!body) return;
+    const rows = Array.from(body.rows);
+    const sorted = rows.slice().sort((a, b) => {
+        for (const field of fields) {
+            const left = a.dataset[field] || '';
+            const right = b.dataset[field] || '';
+            if (left !== right) return left > right ? -1 : 1;
+        }
+        return 0;
+    });
+    if (sorted.every((row, index) => row === rows[index])) return;
+    const fragment = document.createDocumentFragment();
+    sorted.forEach(row => fragment.appendChild(row));
+    body.appendChild(fragment);
 }
+
+window.addEventListener('live-content', event => {
+    if (event.detail.id === 'live-networks') sort_networks(network_sort_fields);
+});
