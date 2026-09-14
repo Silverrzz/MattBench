@@ -43,6 +43,18 @@
 .workspace-subtabs button[aria-selected="true"] { color: var(--text); border-color: var(--brand); }
 .workers-page > .workspace-stats { margin-bottom: 0; }
 #live-worker { padding-bottom: 32px; }
+.diagnostic-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.diagnostic-form label { grid-column: 1 / -1; color: var(--subtle); }
+#content .diagnostic-form select { min-width: 0; margin: 0; }
+.diagnostic-form .button { align-self: stretch; padding-inline: 24px; }
+.panel-heading .diagnostic-status { display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--accent); font-size: 11px; }
+.diagnostic-status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.panel-heading .diagnostic-status[data-eligible="true"] { color: var(--green); }
+#content .diagnostic-blockers { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.diagnostic-blockers li { display: flex; align-items: baseline; gap: 12px; padding: 13px 15px; background: var(--surface-raised); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.diagnostic-blockers li + li { border-top: 1px solid var(--line); }
+.diagnostic-blockers i { color: var(--accent); flex-shrink: 0; font-size: 11px; }
+.diagnostic-clear { display: flex; align-items: center; gap: 10px; color: var(--green); font-size: 13px; }
 .workers-name { width: 21%; }
 .workers-hardware { width: 25%; }
 .workers-capacity { width: 13%; }
