@@ -819,7 +819,10 @@ def client_bench_error(request, machine):
 
     # Find and stop the test with the bad bench
     test = Test.objects.select_for_update().get(id=int(request.POST['test_id']))
-    test.finished = True; test.save()
+    test.finished = True
+    test.error = True
+    test.errors_acknowledged = False
+    test.save()
     from OpenBench.lifecycle import test_event
     test_event('execution_error', test)
 
@@ -855,7 +858,11 @@ def client_submit_error(request, machine):
     # 1. Error building the engine. Does not compile, for whatever reason.
     # 2. Error during actual gameplay. Timeloss, Disconnect, Crash, etc.
 
-    # Individual game errors remain in the existing error log only.
+    test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
+    test.error = True
+    test.errors_acknowledged = False
+    test.save(update_fields=['error', 'errors_acknowledged'])
+
     if request.POST['error'].endswith(' build failed'):
         from OpenBench.lifecycle import test_event
         test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))

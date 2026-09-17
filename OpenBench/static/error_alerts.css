@@ -1,0 +1,15 @@
+#content tr.test-error-pulse > td {
+    animation: test-error-pulse 4.8s ease-in-out infinite;
+    animation-delay: var(--error-pulse-delay, 0s);
+}
+@keyframes test-error-pulse {
+    50% { background-color: #691f2a; color: #fff0f1; }
+}
+#content tr.test-error-pulse .revision-link { color: var(--accent); }
+.test-error-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.test-error-heading h2, .test-error-controls form { margin: 0; }
+.test-error-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.test-error-muted { font-size: 12px; color: var(--subtle); }
+@media (prefers-reduced-motion: reduce) {
+    #content tr.test-error-pulse > td { animation: none; box-shadow: inset 0 3px #a33143, inset 0 -3px #a33143; }
+}

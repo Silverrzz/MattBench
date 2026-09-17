@@ -29,6 +29,7 @@ import OpenBench.views
 
 from OpenBench.models import *
 from django.db import transaction
+from django.http import HttpResponseNotAllowed
 from OpenBench.lifecycle import test_event
 
 @transaction.atomic
@@ -38,11 +39,16 @@ def modify_workload(request, id, action=None):
         'APPROVE' : approve_workload, 'RESTART' : restart_workload,
         'STOP'    : stop_workload,    'DELETE'  : delete_workload,
         'RESTORE' : restore_workload, 'MODIFY'  : tweak_workload,
+        'IGNORE_PAST_ERRORS': ignore_past_errors, 'IGNORE_ALL_ERRORS': ignore_all_errors,
     }
 
     # Make sure the requested Action is a known one
     if action not in actions.keys():
         return OpenBench.views.redirect(request, '/index/', error='Unknown Workload action')
+
+    error_action = action in ('IGNORE_PAST_ERRORS', 'IGNORE_ALL_ERRORS')
+    if error_action and request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
 
     # Make sure that the workload exists
     if not (workload := Test.objects.select_for_update().filter(id=id).first()):
@@ -54,7 +60,7 @@ def modify_workload(request, id, action=None):
 
     # Must be an approver, or interacting with their own workload
     profile = Profile.objects.get(user=request.user)
-    if not profile.approver and workload.author != request.user.username:
+    if not profile.approver and workload.author != request.user.username and not (error_action and request.user.is_superuser):
         return OpenBench.views.redirect(request, '/index/', error='You cannot interact with another user\'s Workload')
 
     # Must be an approver
@@ -70,7 +76,7 @@ def modify_workload(request, id, action=None):
         test_event({'APPROVE': 'approved', 'RESTART': 'restarted', 'STOP': 'stopped',
                     'DELETE': 'deleted', 'RESTORE': 'restored'}[action], workload, request.user.pk)
 
-    destination = '/%s/%s/' % (workload.workload_type_str(), workload.id) if action == 'MODIFY' else '/index/'
+    destination = '/%s/%s/' % (workload.workload_type_str(), workload.id) if action == 'MODIFY' or error_action else '/index/'
     return OpenBench.views.redirect(request, destination, status=message)
 
 def approve_workload(request, profile, workload):
@@ -115,3 +121,12 @@ def tweak_workload(request, profile, workload):
     except: pass
 
     return 'Workload was Modified!'
+
+def ignore_past_errors(request, profile, workload):
+    workload.errors_acknowledged = True
+    return 'Past errors ignored.'
+
+
+def ignore_all_errors(request, profile, workload):
+    workload.ignore_all_errors = True
+    return 'Error alerts disabled for this test.'

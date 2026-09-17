@@ -240,7 +240,7 @@
         const count = name => Number.isInteger(field(name).valueAsNumber) ? field(name).valueAsNumber : '?';
         const layers = [...byId('layers').querySelectorAll('[data-layer]')].map(input => Number.isInteger(input.valueAsNumber) ? input.valueAsNumber : '?');
         const kingInputs = [];
-        if (field('psqt_inputs').checked) kingInputs.push(pieces + ' PSQT');
+        if (field('psqt_inputs').checked) kingInputs.push(pieces + ' PSQ');
         if (field('half_move_clock').checked) kingInputs.push('11 HMC');
         const featureGroups = [];
         if (kingInputs.length) featureGroups.push('(' + kingInputs.join(' + ') + ')x' + count('input_buckets') + (field('mirrored').checked ? 'hm' : ''));

@@ -184,6 +184,8 @@ class Test(Model):
     deleted     = BooleanField(default=False)
     approved    = BooleanField(default=False)
     error       = BooleanField(default=False)
+    errors_acknowledged = BooleanField(default=False)
+    ignore_all_errors = BooleanField(default=False)
 
     # Datetime house keeping for meta data
     creation    = DateTimeField(auto_now_add=True)
@@ -203,6 +205,10 @@ class Test(Model):
 
     def as_nwld(self):
         return (self.games, self.wins, self.losses, self.draws)
+
+    @property
+    def pulse_errors(self):
+        return self.error and self.approved and not (self.finished or self.deleted or self.passed or self.failed or self.errors_acknowledged or self.ignore_all_errors)
 
     def workload_type_str(self):
         return {'SPSA' : 'tune', 'DATAGEN' : 'datagen'}.get(self.test_mode, 'test')
