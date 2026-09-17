@@ -132,12 +132,13 @@ class Configuration:
         gcc_ver       = locate_utility('g++', force_exit=False, report_error=False)
         clang_ver     = locate_utility('clang++', force_exit=False, report_error=False)
         self.cxx_comp = 'g++' if gcc_ver else 'clang++' if clang_ver else None
-        print('Looking for C++ Compiler... [%s v%s]' % (self.cxx_comp, locate_utility(self.cxx_comp)))
 
         # Cannot build fastchess nor observe CPU flags
         if not self.cxx_comp:
             print ('[Error] Unable to locate C++ Compiler (g++ or clang++)')
-            sys.exit()
+            sys.exit(1)
+
+        print('Looking for C++ Compiler... [%s v%s]' % (self.cxx_comp, gcc_ver or clang_ver))
 
     def init_client(self):
 
@@ -744,8 +745,8 @@ def get_version(program):
 
     for opt in [ '--version', 'version', '-v', '-version' ]:
         try:
-            process = Popen([program, opt], stdout=PIPE, stderr=PIPE)
-            stdout  = process.communicate()[0].decode('utf-8')
+            process = Popen([program, opt], stdout=PIPE, stderr=STDOUT)
+            stdout  = process.communicate()[0].decode('utf-8', errors='replace')
             return re.search(r'\d+\.\d+(\.\d+)?', stdout).group()
         except: pass
 

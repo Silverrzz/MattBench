@@ -10,6 +10,7 @@ from django.views.decorators.http import require_http_methods
 from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
 from OpenBench.config import OPENBENCH_CONFIG
+from OpenBench.formatting import format_nps
 from OpenBench.workloads.get_workload import machine_info_list
 
 
@@ -71,7 +72,9 @@ def worker_rows(user, identifier=None):
             'state': 'Disconnected' if info.get('disconnected') else 'Busy' if online and job and not job.finished else 'Available' if online else 'Offline',
             'job': job.dev.name if online and job and not job.finished else '',
             'job_url': '/%s/%s/' % (job.workload_type_str(), job.pk) if job else '',
-            'rate': '%s MNPS' % round(machine.mnps, 2) if machine.mnps else '',
+            'rate': '',
+            'dev_nps': format_nps(machine.dev_mnps * 1e6) if online and job and not job.finished else '',
+            'base_nps': format_nps(machine.base_mnps * 1e6) if online and job and not job.finished else '',
             'details': [('Operating system', info.get('os_name', '')), ('CPU', info.get('cpu_name', '')), ('Instruction set', info.get('isa_name', '')), ('Logical cores', info.get('logical_cores', '')), ('Python', info.get('python_ver', '')), ('Client', info.get('client_ver', ''))],
         })
         capability = capabilities.get(machine.pk)
@@ -83,7 +86,7 @@ def worker_rows(user, identifier=None):
             row['details'].append(('GPU', capability.info.get('gpu', '')))
             training_job = active_training.get(capability.pk)
             if training_job:
-                row.update(state='Busy' if online else 'Offline', activity='Training', job='Training', job_url='', rate='', current_workload='training:%s' % training_job.pk)
+                row.update(state='Busy' if online else 'Offline', activity='Training', job='Training', job_url='', rate='', dev_nps='', base_nps='', current_workload='training:%s' % training_job.pk)
             if training_job and (user.pk == machine.user_id or user.is_superuser):
                 row['telemetry'] = training_telemetry(training_job)
                 row.update(state='Busy' if online else 'Offline', job=training_job.name, job_url='/training/%s/' % training_job.pk, rate='%s M pos/s' % round(training_job.metrics.get('positions_per_second', 0) / 1000000, 2))

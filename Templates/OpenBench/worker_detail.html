@@ -1,23 +1,60 @@
 {% extends 'OpenBench/base.html' %}
 {% load static live %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'worker_detail.css' %}?{{ static_version }}">{% endblock %}
 {% block page_actions %}<a class="button" href="/workers/">All workers</a>{% endblock %}
 {% block content %}
-<div id="live-worker" class="workspace-stack" data-live>{% live_region 'live-worker' %}
-    <div class="workspace-columns">
-        <section class="workspace-panel workspace-stack">
-            <div class="worker-device"><i class="fa-solid fa-microchip" aria-hidden="true"></i><div><h2>{{ worker.hardware }}</h2><p>{{ worker.owner.username }} · {{ worker.platform }}{% if worker.demo %} · Demo{% endif %}</p></div></div>
+<div id="live-worker" class="workspace-stack worker-control" data-live>{% live_region 'live-worker' %}
+    <section class="workspace-panel worker-overview">
+        <div class="worker-overview-heading">
+            <div class="worker-device"><i class="fa-solid fa-microchip" aria-hidden="true"></i><div><h2>{{ worker.hardware }}</h2><p>{{ worker.owner.username }} &middot; {{ worker.platform }}{% if worker.demo %} &middot; Demo{% endif %}</p></div></div>
+            <div class="worker-overview-state"><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span><span>{{ worker.updated|timesince }} ago</span></div>
+        </div>
+        <dl class="worker-overview-stats">
+            <div><dt>Mode</dt><dd>{{ worker.mode_label }}</dd></div>
+            <div><dt>CPU threads</dt><dd>{{ worker.threads }}</dd></div>
+            {% if worker.memory %}<div><dt>RAM</dt><dd>{{ worker.memory|floatformat:0 }} GB</dd></div>{% endif %}
+            {% if worker.gpu_memory %}<div><dt>GPU memory</dt><dd>{{ worker.gpu_memory|floatformat:1 }} GB</dd></div>{% endif %}
+            {% if 'Training' in worker.capabilities %}<div><dt>Training from</dt><dd>{% if worker.accept_any_owner %}Any account{% else %}My account{% endif %}</dd></div>{% endif %}
+        </dl>
+        <div class="worker-overview-job">
+            <div><span class="worker-overview-label">Current job</span><div class="worker-current-job">{% if worker.job %}{% if worker.job_url %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}{{ worker.job }}{% endif %}{% else %}<span class="workspace-muted">No active workload</span>{% endif %}</div></div>
+            {% if worker.manage and worker.current_workload %}<form method="post">{% csrf_token %}<input type="hidden" name="workload" value="{{ worker.current_workload }}"><button class="button" type="submit" name="action" value="stop">Stop workload</button></form>{% endif %}
+        </div>
+        <details class="worker-hardware-details">
+            <summary>Hardware &amp; capabilities</summary>
             <div class="worker-jobs">{% for capability in worker.capabilities %}<span class="workspace-tag">{{ capability }}</span>{% endfor %}</div>
-            <dl class="workspace-facts">{% for label, value in worker.details %}{% if value %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}</dl>
-        </section>
-        <section class="workspace-panel workspace-stack">
-            <div class="panel-heading"><h2>Activity</h2><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span></div>
-            <p>Mode: {{ worker.mode_label }}</p>
-            {% if 'Training' in worker.capabilities %}<p>Training workloads: {% if worker.accept_any_owner %}Any account{% else %}My account only{% endif %}</p>{% endif %}
-            <dl class="workspace-facts"><div><dt>Current job</dt><dd>{% if worker.job %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}—{% endif %}</dd></div><div><dt>Last seen</dt><dd>{{ worker.updated|timesince }} ago</dd></div><div><dt>CPU threads</dt><dd>{{ worker.threads }}</dd></div>{% if worker.gpu_memory %}<div><dt>GPU memory</dt><dd>{{ worker.gpu_memory }} GB</dd></div>{% endif %}{% if worker.memory %}<div><dt>RAM</dt><dd>{{ worker.memory }} GB</dd></div>{% endif %}</dl>
-            {% if worker.manage and worker.current_workload %}<form method="post">{% csrf_token %}<input type="hidden" name="workload" value="{{ worker.current_workload }}"><button class="button" type="submit" name="action" value="stop">Stop current workload</button></form>{% endif %}
-        </section>
-    </div>
+            <dl class="workspace-facts">{% for label, value in worker.details %}{% if value and label != 'CPU' and label != 'Operating system' %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}</dl>
+        </details>
+    </section>
+    {% if worker.manage %}
+    <section class="workspace-panel worker-settings">
+        <h2>Settings</h2>
+        <form method="post" class="worker-settings-form">
+            {% csrf_token %}
+            <div class="worker-fields">
+                <div class="worker-field"><label for="worker-name">Name</label><input id="worker-name" name="name" value="{{ worker.name }}" maxlength="128" required data-preserve-live></div>
+                <div class="worker-field"><label for="worker-mode">Mode</label><select id="worker-mode" name="mode" data-preserve-live>{% for value, label in worker.modes %}<option value="{{ value }}"{% if value == worker.mode %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+                {% if 'Training' in worker.capabilities %}
+                <div class="worker-field"><label for="worker-training-scope">Training from</label><select id="worker-training-scope" name="training_scope" data-preserve-live><option value="own"{% if not worker.accept_any_owner %} selected{% endif %}>My account</option><option value="any"{% if worker.accept_any_owner %} selected{% endif %}>Any account</option></select></div>
+                {% endif %}
+            </div>
+            {% if 'Tests' in worker.capabilities %}
+            <fieldset class="worker-options"><legend>Testing</legend>
+                <div class="worker-fields">
+                    {% for preference in worker.preferences %}
+                    <div class="worker-field"><label for="worker-{{ preference.key }}">{{ preference.label }} <code>--{{ preference.key }}</code></label><input id="worker-{{ preference.key }}" name="{{ preference.key }}" value="{{ preference.value }}" placeholder="Engine names, comma-separated" data-preserve-live></div>
+                    {% endfor %}
+                    <div class="worker-field"><label for="worker-noisy">Noisy <code>--noisy</code></label><select id="worker-noisy" name="noisy" data-preserve-live><option value="off"{% if not worker.noisy %} selected{% endif %}>Off</option><option value="on"{% if worker.noisy %} selected{% endif %}>On</option></select></div>
+                    <div class="worker-field"><label for="worker-fleet">Fleet <code>--fleet</code></label><select id="worker-fleet" name="fleet" data-preserve-live><option value="off"{% if not worker.fleet %} selected{% endif %}>Off</option><option value="on"{% if worker.fleet %} selected{% endif %}>On</option></select></div>
+                </div>
+                <details class="worker-engine-list"><summary>Engine names</summary><div class="worker-mode-tags">{% for engine in engine_names %}<span class="workspace-tag">{{ engine }}</span>{% endfor %}</div></details>
+            </fieldset>
+            {% endif %}
+            <div class="worker-save"><button class="button button-primary" type="submit" name="action" value="settings">Save changes</button></div>
+        </form>
+        {% if worker.disconnect %}<form method="post" class="worker-disconnect">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect worker</button></form>{% endif %}
+    </section>
+    {% endif %}
     <section class="workspace-panel workspace-stack" id="troubleshooting">
         <div class="panel-heading">
             <h2>Troubleshooting</h2>
@@ -39,43 +76,9 @@
         </div>
         {% elif not diagnostic_tests and not diagnostic_trains %}<p>No active workloads are available.</p>{% endif %}
     </section>
-    {% if worker.manage %}
-    <section class="workspace-panel workspace-stack">
-        <h2>Worker settings</h2>
-        <form method="post" class="workspace-stack">
-            {% csrf_token %}
-            <label for="worker-name">Worker name</label>
-            <input id="worker-name" name="name" value="{{ worker.name }}" maxlength="128" required data-preserve-live>
-            <label for="worker-mode">Worker mode</label>
-            <select id="worker-mode" name="mode" data-preserve-live>{% for value, label in worker.modes %}<option value="{{ value }}"{% if value == worker.mode %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
-            {% if 'Tests' in worker.capabilities %}
-            {% for preference in worker.preferences %}
-            <label for="worker-{{ preference.key }}">{{ preference.label }} <code>--{{ preference.key }}</code></label>
-            <input id="worker-{{ preference.key }}" name="{{ preference.key }}" value="{{ preference.value }}" aria-describedby="worker-{{ preference.key }}-help" placeholder="Engine names, separated by commas" data-preserve-live>
-            <p id="worker-{{ preference.key }}-help">{{ preference.help }}</p>
-            {% endfor %}
-            <details><summary>Available engine names</summary><p>{{ engine_names|join:', ' }}</p></details>
-            <label for="worker-noisy">Noisy mode <code>--noisy</code></label>
-            <select id="worker-noisy" name="noisy" aria-describedby="worker-noisy-help" data-preserve-live><option value="off"{% if not worker.noisy %} selected{% endif %}>Off</option><option value="on"{% if worker.noisy %} selected{% endif %}>On</option></select>
-            <p id="worker-noisy-help">Reject workloads that use or measure time.</p>
-            <label for="worker-fleet">Fleet mode <code>--fleet</code></label>
-            <select id="worker-fleet" name="fleet" aria-describedby="worker-fleet-help" data-preserve-live><option value="off"{% if not worker.fleet %} selected{% endif %}>Off</option><option value="on"{% if worker.fleet %} selected{% endif %}>On</option></select>
-            <p id="worker-fleet-help">Exit the worker when no testing workload is assigned. Requires an updated worker client.</p>
-            <p>Engine preferences and noisy mode apply to the next assignment. Saved settings override command-line values when this worker reconnects.</p>
-            {% endif %}
-            {% if 'Training' in worker.capabilities %}
-            <label for="worker-training-scope">Accept training workloads from</label>
-            <select id="worker-training-scope" name="training_scope" data-preserve-live><option value="own"{% if not worker.accept_any_owner %} selected{% endif %}>My account only</option><option value="any"{% if worker.accept_any_owner %} selected{% endif %}>Any account</option></select>
-            <p>Applies to the next assignment. Current work will finish.</p>
-            {% endif %}
-            <button class="button" type="submit" name="action" value="settings">Save settings</button>
-        </form>
-        {% if worker.disconnect %}<form method="post">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect worker</button></form>{% endif %}
-    </section>
-    {% endif %}
     {% if worker.telemetry %}
     <section class="workspace-panel workspace-stack">
-        <h2>Worker telemetry</h2>
+        <h2>Telemetry</h2>
         <dl class="workspace-facts">{% for label, value in worker.telemetry %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl>
     </section>
     {% endif %}

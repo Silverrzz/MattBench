@@ -55,12 +55,14 @@
 .diagnostic-blockers li + li { border-top: 1px solid var(--line); }
 .diagnostic-blockers i { color: var(--accent); flex-shrink: 0; font-size: 11px; }
 .diagnostic-clear { display: flex; align-items: center; gap: 10px; color: var(--green); font-size: 13px; }
-.workers-name { width: 21%; }
-.workers-hardware { width: 25%; }
-.workers-capacity { width: 13%; }
-.workers-job { width: 24%; }
-.workers-status { width: 17%; }
+.workers-name { width: 17%; }
+.workers-hardware { width: 21%; }
+.workers-capacity { width: 11%; }
+.workers-job { width: 18%; }
+.workers-status { width: 15%; }
 .workers-table td { overflow-wrap: anywhere; }
+.workers-nps { width: 9%; }
+.workers-table .workers-speed { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .worker-list { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .worker-row { display: grid; grid-template-columns: minmax(145px, 1.1fr) minmax(175px, 1.2fr) minmax(90px, .7fr) minmax(130px, 1fr) 140px; gap: 18px; align-items: center; padding: 18px 20px; }
 .worker-row + .worker-row { border-top: 1px solid var(--line); }

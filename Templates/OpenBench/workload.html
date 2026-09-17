@@ -38,6 +38,7 @@
             <tr><td class="td-label">{{dev_text}} SHA</td><td>{{workload.dev.sha}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Branch</td><td class="branch_name">{{workload.dev.name|prettyName}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Bench</td><td>{{workload.dev.bench}}</td></tr>
+            <tr><td class="td-label">{{dev_text}} Avg NPS</td><td>{{average_nps.dev}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</a></td></tr>
             <tr><td class="td-label">{{dev_text}} Options</td><td class="engine-options">{{workload.dev_options}}</td></tr>
             <tr><td class="td-label">{{dev_text}} Time</td><td>{{workload.dev_time_control}}</td></tr>
@@ -48,6 +49,7 @@
                 <tr><td class="td-label">Base SHA</td><td>{{workload.base.sha}}</td></tr>
                 <tr><td class="td-label">Base Branch</td><td class="branch_name">{{workload.base.name|prettyName}}</td></tr>
                 <tr><td class="td-label">Base Bench</td><td>{{workload.base.bench}}</td></tr>
+            <tr><td class="td-label">Base Avg NPS</td><td>{{average_nps.base}}</td></tr>
                 <tr><td class="td-label">Base Network</td><td><a href="{{workload|network_download_link:'base'}}">{{workload.base_netname}}</a></td></tr>
                 <tr><td class="td-label">Base Options</td><td class="engine-options">{{workload.base_options}}</td></tr>
                 <tr><td class="td-label">Base Time</td><td>{{workload.base_time_control}}</td></tr>
@@ -277,6 +279,31 @@
         <!-- Individual per-machine results are only ever fetched on demand -->
         <button id="fetch-results" class="w-100 mt-1 anchorbutton" type="button" onclick="fetch_results({{workload.id}})">Fetch individual results</button>
         <p id="results-feedback" class="field-note" role="status"></p>
+    </div>
+
+    <div id="test-errors" class="w-100 mt-3" style="float:left;" data-live>
+        {% live_region "test-errors" %}
+        <h2>Errors</h2>
+        <table class="stripes wrappable">
+            <thead><tr class="table-header"><th scope="col">Time</th><th scope="col">Worker</th><th scope="col">User</th><th scope="col">Error</th><th scope="col">Logs</th></tr></thead>
+            <tbody>
+                {% for event in test_errors %}
+                <tr>
+                    <td class="timestamp">{{event.created|date:'U'}}</td>
+                    <td><a href="/workers/{{event.machine_id}}/">#{{event.machine_id}}</a></td>
+                    <td>{{event.author}}</td>
+                    <td style="white-space:pre-wrap;overflow-wrap:anywhere;">{{event.summary}}</td>
+                    <td>{% if event.log_file %}<a href="/event/{{event.id}}">Full log</a>{% else %}&mdash;{% endif %}</td>
+                </tr>
+                {% empty %}<tr><td colspan="5" class="empty-state">No errors</td></tr>{% endfor %}
+            </tbody>
+        </table>
+        {% if test_errors.has_other_pages %}<nav aria-label="Error pages">
+            {% if test_errors.has_previous %}<a class="button" href="?error_page={{test_errors.previous_page_number}}#test-errors">Newer</a>{% endif %}
+            <span>{{test_errors.number}} / {{test_errors.paginator.num_pages}}</span>
+            {% if test_errors.has_next %}<a class="button" href="?error_page={{test_errors.next_page_number}}#test-errors">Older</a>{% endif %}
+        </nav>{% endif %}
+        {% endlive_region %}
     </div>
 
     </div>
