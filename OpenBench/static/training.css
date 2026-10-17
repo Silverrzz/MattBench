@@ -278,3 +278,4 @@ body.editor-expanded { overflow: hidden; }
 #content .dataset-statblock-archived { background: #cecece; }
 #content .dataset-statblock-pending { background: #e7ce7c; }
 .dataset-files-heading { margin-bottom: 12px; font-size: 15px; }
+.training-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }

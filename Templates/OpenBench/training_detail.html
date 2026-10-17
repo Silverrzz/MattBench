@@ -54,6 +54,7 @@
         <p id="workload-feedback" class="field-note" role="status"></p>
         <div id="training-status" data-live>{% live_region 'training-status' %}{% if run.recovery_run_id %}<p class="training-notice">Automatic recovery: <a href="/training/{{ run.recovery_run_id }}/">train #{{ run.recovery_run_id }}</a>.</p>{% elif run.metrics.recovery_pending and not run.cancel_requested %}<p class="training-notice">Waiting for the worker to reconnect. Training will continue automatically from the latest saved checkpoint, or restart if none was saved.</p>{% elif run.error %}<p class="training-error" role="alert">{{ run.error }}</p>{% endif %}{% if run.cancel_requested and not run.terminal %}<p class="training-notice">Stopping…</p>{% endif %}{% endlive_region %}</div>
         <pre class="long-statblock" id="long-statblock">{% include 'OpenBench/Blocks/training_progress.html' %}</pre>
+        <div class="training-charts">
         <section id="training-chart" class="history-chart" aria-labelledby="training-loss-heading" hidden>
             <div class="history-chart-heading"><h2 id="training-loss-heading">Training loss</h2><span id="training-loss-range" class="history-chart-feedback"></span></div>
             <div class="history-chart-plot" tabindex="0" role="group" aria-labelledby="training-loss-heading" aria-describedby="training-loss-help">
@@ -63,6 +64,16 @@
             <span id="training-loss-help" class="history-chart-sr-only">Hover or touch to inspect loss. Use Left and Right arrows to move between superbatches, Home and End to jump to the first and last, and Escape to dismiss.</span>
             <span id="training-loss-readout" class="history-chart-sr-only" aria-live="polite" aria-atomic="true"></span>
         </section>
+        <section id="training-speed-chart" class="history-chart" aria-labelledby="training-speed-heading" hidden>
+            <div class="history-chart-heading"><h2 id="training-speed-heading">Positions / second</h2><span id="training-speed-range" class="history-chart-feedback"></span></div>
+            <div class="history-chart-plot" tabindex="0" role="group" aria-labelledby="training-speed-heading" aria-describedby="training-speed-help">
+                <svg class="history-chart-graph" role="img" aria-label="Positions / second by superbatch"></svg>
+                <div id="training-speed-tooltip" class="history-chart-tooltip" aria-hidden="true" hidden></div>
+            </div>
+            <span id="training-speed-help" class="history-chart-sr-only">Hover or touch to inspect training speed. Use Left and Right arrows to move between superbatches, Home and End to jump to the first and last, and Escape to dismiss.</span>
+            <span id="training-speed-readout" class="history-chart-sr-only" aria-live="polite" aria-atomic="true"></span>
+        </section>
+        </div>
         <div id="training-artifacts" class="mt-3" data-live>{% live_region 'training-artifacts' %}
             <h2>Outputs</h2>
             <table class="stripes wrappable"><thead><tr class="table-header"><th scope="col">File</th><th scope="col">Size</th><th scope="col">Type</th><th scope="col">Network</th>{% if can_manage %}<th scope="col">Delete</th>{% endif %}</tr></thead><tbody>

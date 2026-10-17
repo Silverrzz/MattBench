@@ -899,6 +899,19 @@ def client_heartbeat(request, machine):
 
     # Force a refresh of the updated timestamp
     machine.save(update_fields=['updated'])
+    if 'pending_games' in request.POST:
+        try:
+            pending = int(request.POST['pending_games'])
+            if not 0 <= pending <= 1000000000:
+                raise ValueError
+        except ValueError:
+            return JsonResponse({'error': 'Invalid progress report'}, status=400)
+        with transaction.atomic():
+            test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
+            if not test.finished and not test.deleted and machine.workload == test.pk:
+                from OpenBench.workload_progress import record_pending
+                record_pending(test, machine.pk, pending)
+                test.save(update_fields=['execution'])
 
     # Include a 'stop' header iff the test was finished
     finished = Test.objects.filter(id=int(request.POST['test_id'])).values_list('finished', flat=True).first()

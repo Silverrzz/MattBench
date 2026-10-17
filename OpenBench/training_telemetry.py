@@ -61,7 +61,7 @@ def bullet_telemetry(text, previous=None):
             metrics.update(superbatch=int(superbatch), superbatch_progress=100.0, superbatch_seconds=float(seconds), loss=float(loss), positions_per_second=float(speed))
             if metrics.get('batches_per_superbatch'):
                 metrics['batch'] = metrics['batches_per_superbatch']
-            samples.append({'step': int(superbatch), 'superbatch': int(superbatch), 'loss': float(loss)})
+            samples.append({'step': int(superbatch), 'superbatch': int(superbatch), 'loss': float(loss), 'positions_per_second': float(speed)})
         eta = re.search(r'Estimated time remaining in training:\s*(\d+)h\s*(\d+)m\s*(\d+)s', line)
         if eta:
             metrics['remaining_seconds'] = int(eta[1]) * 3600 + int(eta[2]) * 60 + int(eta[3])
@@ -83,7 +83,7 @@ def bullet_telemetry(text, previous=None):
                 if isinstance(values, dict):
                     metrics.update({key: value for key, value in values.items() if key in allowed and type(value) in (int, float) and math.isfinite(value) and abs(value) < 1e20})
                     if 'loss' in values and 'loss' in metrics and metrics.get('superbatch'):
-                        samples.append({'step': metrics['superbatch'], 'superbatch': metrics['superbatch'], 'loss': metrics['loss']})
+                        samples.append({'step': metrics['superbatch'], 'superbatch': metrics['superbatch'], 'loss': metrics['loss'], **({'positions_per_second': metrics['positions_per_second']} if 'positions_per_second' in metrics else {})})
             except (ValueError, TypeError):
                 pass
     metrics = {key: value for key, value in metrics.items() if type(value) not in (int, float) or math.isfinite(value) and abs(value) <= 1e20}
@@ -93,10 +93,13 @@ def bullet_telemetry(text, previous=None):
 
 def merge_loss_history(history, samples, timestamp):
     history = list(history)
-    seen = {(item['step'], item['loss']) for item in history}
+    seen = {(item['step'], item.get('loss')): item for item in history}
     for sample in samples:
         key = sample['step'], sample['loss']
         if key not in seen:
-            history.append({'time': timestamp, **sample})
-            seen.add(key)
+            point = {'time': timestamp, **sample}
+            history.append(point)
+            seen[key] = point
+        elif 'positions_per_second' in sample:
+            seen[key]['positions_per_second'] = sample['positions_per_second']
     return history

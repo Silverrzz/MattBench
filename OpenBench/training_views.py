@@ -534,7 +534,10 @@ def dataset_upload(request, pk):
     for upload in uploads:
         upload.retry_wait = upload.state == 'QUEUED' and upload.next_attempt_at is not None and upload.next_attempt_at > now
         upload.queue_position = waiting.filter(created__lt=upload.created).count() + 1 if upload.state == 'QUEUED' and not upload.retry_wait else None
+    from OpenBench.dataset_destinations import repository_choices
+    repositories, repository_error = repository_choices(request.user, connection)
     return render(request, 'dataset_upload.html', {
+        'repository_choices': repositories, 'repository_error': repository_error,
         'page_title': 'Upload to Hugging Face', 'workload': workload,
         'uploads': uploads, 'archive_ready': archive_ready, 'archive_size': source.stat().st_size if source.is_file() else 0,
         'active_uploads': sum(upload.state in ('QUEUED', 'UPLOADING') for upload in uploads),

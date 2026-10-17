@@ -21,6 +21,11 @@ TRAINING_STATES = (
 class TrainingConfiguration(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     bullet_commit = models.CharField(max_length=40, default=DEFAULT_BULLET_COMMIT)
+    bullet_candidate = models.CharField(max_length=40, blank=True, default='')
+    bullet_validation = models.CharField(max_length=16, blank=True, default='')
+    bullet_validation_message = models.TextField(blank=True, default='')
+    bullet_validation_base = models.CharField(max_length=40, blank=True, default='')
+    bullet_validation_token = models.UUIDField(null=True, blank=True)
 
     class Meta:
         constraints = [models.CheckConstraint(condition=models.Q(id=1), name='training_configuration_singleton')]

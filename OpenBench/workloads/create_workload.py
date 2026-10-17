@@ -121,6 +121,7 @@ def create_new_test(request):
 
     test                   = Test()
     test.execution         = request.workload_execution
+    test.execution = {**test.execution, 'adaptive_throughput': request.POST.get('adaptive_throughput') == 'on', 'capture_logs': request.POST.get('capture_logs', 'on') == 'on'}
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']
@@ -189,6 +190,7 @@ def create_new_tune(request):
 
     test                  = Test()
     test.execution        = request.workload_execution
+    test.execution = {**test.execution, 'capture_logs': request.POST.get('capture_logs', 'on') == 'on'}
     test.author           = request.user.username
     test.book_name        = request.POST['book_name']
     test.upload_pgns      = request.POST['upload_pgns']
@@ -239,6 +241,7 @@ def create_new_datagen(request):
 
     test                   = Test()
     test.execution         = request.workload_execution
+    test.execution = {**test.execution, 'capture_logs': request.POST.get('capture_logs', 'on') == 'on'}
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']

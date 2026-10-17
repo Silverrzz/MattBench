@@ -430,6 +430,9 @@ def update_test(request, machine):
         test.DW     += DW
         test.WW     += WW
         test.games  += games  # Overall
+        from OpenBench.workload_progress import clear_pending, record_progress
+        clear_pending(test, machine_id)
+        record_progress(test, previous_games)
 
         # Consider only Crashes or Illegal moves as real errors
         test.error = bool(test.error or crashes or illegals)
@@ -478,6 +481,8 @@ def update_test(request, machine):
             test.passed = test.finished = test.games >= test.max_games
 
         record_llr_history(test, previous_games, previous_llr)
+        from OpenBench.workload_allocation import record_trend
+        record_trend(test, previous_games, previous_llr)
 
         test.save()
 

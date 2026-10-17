@@ -493,140 +493,149 @@
     const metrics = document.getElementById('long-statblock');
     if (!metrics) return;
     const detail = document.querySelector('.training-detail');
-    let lossPoints = [];
-    const lossChart = document.getElementById('training-chart');
-    const lossSvg = lossChart.querySelector('svg');
-    const lossPlot = lossChart.querySelector('.history-chart-plot');
-    const lossTooltip = document.getElementById('training-loss-tooltip');
-    const lossReadout = document.getElementById('training-loss-readout');
-    let lossCoordinates = [];
-    let selectedLoss = -1;
-    let lossCrosshair;
-    let lossMarker;
-    const clampLoss = (value, low, high) => Math.max(low, Math.min(high, value));
-    function hideLoss() {
-        selectedLoss = -1;
-        lossTooltip.hidden = true;
-        lossCrosshair?.setAttribute('visibility', 'hidden');
-        lossMarker?.setAttribute('visibility', 'hidden');
-    }
-    function showLoss(index, announce = false) {
-        if (!lossCoordinates.length) return;
-        selectedLoss = clampLoss(index, 0, lossCoordinates.length - 1);
-        const point = lossCoordinates[selectedLoss];
-        lossCrosshair.setAttribute('x1', point.x);
-        lossCrosshair.setAttribute('x2', point.x);
-        lossCrosshair.setAttribute('visibility', 'visible');
-        lossMarker.setAttribute('cx', point.x);
-        lossMarker.setAttribute('cy', point.y);
-        lossMarker.setAttribute('visibility', 'visible');
-        const text = `Superbatch ${point.step.toLocaleString()}\nLoss ${point.loss}`;
-        lossTooltip.textContent = text;
-        lossTooltip.hidden = false;
-        const matrix = lossSvg.getScreenCTM();
-        const bounds = lossPlot.getBoundingClientRect();
-        const position = new DOMPoint(point.x, point.y).matrixTransform(matrix);
-        const x = position.x - bounds.left;
-        const y = position.y - bounds.top;
-        const left = x + 12 + lossTooltip.offsetWidth > bounds.width ? x - lossTooltip.offsetWidth - 12 : x + 12;
-        lossTooltip.style.left = `${clampLoss(left, 0, bounds.width - lossTooltip.offsetWidth)}px`;
-        lossTooltip.style.top = `${clampLoss(y - lossTooltip.offsetHeight - 12, 0, bounds.height - lossTooltip.offsetHeight)}px`;
-        if (announce) lossReadout.textContent = text.replace('\n', ', ');
-    }
-    function drawLoss() {
-        const selectedStep = lossCoordinates[selectedLoss]?.step;
-        lossChart.hidden = lossPoints.length === 0;
-        if (!lossPoints.length) {
-            lossCoordinates = [];
-            hideLoss();
-            return;
+    function trainingChart(chartId, prefix, key, label) {
+        let lossPoints = [];
+        const lossChart = document.getElementById(chartId);
+        if (!lossChart) return () => {};
+        const lossSvg = lossChart.querySelector('svg');
+        const lossPlot = lossChart.querySelector('.history-chart-plot');
+        const lossTooltip = document.getElementById(`${prefix}-tooltip`);
+        const lossReadout = document.getElementById(`${prefix}-readout`);
+        let lossCoordinates = [];
+        let selectedLoss = -1;
+        let lossCrosshair;
+        let lossMarker;
+        const clampLoss = (value, low, high) => Math.max(low, Math.min(high, value));
+        function hideLoss() {
+            selectedLoss = -1;
+            lossTooltip.hidden = true;
+            lossCrosshair?.setAttribute('visibility', 'hidden');
+            lossMarker?.setAttribute('visibility', 'hidden');
         }
-        const width = Math.max(180, lossSvg.clientWidth);
-        const height = lossSvg.clientHeight;
-        const left = 56;
-        const right = width - 12;
-        const top = 10;
-        const bottom = height - 22;
-        const low = Math.min(...lossPoints.map(point => point.loss));
-        const high = Math.max(...lossPoints.map(point => point.loss));
-        const padding = (high - low || Math.abs(low) || 1) * 0.15;
-        const minimum = low - padding;
-        const maximum = high + padding;
-        const first = 1;
-        const last = lossPoints[lossPoints.length - 1].step;
-        const x = step => first === last ? (left + right) / 2 : left + (right - left) * (step - first) / (last - first);
-        const y = loss => top + (bottom - top) * (maximum - loss) / (maximum - minimum);
-        lossCoordinates = lossPoints.map(point => ({...point, x: x(point.step), y: y(point.loss)}));
-        const content = document.createDocumentFragment();
-        const element = (tag, attributes, text) => {
-            const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-            for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
-            if (text !== undefined) node.textContent = text;
-            return node;
+        function showLoss(index, announce = false) {
+            if (!lossCoordinates.length) return;
+            selectedLoss = clampLoss(index, 0, lossCoordinates.length - 1);
+            const point = lossCoordinates[selectedLoss];
+            lossCrosshair.setAttribute('x1', point.x);
+            lossCrosshair.setAttribute('x2', point.x);
+            lossCrosshair.setAttribute('visibility', 'visible');
+            lossMarker.setAttribute('cx', point.x);
+            lossMarker.setAttribute('cy', point.y);
+            lossMarker.setAttribute('visibility', 'visible');
+            const text = `Superbatch ${point.step.toLocaleString()}\n${label}: ${point.loss.toLocaleString(undefined, {maximumSignificantDigits: 6})}`;
+            lossTooltip.textContent = text;
+            lossTooltip.hidden = false;
+            const matrix = lossSvg.getScreenCTM();
+            const bounds = lossPlot.getBoundingClientRect();
+            const position = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+            const x = position.x - bounds.left;
+            const y = position.y - bounds.top;
+            const left = x + 12 + lossTooltip.offsetWidth > bounds.width ? x - lossTooltip.offsetWidth - 12 : x + 12;
+            lossTooltip.style.left = `${clampLoss(left, 0, bounds.width - lossTooltip.offsetWidth)}px`;
+            lossTooltip.style.top = `${clampLoss(y - lossTooltip.offsetHeight - 12, 0, bounds.height - lossTooltip.offsetHeight)}px`;
+            if (announce) lossReadout.textContent = text.replace('\n', ', ');
+        }
+        function drawLoss() {
+            const selectedStep = lossCoordinates[selectedLoss]?.step;
+            lossChart.hidden = lossPoints.length === 0;
+            if (!lossPoints.length) {
+                lossCoordinates = [];
+                hideLoss();
+                return;
+            }
+            const width = Math.max(180, lossSvg.clientWidth);
+            const height = lossSvg.clientHeight;
+            const left = 56;
+            const right = width - 12;
+            const top = 10;
+            const bottom = height - 22;
+            const low = Math.min(...lossPoints.map(point => point.loss));
+            const high = Math.max(...lossPoints.map(point => point.loss));
+            const padding = (high - low || Math.abs(low) || 1) * 0.15;
+            const minimum = low - padding;
+            const maximum = high + padding;
+            const first = 1;
+            const last = lossPoints[lossPoints.length - 1].step;
+            const x = step => first === last ? (left + right) / 2 : left + (right - left) * (step - first) / (last - first);
+            const y = loss => top + (bottom - top) * (maximum - loss) / (maximum - minimum);
+            lossCoordinates = lossPoints.map(point => ({...point, x: x(point.step), y: y(point.loss)}));
+            const content = document.createDocumentFragment();
+            const element = (tag, attributes, text) => {
+                const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+                for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+                if (text !== undefined) node.textContent = text;
+                return node;
+            };
+            lossSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+            for (const value of [minimum, (minimum + maximum) / 2, maximum]) {
+                content.append(element('line', {x1: left, x2: right, y1: y(value), y2: y(value), class: 'history-chart-grid'}));
+                content.append(element('text', {x: left - 9, y: y(value), 'text-anchor': 'end', 'dominant-baseline': 'middle'}, value.toPrecision(3)));
+            }
+            const ticks = Math.min(last - first, width < 340 ? 2 : 4);
+            for (let i = 0; i <= ticks; i++) {
+                const step = ticks ? Math.round(first + (last - first) * i / ticks) : first;
+                content.append(element('line', {x1: x(step), x2: x(step), y1: top, y2: bottom, class: 'history-chart-grid'}));
+                content.append(element('text', {x: x(step), y: height - 6, 'text-anchor': !ticks ? 'middle' : i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}, step.toLocaleString(undefined, {notation: step >= 10000 ? 'compact' : 'standard'})));
+            }
+            const points = lossPoints.map(point => `${x(point.step)},${y(point.loss)}`).join(' ');
+            if (lossPoints.length > 1) {
+                content.append(element('polygon', {points: `${x(lossPoints[0].step)},${bottom} ${points} ${x(last)},${bottom}`, fill: 'var(--brand)', class: 'history-chart-area'}));
+                content.append(element('polyline', {points, stroke: 'var(--brand)', class: 'history-chart-path'}));
+            }
+            const end = lossPoints[lossPoints.length - 1];
+            content.append(element('circle', {cx: x(end.step), cy: y(end.loss), r: 4, fill: 'var(--brand)', class: 'history-chart-endpoint'}));
+            lossCrosshair = element('line', {y1: top, y2: bottom, class: 'history-chart-crosshair', visibility: 'hidden'});
+            lossMarker = element('circle', {r: 4, class: 'history-chart-hover-point', visibility: 'hidden'});
+            content.append(lossCrosshair, lossMarker);
+            lossSvg.replaceChildren(content);
+            const previous = lossCoordinates.findIndex(point => point.step === selectedStep);
+            if (previous >= 0) showLoss(previous);
+            else hideLoss();
+            document.getElementById(`${prefix}-range`).textContent = `${low.toPrecision(4)} – ${high.toPrecision(4)}`;
+        }
+        function inspectLoss(event) {
+            if (!lossCoordinates.length) return;
+            const matrix = lossSvg.getScreenCTM();
+            if (!matrix) return;
+            const position = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()).x;
+            let low = 0;
+            let high = lossCoordinates.length - 1;
+            while (low < high) {
+                const middle = (low + high) >> 1;
+                if (lossCoordinates[middle].x < position) low = middle + 1;
+                else high = middle;
+            }
+            const index = low > 0 && position - lossCoordinates[low - 1].x < lossCoordinates[low].x - position ? low - 1 : low;
+            showLoss(index);
+        }
+        lossPlot.addEventListener('pointermove', inspectLoss);
+        lossPlot.addEventListener('pointerdown', inspectLoss);
+        lossPlot.addEventListener('pointerleave', event => {
+            if (event.pointerType === 'mouse') hideLoss();
+        });
+        lossPlot.addEventListener('pointercancel', hideLoss);
+        lossPlot.addEventListener('blur', hideLoss);
+        lossPlot.addEventListener('focus', () => {
+            if (selectedLoss < 0) showLoss(lossCoordinates.length - 1, true);
+        });
+        lossPlot.addEventListener('keydown', event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(event.key)) return;
+            event.preventDefault();
+            if (event.key === 'Escape') return hideLoss();
+            const index = selectedLoss < 0 ? lossCoordinates.length - 1 : selectedLoss;
+            if (event.key === 'Home') showLoss(0, true);
+            else if (event.key === 'End') showLoss(lossCoordinates.length - 1, true);
+            else showLoss(index + (event.key === 'ArrowLeft' ? -1 : 1), true);
+        });
+        if (typeof ResizeObserver === 'function') new ResizeObserver(drawLoss).observe(lossPlot);
+        else window.addEventListener('resize', drawLoss);
+        return points => {
+            lossPoints = points.filter(point => Number.isFinite(point[key])).map(point => ({...point, loss: point[key]}));
+            drawLoss();
         };
-        lossSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-        for (const value of [minimum, (minimum + maximum) / 2, maximum]) {
-            content.append(element('line', {x1: left, x2: right, y1: y(value), y2: y(value), class: 'history-chart-grid'}));
-            content.append(element('text', {x: left - 9, y: y(value), 'text-anchor': 'end', 'dominant-baseline': 'middle'}, value.toPrecision(3)));
-        }
-        const ticks = Math.min(last - first, width < 340 ? 2 : 4);
-        for (let i = 0; i <= ticks; i++) {
-            const step = ticks ? Math.round(first + (last - first) * i / ticks) : first;
-            content.append(element('line', {x1: x(step), x2: x(step), y1: top, y2: bottom, class: 'history-chart-grid'}));
-            content.append(element('text', {x: x(step), y: height - 6, 'text-anchor': !ticks ? 'middle' : i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}, step.toLocaleString(undefined, {notation: step >= 10000 ? 'compact' : 'standard'})));
-        }
-        const points = lossPoints.map(point => `${x(point.step)},${y(point.loss)}`).join(' ');
-        if (lossPoints.length > 1) {
-            content.append(element('polygon', {points: `${x(lossPoints[0].step)},${bottom} ${points} ${x(last)},${bottom}`, fill: 'var(--brand)', class: 'history-chart-area'}));
-            content.append(element('polyline', {points, stroke: 'var(--brand)', class: 'history-chart-path'}));
-        }
-        const end = lossPoints[lossPoints.length - 1];
-        content.append(element('circle', {cx: x(end.step), cy: y(end.loss), r: 4, fill: 'var(--brand)', class: 'history-chart-endpoint'}));
-        lossCrosshair = element('line', {y1: top, y2: bottom, class: 'history-chart-crosshair', visibility: 'hidden'});
-        lossMarker = element('circle', {r: 4, class: 'history-chart-hover-point', visibility: 'hidden'});
-        content.append(lossCrosshair, lossMarker);
-        lossSvg.replaceChildren(content);
-        const previous = lossCoordinates.findIndex(point => point.step === selectedStep);
-        if (previous >= 0) showLoss(previous);
-        else hideLoss();
-        document.getElementById('training-loss-range').textContent = `${low.toPrecision(4)} – ${high.toPrecision(4)}`;
     }
-    function inspectLoss(event) {
-        if (!lossCoordinates.length) return;
-        const matrix = lossSvg.getScreenCTM();
-        if (!matrix) return;
-        const position = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()).x;
-        let low = 0;
-        let high = lossCoordinates.length - 1;
-        while (low < high) {
-            const middle = (low + high) >> 1;
-            if (lossCoordinates[middle].x < position) low = middle + 1;
-            else high = middle;
-        }
-        const index = low > 0 && position - lossCoordinates[low - 1].x < lossCoordinates[low].x - position ? low - 1 : low;
-        showLoss(index);
-    }
-    lossPlot.addEventListener('pointermove', inspectLoss);
-    lossPlot.addEventListener('pointerdown', inspectLoss);
-    lossPlot.addEventListener('pointerleave', event => {
-        if (event.pointerType === 'mouse') hideLoss();
-    });
-    lossPlot.addEventListener('pointercancel', hideLoss);
-    lossPlot.addEventListener('blur', hideLoss);
-    lossPlot.addEventListener('focus', () => {
-        if (selectedLoss < 0) showLoss(lossCoordinates.length - 1, true);
-    });
-    lossPlot.addEventListener('keydown', event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(event.key)) return;
-        event.preventDefault();
-        if (event.key === 'Escape') return hideLoss();
-        const index = selectedLoss < 0 ? lossCoordinates.length - 1 : selectedLoss;
-        if (event.key === 'Home') showLoss(0, true);
-        else if (event.key === 'End') showLoss(lossCoordinates.length - 1, true);
-        else showLoss(index + (event.key === 'ArrowLeft' ? -1 : 1), true);
-    });
-    if (typeof ResizeObserver === 'function') new ResizeObserver(drawLoss).observe(lossPlot);
-    else window.addEventListener('resize', drawLoss);
+    const updateLoss = trainingChart('training-chart', 'training-loss', 'loss', 'Loss');
+    const updateSpeed = trainingChart('training-speed-chart', 'training-speed', 'positions_per_second', 'Positions / second');
     const labels = {
         downloaded_bytes: ['Downloaded', ''], converted_files: ['Converted files', ''],
         loss: ['Loss', ''], superbatch: ['Superbatch', ''], positions_per_second: ['Positions / second', ''], elapsed_seconds: ['Elapsed', ''], remaining_seconds: ['Estimated remaining', ''],
@@ -663,14 +672,15 @@
         if (data.updated) detail.dataset.updated = data.updated;
         const reportTime = new Date(detail.dataset.updated);
         if (!Number.isNaN(reportTime.getTime())) document.getElementById('training-last-report').textContent = `Last worker report: ${reportTime.toLocaleTimeString()}`;
-        lossPoints = (data.history || []).map(point => {
+        const chartPoints = (data.history || []).map(point => {
             let superbatch = point.superbatch ?? point.step;
             if (point.superbatch === undefined && data.metrics.end_superbatch && superbatch > data.metrics.end_superbatch && data.metrics.batches_per_superbatch) {
                 superbatch = Math.ceil(superbatch / data.metrics.batches_per_superbatch);
             }
             return {...point, step: superbatch};
-        }).filter(point => Number.isFinite(point.loss) && Number.isFinite(point.step)).sort((a, b) => a.step - b.step);
-        drawLoss();
+        }).filter(point => Number.isFinite(point.step)).sort((a, b) => a.step - b.step);
+        updateLoss(chartPoints);
+        updateSpeed(chartPoints);
 
     }
     update({metrics: JSON.parse(document.getElementById('training-initial-metrics').textContent), history: JSON.parse(document.getElementById('training-initial-history').textContent)});

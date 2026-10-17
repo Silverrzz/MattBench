@@ -386,7 +386,7 @@ def report(request, pk):
         if state == 'SAVING':
             clean_metrics['progress'] = metrics.get('progress', 0)
         if 'loss' in metrics and not samples and clean_metrics.get('superbatch'):
-            samples.append({'loss': metrics['loss'], 'step': clean_metrics['superbatch'], 'superbatch': clean_metrics['superbatch']})
+            samples.append({'loss': metrics['loss'], 'step': clean_metrics['superbatch'], 'superbatch': clean_metrics['superbatch'], **({'positions_per_second': clean_metrics['positions_per_second']} if 'positions_per_second' in clean_metrics else {})})
         history = merge_loss_history(history, samples, now.timestamp())
     from OpenBench.training_telemetry import training_metrics
     clean_metrics = training_metrics(clean_metrics, run.snapshot, run.dataset, state)

@@ -1,4 +1,5 @@
 import re
+import uuid
 from urllib.parse import quote
 
 import requests
@@ -46,9 +47,13 @@ def manage_training(request, context):
             if form.cleaned_data['version'] != config.bullet_commit:
                 form.add_error(None, 'The pinned revision changed in another tab. Reload before saving.')
             else:
-                config.bullet_commit = form.cleaned_data['bullet_ref']
-                config.save(update_fields=['bullet_commit'])
-                request.session['status_message'] = 'Bullet pinned to %s.' % config.bullet_commit
+                config.bullet_candidate = form.cleaned_data['bullet_ref']
+                config.bullet_validation = 'QUEUED'
+                config.bullet_validation_base = config.bullet_commit
+                config.bullet_validation_message = 'Waiting to check generated trainer compatibility. The current revision remains active.'
+                config.bullet_validation_token = uuid.uuid4()
+                config.save(update_fields=['bullet_candidate', 'bullet_validation', 'bullet_validation_base', 'bullet_validation_message', 'bullet_validation_token'])
+                request.session['status_message'] = 'Compatibility check queued. The revision will be pinned only after it passes.'
                 return redirect('/manage/training/')
-    context.update(bullet_form=form, bullet_commit=current, bullet_repository=BULLET_REPOSITORY)
+    context.update(bullet_form=form, bullet_commit=current, bullet_repository=BULLET_REPOSITORY, bullet_configuration=TrainingConfiguration.objects.filter(pk=1).first())
     return render(request, 'configuration.html', context)

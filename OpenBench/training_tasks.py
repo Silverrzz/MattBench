@@ -70,9 +70,6 @@ def upload_dataset(task):
     if existing:
         if not ((getattr(existing[0], 'lfs', None) and existing[0].lfs.sha256 == sha256) or (not getattr(existing[0], 'lfs', None) and getattr(existing[0], 'blob_id', None) == blob.hexdigest())):
             raise ValidationError('That Hugging Face path already exists. Choose another filename to preserve the existing file.')
-    else:
-        DatasetUpload.objects.filter(pk=task.pk).update(stage='Uploading archive and dataset metadata', progress=0, updated=timezone.now())
-        operations.append(CommitOperationAdd(path_in_repo=task.filename, path_or_fileobj=str(source)))
     from OpenBench.dataset_manifest import read_manifest
     from OpenBench.training import DATA_SUFFIXES
     manifest = read_manifest(task.repo, info, hf_token(task.owner_id))
@@ -88,7 +85,16 @@ def upload_dataset(task):
     for path, content in reports.items():
         operations.append(CommitOperationAdd(path_in_repo=path, path_or_fileobj=content.encode('utf-8')))
     operations.append(CommitOperationAdd(path_in_repo=MANIFEST_PATH, path_or_fileobj=(json.dumps(manifest, indent=2) + '\n').encode('utf-8')))
-    commit = api.create_commit(repo_id=task.repo, repo_type='dataset', operations=operations, parent_commit=info.sha, commit_message='Upload MattBench datagen %d' % task.workload_id)
+    from OpenBench.upload_progress import UploadReader
+    with UploadReader(source, task.pk, size) as stream:
+        if not existing:
+            addition = CommitOperationAdd(path_in_repo=task.filename, path_or_fileobj=stream)
+            DatasetUpload.objects.filter(pk=task.pk).update(stage='Uploading archive', progress=0, updated=timezone.now())
+            stream.reporting = True
+            api.preupload_lfs_files(task.repo, [addition], repo_type='dataset', free_memory=False, num_threads=1)
+            operations.insert(0, addition)
+        DatasetUpload.objects.filter(pk=task.pk).update(stage='Publishing dataset metadata', progress=100, updated=timezone.now())
+        commit = api.create_commit(repo_id=task.repo, repo_type='dataset', operations=operations, parent_commit=info.sha, commit_message='Upload MattBench datagen %d' % task.workload_id)
     revision = commit.oid
     with transaction.atomic():
         if DatasetUpload.objects.filter(pk=task.pk, state='UPLOADING').update(state='COMPLETED', stage='Published', progress=100, revision=revision, updated=timezone.now()):
@@ -106,7 +112,10 @@ class TrainingTasks:
             TrainingRun.objects.filter(state='PREPARING').exclude(snapshot__has_key='demo').update(state='VALIDATING')
         elif lane == 'uploads':
             DatasetUpload.objects.filter(state='UPLOADING').exclude(workload__execution__has_key='demo').update(state='QUEUED', stage='Retrying after coordinator restart')
-        operation = {'validation': self.validate, 'uploads': self.upload, 'maintenance': self.maintain}[lane]
+        elif lane == 'bullet':
+            from OpenBench.models import TrainingConfiguration
+            TrainingConfiguration.objects.filter(bullet_validation='CHECKING').update(bullet_validation='QUEUED')
+        operation = {'validation': self.validate, 'uploads': self.upload, 'maintenance': self.maintain, 'bullet': self.validate_bullet}[lane]
         while not self.stop_event.is_set():
             close_old_connections()
             try:
@@ -165,6 +174,10 @@ class TrainingTasks:
                     record_event('training.queued', run, run.owner_id, {'dataset_revision': dataset['commit'], 'bullet_commit': snapshot['bullet_commit']})
         except Exception as error:
             self.failed(run, error, 'PREPARING', 'VALIDATING', 'Input validation')
+
+    def validate_bullet(self):
+        from OpenBench.bullet_validation import validate_pending_revision
+        validate_pending_revision(self.stop_event)
 
     def upload(self):
         task = DatasetUpload.objects.filter(state='QUEUED').filter(Q(next_attempt_at=None) | Q(next_attempt_at__lte=timezone.now())).exclude(workload__execution__has_key='demo').order_by('created').first()

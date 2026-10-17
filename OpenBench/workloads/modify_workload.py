@@ -40,13 +40,14 @@ def modify_workload(request, id, action=None):
         'STOP'    : stop_workload,    'DELETE'  : delete_workload,
         'RESTORE' : restore_workload, 'MODIFY'  : tweak_workload,
         'IGNORE_PAST_ERRORS': ignore_past_errors, 'IGNORE_ALL_ERRORS': ignore_all_errors,
+        'ENABLE_ERROR_ALERTS': enable_error_alerts,
     }
 
     # Make sure the requested Action is a known one
     if action not in actions.keys():
         return OpenBench.views.redirect(request, '/index/', error='Unknown Workload action')
 
-    error_action = action in ('IGNORE_PAST_ERRORS', 'IGNORE_ALL_ERRORS')
+    error_action = action in ('IGNORE_PAST_ERRORS', 'IGNORE_ALL_ERRORS', 'ENABLE_ERROR_ALERTS')
     if error_action and request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
 
@@ -102,6 +103,10 @@ def restore_workload(request, profile, workload):
     return 'Workload was Restored!'
 
 def tweak_workload(request, profile, workload):
+    if 'allocation_settings' in request.POST:
+        workload.execution = {**workload.execution, 'adaptive_throughput': request.POST.get('adaptive_throughput') == 'on'}
+    if 'diagnostic_settings' in request.POST:
+        workload.execution = {**workload.execution, 'capture_logs': request.POST.get('capture_logs') == 'on'}
 
     try: # Priority can be any integer value
         workload.priority = int(request.POST['priority'])
@@ -130,3 +135,9 @@ def ignore_past_errors(request, profile, workload):
 def ignore_all_errors(request, profile, workload):
     workload.ignore_all_errors = True
     return 'Error alerts disabled for this test.'
+
+
+def enable_error_alerts(request, profile, workload):
+    workload.ignore_all_errors = False
+    workload.errors_acknowledged = False
+    return 'Error alerts enabled for this test.'

@@ -187,6 +187,7 @@
         <form class="form" method="POST" action="/{{type|lower}}/{{workload.id}}/MODIFY/">
             {% csrf_token %}
             <div class="form-stack">
+                <input type="hidden" name="diagnostic_settings" value="1"><label class="choice"><input type="checkbox" name="capture_logs" data-preserve-live {% if workload.execution.capture_logs != False %}checked{% endif %}>Capture UCI diagnostics for crash reports</label>
                 <div class="field">
                     <label for="info">Info</label>
                     <textarea id="info" name="info" rows="4">{{workload.info}}</textarea>
@@ -207,6 +208,7 @@
                         </div>
                     {% endif %}
                 </div>
+                {% if workload.test_mode == 'SPRT' %}<input type="hidden" name="allocation_settings" value="1"><label class="choice"><input type="checkbox" name="adaptive_throughput" data-preserve-live {% if workload.execution.adaptive_throughput %}checked{% endif %}>Balance throughput using LLR trends</label><p class="field-note">Favour promising tests within their priority, using between half and twice the configured throughput.</p>{% endif %}
             </div>
             <div class="form-actions">
                 {% if profile.approver or profile.user.username == workload.author %}
@@ -286,7 +288,7 @@
         <div class="test-error-heading">
             <h2>Errors</h2>
             {% if profile.approver or user.username == workload.author or user.is_superuser %}
-            {% if workload.ignore_all_errors %}<span class="test-error-muted">Error alerts disabled</span>
+            {% if workload.ignore_all_errors %}<div class="test-error-controls"><span class="test-error-muted">Error alerts disabled</span><form method="post" action="{{ workload|workload_url }}ENABLE_ERROR_ALERTS/">{% csrf_token %}<button class="button" type="submit">Enable error alerts</button></form></div>
             {% else %}
             <div class="test-error-controls">
                 {% if workload.error and not workload.errors_acknowledged %}

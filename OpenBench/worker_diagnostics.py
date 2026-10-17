@@ -4,6 +4,7 @@ from OpenBench.config import OPENBENCH_CONFIG, workload_execution
 from OpenBench.models import TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
 from OpenBench.workloads.get_workload import filter_valid_workloads, machine_info_list, valid_hardware_assignment
+from OpenBench.workload_allocation import worker_threads
 
 
 def training_reasons(capability, preferences, run):
@@ -130,7 +131,7 @@ def diagnose_test(request, machine, worker, test):
         reasons.extend(error.messages)
     try:
         if not valid_hardware_assignment(test, machine):
-            reasons.append('Not enough assigned CPU threads (%s). Test options: dev [%s], base [%s]. SPSA needs two games at once; unequal thread counts may reduce usable hyperthreads.' % (info.get('concurrency', 0), test.dev_options, test.base_options))
+            reasons.append('Not enough assigned CPU threads (%s). Test options: dev [%s], base [%s]. SPSA needs two games at once; unequal thread counts may reduce usable hyperthreads.' % (worker_threads(machine, test), test.dev_options, test.base_options))
     except (KeyError, TypeError, ValueError):
         reasons.append('CPU thread requirements could not be checked because worker or test settings are incomplete.')
     if TrainingRun.objects.filter(worker__machine=machine, state__in=TRAINING_ACTIVE).exists():

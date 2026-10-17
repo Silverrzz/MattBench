@@ -88,6 +88,10 @@ def shortStatBlock(test):
         elo_line = 'Elo: %0.2f +- %0.2f (95%%) [N=%d]' % (elo, max(upper - elo, elo - lower), test.max_games)
         statlines = [status_line, elo_line, penta_line] if test.use_penta else [status_line, elo_line, tri_line]
 
+    from OpenBench.workload_progress import completion
+    progress = completion(test)
+    if progress:
+        statlines += ['Progress: %.1f%%' % progress[0], progress[1]]
     return '\n'.join(statlines)
 
 def longStatBlock(test):
@@ -119,6 +123,10 @@ def longStatBlock(test):
 
     if test.use_penta:
         lines.append('Penta | [%d, %d, %d, %d, %d]' % test.as_penta())
+    from OpenBench.workload_progress import completion
+    progress = completion(test)
+    if progress:
+        lines += ['Progress | %.1f%%' % progress[0], progress[1]]
     return '\n'.join(lines)
 
 def testResultColour(test):

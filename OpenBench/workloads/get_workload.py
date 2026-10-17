@@ -36,6 +36,7 @@ from OpenBench.models import Result, Test
 from OpenBench.spsa_utils import spsa_workload_assignment_dict
 
 from django.db import transaction
+from OpenBench.workload_allocation import effective_throughput, worker_threads
 
 @transaction.atomic
 def get_workload(request, machine, candidates=None, has_engine_preference=False):
@@ -82,11 +83,11 @@ def select_workload(request, machine, candidates=None, has_engine_preference=Fal
 
     # Step 4: Compute the Resource Ratios for each of the workloads, if we were assigned
     for id, data in worker_dist.items():
-        data['ratio'] = (data['threads'] + machine.info['concurrency']) / data['throughput']
+        data['ratio'] = (data['threads'] + data['incoming']) / data['throughput']
 
     # Step 5: Compute the idealized "Fair-Ratio" once our machine is added
     min_ratio      = min(x['ratio'] for x in worker_dist.values())
-    thread_sum     = sum(x['threads'] for x in worker_dist.values()) + machine.info['concurrency']
+    thread_sum     = sum(x['threads'] for x in worker_dist.values()) + max(x['incoming'] for x in worker_dist.values())
     throughput_sum = sum(x['throughput'] for x in worker_dist.values())
     fair_ratio     = thread_sum / throughput_sum
 
@@ -174,7 +175,7 @@ def valid_hardware_assignment(workload, machine):
     base_threads = int(OpenBench.utils.extract_option(workload.base_options, 'Threads'))
 
     # Extract the information from our machine
-    threads      = machine.info['concurrency']
+    threads      = worker_threads(machine, workload)
     hyperthreads = machine.info['physical_cores'] < threads
 
     # For core-odds tests, disable hyperthreads, by halving the thread count
@@ -206,7 +207,7 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
     # The throughput may be scaled down later, due to balance_engine_throughputs
 
     worker_dist = {
-        workload.id : { 'threads' : 0, 'engine' : workload.dev_engine, 'throughput' : workload.throughput }
+        workload.id : { 'threads' : 0, 'engine' : workload.dev_engine, 'throughput' : effective_throughput(workload), 'incoming': worker_threads(machine, workload) }
             for workload in workloads
     }
 
@@ -217,10 +218,11 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
     others = OpenBench.utils.getRecentMachines() \
         .filter(workload__in=list(worker_dist.keys())).exclude(id=machine.id)
 
+    by_id = {workload.id: workload for workload in workloads}
     for x in others:
         preferences = machine_info_list(x.info, 'focus') + machine_info_list(x.info, 'force') + machine_info_list(x.info, 'only')
         if OPENBENCH_CUSTOM_FOCUS or has_engine_preference or worker_dist[x.workload]['engine'] not in preferences:
-            worker_dist[x.workload]['threads'] += x.info['concurrency']
+            worker_dist[x.workload]['threads'] += worker_threads(x, by_id[x.workload])
 
     # Count of tests that exist for a particular dev_engine
 
@@ -242,6 +244,7 @@ def workload_to_dictionary(test, result, machine):
     workload['test'] = {
         'id'            : test.id,
         'type'          : test.test_mode,
+        'capture_logs'  : test.execution.get('capture_logs', True),
         'syzygy_wdl'    : test.syzygy_wdl,
         'syzygy_adj'    : test.syzygy_adj,
         'win_adj'       : test.win_adj,
@@ -314,7 +317,7 @@ def workload_to_dictionary(test, result, machine):
 
         if test.test_mode == 'DATAGEN':
             workload['test']['genfens_seeds'] = [
-                random.randint(0, 2**31 - 1) for x in range(machine.info['concurrency'])]
+                random.randint(0, 2**31 - 1) for x in range(worker_threads(machine, test))]
 
         # Only book_index changed. Avoid holding the lock for longer than needed
         test.save(update_fields=['book_index', 'updated'])
@@ -337,27 +340,29 @@ def game_distribution(test, machine):
     dev_threads  = int(extract_option(test.dev_options, 'Threads'))
     base_threads = int(extract_option(test.base_options, 'Threads'))
 
-    worker_threads = machine.info['concurrency']
+    worker_capacity = worker_threads(machine, test)
     worker_sockets = machine.info['sockets']
 
     # For core-odds tests, disable hyperthreads, by halving the thread count
-    if machine.info['physical_cores'] < worker_threads and dev_threads != base_threads:
-        worker_threads = worker_threads // 2
+    if machine.info['physical_cores'] < worker_capacity and dev_threads != base_threads:
+        worker_capacity = worker_capacity // 2
 
     # Ignore sockets for concurrent match runners, when playing with more than one thread
     if max(dev_threads, base_threads) > 1:
         worker_sockets = 1
 
     # Max possible concurrent engine games, per copy of match runner
-    max_concurrency = (worker_threads // worker_sockets) // max(dev_threads, base_threads)
+    worker_sockets = min(worker_sockets, max(1, worker_capacity // max(dev_threads, base_threads)))
+    max_concurrency = (worker_capacity // worker_sockets) // max(dev_threads, base_threads)
 
     # Number of params being evaluated at a single time, if doing SPSA in SINGLE mode
-    spsa_count = (worker_threads // max(dev_threads, base_threads)) // 2
+    spsa_count = (worker_capacity // max(dev_threads, base_threads)) // 2
 
     # SPSA is treated specially, if we are distributing many parameter sets at once
     is_multiple_spsa = test.test_mode == 'SPSA' and test.spsa_run.distribution_type == 'MULTIPLE'
 
     return {
+        'worker-threads'    : worker_threads(machine, test),
         'runner-count'      : spsa_count if is_multiple_spsa else worker_sockets,
         'concurrency-per'   : 2 if is_multiple_spsa else max_concurrency,
         'rounds-per-runner' : 2 * test.workload_size * (1 if is_multiple_spsa else max_concurrency),

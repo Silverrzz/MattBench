@@ -40,7 +40,9 @@
             </div>
             {% if 'Tests' in worker.capabilities %}
             <fieldset class="worker-options"><legend>Testing</legend>
+                <p class="field-note">Thread changes apply to the next workload. Raise the datagen budget for overnight work, or lower both budgets while using the machine.{% if not worker.thread_budgets %} Update this client to configure separate thread budgets.{% endif %}</p>
                 <div class="worker-fields">
+                    {% if worker.thread_budgets %}<div class="worker-field"><label for="worker-test-threads">Testing threads</label><input type="number" id="worker-test-threads" name="test_threads" min="1" max="{{ worker.thread_limit }}" value="{{ worker.test_threads }}" required data-preserve-live></div><div class="worker-field"><label for="worker-datagen-threads">Datagen threads</label><input type="number" id="worker-datagen-threads" name="datagen_threads" min="1" max="{{ worker.thread_limit }}" value="{{ worker.datagen_threads }}" required data-preserve-live></div>{% endif %}
                     {% for preference in worker.preferences %}
                     <div class="worker-field"><label for="worker-{{ preference.key }}">{{ preference.label }} <code>--{{ preference.key }}</code></label><input id="worker-{{ preference.key }}" name="{{ preference.key }}" value="{{ preference.value }}" placeholder="Engine names, comma-separated" data-preserve-live></div>
                     {% endfor %}

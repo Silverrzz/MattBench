@@ -1,6 +1,6 @@
 {% extends 'OpenBench/base.html' %}
 {% load static live %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}">{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'dataset_upload.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block page_actions %}<a class="button" href="/datagen/{{ workload.id }}/">Datagen #{{ workload.id }}</a>{% endblock %}
 {% block content %}
 {% if form_error %}<p class="training-error" role="alert">{{ form_error }}</p>{% endif %}
@@ -10,6 +10,7 @@
         <div class="training-upload-source"><strong>{{ workload.id }}.pgn.tar</strong><p class="workspace-muted">{{ archive_size|filesizeformat }} &middot; {% if archive_ready %}Ready to upload{% else %}Waiting for datagen to finish assembling the archive{% endif %}</p></div>
         {% if not hf_connected %}<p class="workspace-muted">Connect your Hugging Face account before uploading.</p><a class="button" href="/profile/">Connect Hugging Face</a>{% endif %}
         <div class="field"><label for="hf-repo">Dataset repository</label><input id="hf-repo" name="repo" required value="{{ destination }}" placeholder="account/dataset"></div>
+        <div class="field"><label for="hf-existing">Choose an existing dataset</label><select id="hf-existing"><option value="">Enter a repository above or choose here</option>{% for repo in repository_choices %}<option value="{{ repo.id }}" data-private="{{ repo.private|yesno:'true,false,unknown' }}">{{ repo.id }}</option>{% endfor %}</select>{% if repository_error %}<p class="field-note">{{ repository_error }}</p>{% endif %}</div>
         <div class="field"><label for="hf-visibility">Visibility</label><select id="hf-visibility" name="visibility"><option value="private">Private</option><option value="public" {% if request.POST.visibility == 'public' %}selected{% endif %}>Public</option></select></div>
         <details><summary>Change archive filename</summary><div class="field"><label for="hf-path">Filename in the dataset</label><input id="hf-path" name="filename" value="{{ filename }}" required></div></details>
         <p class="workspace-muted">We check the archive, analyse the games, and publish it to Hugging Face. You can leave this page while it runs. The repository is created if needed; existing files are preserved.</p>
@@ -23,8 +24,8 @@
             <p class="workspace-muted">{{ upload.filename }}</p>
             {% if upload.retry_wait %}<p>Automatic retry in {{ upload.next_attempt_at|timeuntil }}. Other uploads can continue.</p>
             {% elif upload.state == 'QUEUED' %}<p>Queue position {{ upload.queue_position }} &middot; Starts when the upload processor is free.</p>
-            {% elif upload.state == 'UPLOADING' %}<p>{{ upload.stage }}{% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' %} &middot; {{ upload.progress|floatformat:0 }}%{% endif %}</p>
-            <progress {% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' %}value="{{ upload.progress }}"{% endif %} max="100" aria-label="{{ upload.stage }}"></progress>
+            {% elif upload.state == 'UPLOADING' %}<p>{{ upload.stage }}{% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' or upload.stage == 'Uploading archive' %} &middot; {{ upload.progress|floatformat:1 }}%{% endif %}</p>
+            <progress {% if upload.stage == 'Checking archive' or upload.stage == 'Analysing PGN archive' or upload.stage == 'Uploading archive' %}value="{{ upload.progress }}"{% endif %} max="100" aria-label="{{ upload.stage }}"></progress>
             {% elif upload.state == 'FAILED' %}<p>Upload stopped. It is no longer holding a place in the queue.</p>
             {% elif upload.state == 'CANCELLED' %}<p>Removed from the queue.</p>{% endif %}
             <p class="workspace-muted">Updated {{ upload.updated|timesince }} ago{% if upload.task_attempts %} &middot; Attempt {{ upload.task_attempts }} of 5{% endif %}</p>

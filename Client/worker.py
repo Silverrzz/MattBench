@@ -62,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 51
+CLIENT_VERSION   = 52
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -113,6 +113,11 @@ class Configuration:
         self.password    = args.password
         self.server      = args.server
         self.threads     = int(args.threads) if args.threads != 'auto' else self.physical_cores
+        self.default_threads = self.threads
+        self.test_threads = int(getattr(args, 'test_threads', None) or self.threads)
+        self.datagen_threads = int(getattr(args, 'datagen_threads', None) or self.threads)
+        if any(not 1 <= value <= self.logical_cores for value in (self.test_threads, self.datagen_threads)):
+            raise ValueError('Thread budgets must be between 1 and the logical CPU count.')
         self.sockets     = int(args.nsockets)
         self.identity    = args.identity if args.identity else 'None'
         self.syzygy_path = args.syzygy   if args.syzygy   else None
@@ -306,7 +311,7 @@ class ServerReporter:
         payload = {
             'test_id'    : config.workload['test']['id'],
             'error'      : error,
-            'logs'       : pgn,
+            'logs'       : pgn or '',
         }
 
         return ServerReporter.report(config, 'clientSubmitError', payload)
@@ -370,11 +375,13 @@ class ServerReporter:
         return ServerReporter.report(config, 'clientSubmitResults', payload)
 
     @staticmethod
-    def report_heartbeat(config):
+    def report_heartbeat(config, pending_games=None):
 
         payload = {
             'test_id' : config.workload['test']['id']
         }
+        if pending_games is not None:
+            payload['pending_games'] = pending_games
 
         return ServerReporter.report(config, 'clientHeartbeat', payload)
 
@@ -703,7 +710,8 @@ class ResultsReporter(object):
 
             # Heartbeat when no results, or still awaiting bulk results
             if not self.pending or (self.bulk and not final_report):
-                response = ServerReporter.report_heartbeat(self.config).json()
+                pending_games = sum(sum(batch['trinomial']) for batch in self.pending) if self.bulk else None
+                response = ServerReporter.report_heartbeat(self.config, pending_games).json()
                 self.last_report = time.time()
 
             else: # Send all of the queued Results at once
@@ -726,19 +734,28 @@ class ResultsReporter(object):
             print ('[Note] Failed to upload results to server...')
             self.last_report = time.time()
 
-    def send_errors(self, timestamp, runner_cnt):
+    def send_errors(self, timestamp, runner_cnt, captured=None):
+        import runner_diagnostics
 
         for x in range(runner_cnt):
 
             # Reuse logic that was given to match runner to decide the PGN name
             fname = MatchRunner.pgn_name(self.config, timestamp, x)
+            diagnostics = (captured or {}).get(x) or runner_diagnostics.collect(self.config, timestamp, x)
+            if not os.path.isfile(fname):
+                if diagnostics:
+                    ServerReporter.report_engine_error(self.config, 'Match runner produced no PGN', diagnostics)
+                runner_diagnostics.cleanup(self.config, timestamp, x)
+                continue
 
             # For any game with weird Termination, report it
             for header, moves in PGNHelper.slice_pgn_file(fname):
                 error = PGNHelper.get_error_reason(header)
                 if error:
                     as_str = PGNHelper.pretty_format(header, moves)
-                    ServerReporter.report_engine_error(self.config, error, as_str)
+                    ServerReporter.report_engine_error(self.config, error, as_str + diagnostics)
+                    diagnostics = ''
+            runner_diagnostics.cleanup(self.config, timestamp, x)
 
 
 def get_version(program):
@@ -1033,7 +1050,10 @@ def server_configure_worker(config):
         'ram_total_mb'   : config.ram_total_mb,   # Total RAM on the system, to avoid over assigning
         'machine_id'     : config.machine_id,     # Assigned value, or None. Will be replaced if wrong
         'machine_name'   : config.identity,       # Optional pseudonym for the machine, otherwise None
-        'concurrency'    : config.threads,        # Threads to use to play games
+        'concurrency'    : config.default_threads,        # Threads to use to play games
+        'thread_budgets' : True,
+        'test_threads'   : config.test_threads,
+        'datagen_threads': config.datagen_threads,
         'sockets'        : config.sockets,        # Match runner copies, usually equal to Socket count
         'syzygy_max'     : config.syzygy_max,     # Whether or not the machine has Syzygy support
         'noisy'          : config.noisy,          # Whether our results are unstable for time-based workloads
@@ -1164,13 +1184,15 @@ def server_request_workload(config):
         base_name   = response['workload']['test']['base']['name'  ]
         print('Workload [%s] %s vs [%s] %s\n' % (dev_engine, dev_name, base_engine, base_name))
 
-    for key in ('focus', 'force', 'only', 'noisy', 'fleet'):
+    for key in ('focus', 'force', 'only', 'noisy', 'fleet', 'test_threads', 'datagen_threads'):
         if key in response.get('settings', {}):
             setattr(config, key, response['settings'][key])
     config.workload = response.get('workload', None)
 
 
 def complete_workload(config):
+    capacity = config.workload['distribution'].get('worker-threads', config.default_threads)
+    config.threads = max(1, min(config.logical_cores, int(capacity)))
 
     server_configure_fastchess(config, config.workload['test']['runner'])
 
@@ -1216,14 +1238,16 @@ def complete_workload(config):
         tasks = [] # Create each of the match runner workers
         for x in range(runner_cnt):
             cmd = build_runner_command(config, dev_name, base_name, scale_factor, timestamp, x)
-            tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag))
+            tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag, timestamp))
 
         # Process the Queue until we exit, finish, or are told to stop by the server
         try:
             rr = ResultsReporter(config, tasks, results, abort_flag)
             rr.process_until_finished()
-            rr.send_errors(timestamp, runner_cnt)
+            abort_flag.set()
             MatchRunner.kill_everything(dev_name, base_name)
+            captured = {index: task.result(timeout=15) for index, task in enumerate(tasks)}
+            rr.send_errors(timestamp, runner_cnt, captured)
 
         # Kill everything during an Exception, but print it
         except (Exception, KeyboardInterrupt):
@@ -1335,6 +1359,7 @@ def safe_run_benchmarks(config, branch, engine):
 
 
 def build_runner_command(config, dev_cmd, base_cmd, scale_factor, timestamp, runner_idx):
+    import runner_diagnostics
 
     flags  = ' ' + MatchRunner.basic_settings(config)
     flags += ' ' + MatchRunner.concurrency_settings(config)
@@ -1343,13 +1368,17 @@ def build_runner_command(config, dev_cmd, base_cmd, scale_factor, timestamp, run
     flags += ' ' + MatchRunner.engine_settings(config, base_cmd, 'base', scale_factor, runner_idx)
     flags += ' ' + MatchRunner.book_settings(config, runner_idx)
     flags += ' ' + MatchRunner.pgnout_settings(config, timestamp, runner_idx)
+    flags += runner_diagnostics.flags(config, timestamp, runner_idx, MatchRunner.executable(config))
 
     return MatchRunner.executable(config) + flags
 
-def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag):
+def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag, timestamp=None):
 
     print('\n[#%d] Launching match runner...\n%s\n' % (runner_idx, command))
-    runner = Popen(shlex.split(command), stdout=PIPE)
+    runner = Popen(shlex.split(command), stdout=PIPE, stderr=STDOUT)
+    from collections import deque
+    output_tail = deque(maxlen=256)
+    failure_traces = deque(maxlen=4)
 
     results = {
 
@@ -1365,9 +1394,13 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
     while True:
 
         # Read each line of output until the pipe closes and we get "" back
-        line = runner.stdout.readline().strip().decode('ascii')
-        if not line:
+        raw = runner.stdout.readline()
+        if not raw:
             break
+        line = raw.decode('utf-8', errors='replace').strip()
+        output_tail.append(line[-2048:])
+        if not line:
+            continue
 
         if abort_flag.is_set():
             break
@@ -1376,7 +1409,13 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
             print('[#%d] %s' % (runner_idx, line))
 
         if 'Finished game' in line:
+            failures = results['crashes'] + results['illegals']
             MatchRunner.update_results(results, line)
+            if timestamp is not None and results['crashes'] + results['illegals'] > failures:
+                import runner_diagnostics
+                trace = runner_diagnostics.collect(config, timestamp, runner_idx, limit=256 * 1024)
+                if trace:
+                    failure_traces.append(line + trace)
 
         # Add to the results queue every time we have a game-pair finished
         if any(results['pentanomial']):
@@ -1398,6 +1437,19 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
             results['timelosses' ] = 0
             results['illegals'   ] = 0
 
+    if abort_flag.is_set() and runner.poll() is None:
+        runner.terminate()
+    try:
+        returncode = runner.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        runner.kill()
+        returncode = runner.wait()
+    if returncode and not abort_flag.is_set():
+        import runner_diagnostics
+        trace = runner_diagnostics.collect(config, timestamp, runner_idx) if timestamp is not None else ''
+        ServerReporter.report_engine_error(config, 'Match runner exited with status %s' % returncode, '\n'.join(output_tail) + trace)
+    return '\n\nMost recent failure snapshots (up to four):\n' + '\n'.join(failure_traces) if failure_traces else ''
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 #                                                                           #
 #                                                                           #
@@ -1410,12 +1462,14 @@ def reload_local_imports():
     import genfens
     import isa_detector
     import pgn_util
+    import runner_diagnostics
     import utils
 
     importlib.reload(bench)
     importlib.reload(genfens)
     importlib.reload(isa_detector)
     importlib.reload(pgn_util)
+    importlib.reload(runner_diagnostics)
     importlib.reload(utils)
 
 def parse_arguments(client_args):
@@ -1429,6 +1483,8 @@ def parse_arguments(client_args):
     # Arguments specific to worker.py
     p.add_argument('-T', '--threads' , help='Total Threads'               , required=True      )
     p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=True      )
+    p.add_argument('--test-threads', type=int, help='Thread budget for tests and tuning')
+    p.add_argument('--datagen-threads', type=int, help='Thread budget for data generation')
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
     p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')
@@ -1504,7 +1560,7 @@ def run_openbench_worker(client_args):
 
             # Keep asking for a workload until we get a response
             if config.training_session and config.training_session.pending_test:
-                for key in ('focus', 'force', 'only', 'noisy', 'fleet'):
+                for key in ('focus', 'force', 'only', 'noisy', 'fleet', 'test_threads', 'datagen_threads'):
                     if key in config.training_session.settings:
                         setattr(config, key, config.training_session.settings[key])
                 config.workload = config.training_session.pending_test

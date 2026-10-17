@@ -265,10 +265,12 @@
                 <div class="field">
                     <label for="priority"> Priority </label> <input value="0" id="priority" name="priority">
                 </div>
+                <input type="hidden" name="capture_logs" value="off"><label class="choice"><input type="checkbox" name="capture_logs" checked>Capture UCI diagnostics for crash reports</label>
 
                 <div class="field">
                     <label for="throughput"> Throughput </label> <input value="1000" id="throughput" name="throughput">
                 </div>
+                {% if workload == 'TEST' %}<label class="choice"><input type="checkbox" name="adaptive_throughput">Balance SPRT throughput using LLR trends</label><p class="field-note">Favour promising tests within their priority, using between half and twice their configured throughput.</p>{% endif %}
 
                 {% if workload == "TEST" or workload == "DATAGEN" %}
                     <div class="field">

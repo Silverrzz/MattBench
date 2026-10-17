@@ -136,7 +136,8 @@
                     {{ bullet_form.bullet_ref }}
                     {{ bullet_form.bullet_ref.errors }}
                 </div>
-                <p>Branches and tags are resolved to a fixed commit when saved. Bullet's default branch is main.</p>
+                <p>Branches and tags are resolved to a fixed commit. Generated trainers are type-checked before the pin changes. GPU-specific builds still run on training workers.</p>
+                {% if bullet_configuration.bullet_validation %}<div role="status"><p>Compatibility check: {{ bullet_configuration.bullet_validation|title }}{% if bullet_configuration.bullet_candidate %} · <code>{{ bullet_configuration.bullet_candidate|slice:':12' }}</code>{% endif %}</p><pre class="training-error" style="white-space:pre-wrap;overflow-wrap:anywhere">{{ bullet_configuration.bullet_validation_message }}</pre><a class="button" href="/manage/training/">Refresh status</a></div>{% endif %}
                 <div class="form-actions">
                     <button class="button button-primary" type="submit" name="action" value="save">Pin revision</button>
                     <button class="button" type="submit" name="action" value="latest" formnovalidate>Pin latest main</button>

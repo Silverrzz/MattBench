@@ -13,6 +13,7 @@ from OpenBench.training_models import TRAINING_ACTIVE
 from OpenBench.config import OPENBENCH_CONFIG
 from OpenBench.formatting import format_nps
 from OpenBench.workloads.get_workload import machine_info_list
+from OpenBench.workload_allocation import worker_threads
 
 
 WORKER_MODES = [('automatic', 'Automatic'), ('testing-only', 'Testing only'), ('training-only', 'Training only'), ('paused', 'Paused')]
@@ -65,7 +66,10 @@ def worker_rows(user, identifier=None):
             'name': info.get('machine_name') or 'Worker %s' % machine.pk,
             'owner': machine.user, 'hardware': info.get('cpu_name', 'CPU'),
             'platform': info.get('os_name', ''), 'capabilities': ['Tests', 'Datagen', 'Tuning'],
-            'threads': info.get('concurrency', 0), 'memory': round(info.get('ram_total_mb', 0) / 1024),
+            'threads': worker_threads(machine, job) if job and not job.finished else info.get('worker_settings', {}).get('test_threads', info.get('test_threads', info.get('concurrency', 0))), 'memory': round(info.get('ram_total_mb', 0) / 1024),
+            'thread_budgets': info.get('thread_budgets', False), 'thread_limit': info.get('logical_cores', info.get('concurrency', 1)),
+            'test_threads': info.get('worker_settings', {}).get('test_threads', info.get('test_threads', info.get('concurrency', 1))),
+            'datagen_threads': info.get('worker_settings', {}).get('datagen_threads', info.get('datagen_threads', info.get('concurrency', 1))),
             'preferences': [
                 {'key': key, 'label': label, 'help': help_text, 'value': ', '.join(machine_info_list(info, key))}
                 for key, label, help_text in (
@@ -77,7 +81,7 @@ def worker_rows(user, identifier=None):
             'noisy': bool(info.get('noisy')), 'fleet': bool(info.get('fleet')),
             'gpu_memory': None, 'updated': machine.updated, 'demo': bool(info.get('demo')),
             'state': 'Disconnected' if info.get('disconnected') else 'Busy' if online and job and not job.finished else 'Available' if online else 'Offline',
-            'job': job.dev.name if online and job and not job.finished else '',
+            'job': '%s · %s' % (job.dev_engine, job.dev.name) if online and job and not job.finished else '',
             'job_url': '/%s/%s/' % (job.workload_type_str(), job.pk) if job else '',
             'rate': '',
             'dev_nps': format_nps(machine.dev_mnps * 1e6) if online and job and not job.finished else '',
@@ -208,6 +212,16 @@ def detail(request, pk):
                             if request.POST[key] not in ('on', 'off'):
                                 return redirect(request, worker['url'], error='Choose a valid value for %s.' % key)
                             settings[key] = request.POST[key] == 'on'
+                    for key in ('test_threads', 'datagen_threads'):
+                        if key not in request.POST:
+                            continue
+                        try:
+                            value = int(request.POST[key])
+                        except (TypeError, ValueError):
+                            return redirect(request, worker['url'], error='Thread counts must be whole numbers.')
+                        if not info.get('thread_budgets') or not 1 <= value <= info.get('logical_cores', info.get('concurrency', 1)):
+                            return redirect(request, worker['url'], error='Choose a thread count within this worker’s logical CPU count. Update older clients first.')
+                        settings[key] = value
                     info.update(settings)
                     info['worker_settings'] = settings
                     worker_mode_event(machine, mode, request.user.pk)

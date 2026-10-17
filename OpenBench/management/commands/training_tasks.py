@@ -21,16 +21,16 @@ class Command(BaseCommand):
     help = 'Run the supervised training coordinator. Deploy one service independently of the web server.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--lane', choices=('validation', 'uploads', 'maintenance'))
+        parser.add_argument('--lane', choices=('validation', 'uploads', 'maintenance', 'bullet'))
         parser.add_argument('--status', action='store_true')
 
     def handle(self, *args, **options):
         if options['status']:
             now = timezone.now()
             active = set(TrainingServiceLease.objects.filter(name__startswith='coordinator-', expires__gt=now).values_list('name', flat=True))
-            for lane in ('validation', 'uploads', 'maintenance'):
+            for lane in ('validation', 'uploads', 'maintenance', 'bullet'):
                 self.stdout.write('%s: %s' % (lane, 'running' if 'coordinator-' + lane in active else 'offline'))
-            if len(active) != 3:
+            if len(active) != 4:
                 raise CommandError('The training coordinator is not fully available.')
             return
         stop = threading.Event()
@@ -44,7 +44,7 @@ class Command(BaseCommand):
         environment = {**os.environ, 'OPENBENCH_DISABLE_WATCHERS': '1', 'PYTHONUNBUFFERED': '1'}
         try:
             while not stop.is_set():
-                for lane in ('validation', 'uploads', 'maintenance'):
+                for lane in ('validation', 'uploads', 'maintenance', 'bullet'):
                     process = processes.get(lane)
                     if process is None or process.poll() is not None:
                         if process is not None:
@@ -74,7 +74,7 @@ class Command(BaseCommand):
         except IntegrityError:
             raise CommandError('Another coordinator acquired the %s lease.' % name) from None
         tasks = TrainingTasks(stop)
-        deadline = settings.TRAINING_UPLOAD_TIMEOUT if name == 'uploads' else settings.TRAINING_VALIDATION_TIMEOUT
+        deadline = 1800 if name == 'bullet' else settings.TRAINING_UPLOAD_TIMEOUT if name == 'uploads' else settings.TRAINING_VALIDATION_TIMEOUT
         def renew():
             while not stop.wait(10):
                 if tasks.active_started is not None and time.monotonic() - tasks.active_started > deadline:
