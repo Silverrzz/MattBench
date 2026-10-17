@@ -12,9 +12,9 @@ from OpenBench.training import DEFAULT_SETTINGS, validate_schedule
 from OpenBench.builder_export import export_recipe, split_inputs, upgrade_export, validate_export
 
 
-BULLET_COMMIT = '629ee50000b2afb7b3337595401c830d3b1e0f42'
+BULLET_COMMIT = 'b24b38d53905273bf78548990da816d11510ca9f'
 MANIFEST = 'mattbench-builder.json'
-MANIFEST_VERSION = 6
+MANIFEST_VERSION = 7
 SOURCE = 'examples/mattbench.rs'
 DEFAULT_SPEC = {
     'layers': [768], 'activation': 'screlu', 'psqt_inputs': True, 'threat_inputs': False, 'pawn_pair_inputs': False,
@@ -39,7 +39,7 @@ DEFAULT_SPEC = {
     'lr_stages': [{'start': 1, 'end': 800, 'kind': 'cosine', 'initial': 0.001, 'final': 0.00001}],
     'wdl_stages': [{'start': 1, 'end': 800, 'kind': 'constant', 'initial': 0.75, 'final': 0.75}],
     'eval_scale': 400.0,
-    'threads': 4, 'buffer_mb': 1024, 'seed': 42, 'backend': 'cuda', 'feature_format': 'i16',
+    'threads': 4, 'buffer_mb': 1024, 'loader_interleave': True, 'seed': 42, 'backend': 'cuda', 'feature_format': 'i16',
     'export_mode': 'legacy', 'dense_export': {}, 'split_features': False, 'feature_export': {},
     'optimizer': 'adamw', 'ranger_alpha': 0.5, 'ranger_k': 6,
     'shuffle': True, 'interleave': True, 'shuffle_memory_mb': 256,
@@ -68,7 +68,7 @@ def validate_spec(value):
             value = {'score_outputs': not value.get('wdl_outputs', False), 'score_buckets': buckets,
                      'wdl_buckets': buckets, 'uncertainty_buckets': buckets, **value}
         value = {**{key: False for key in ('wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation')}, **value}
-        value = {**{key: DEFAULT_SPEC[key] for key in ('shuffle', 'interleave', 'shuffle_memory_mb', 'interleave_fan_in', 'dataset_shard_mb')}, **value}
+        value = {**{key: DEFAULT_SPEC[key] for key in ('shuffle', 'interleave', 'shuffle_memory_mb', 'interleave_fan_in', 'dataset_shard_mb', 'loader_interleave')}, **value}
     if isinstance(value, dict) and 'lr_kind' in value:
         value = dict(value)
         for channel in ('lr', 'wdl'):
@@ -93,7 +93,7 @@ def validate_spec(value):
     ):
         if type(spec[key]) is not int or not minimum <= spec[key] <= maximum:
             raise ValidationError('%s must be between %d and %d.' % (key.replace('_', ' ').capitalize(), minimum, maximum))
-    for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave',
+    for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave', 'loader_interleave',
                 'score_outputs', 'wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation', 'hidden_layers_bucketed', 'dual_activation',
                 'position_filtering', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling', 'result_filtering', 'wdl_filtered'):
         if type(spec[key]) is not bool:
@@ -412,7 +412,7 @@ if count < max_active {
         saved_format=indent('\n'.join(formats), '        '), lr_scheduler=lr_scheduler(spec), wdl_rows=stage_rows('wdl'),
         dataset_ranges=', '.join('(%d, %d)' % (stage['start'], stage['end']) for stage in dataset_stages(spec)),
         worker_adapter=indent(adapter.rstrip(), '    '), auxiliary_module=auxiliary_module,
-        loader_import=loader_import, target_count=4 if spec['wdl_outputs'] else 1,
+        loader_import=loader_import, loader_method='new_interleave_multiple' if spec['loader_interleave'] else 'new_concat_multiple', target_count=4 if spec['wdl_outputs'] else 1,
         filter_expression=filter_expression,
         model_inputs=indent('\n'.join(model_inputs), '        '), graph_pattern=graph_pattern,
         sparse_inputs=indent('\n'.join(sparse_inputs), '        '),

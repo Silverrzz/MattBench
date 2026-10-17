@@ -1,4 +1,4 @@
-#content tr.test-error-pulse > td {
+#content tr.test-error-pulse > td:not(.statblock) {
     animation: test-error-pulse 4.8s ease-in-out infinite;
     animation-delay: var(--error-pulse-delay, 0s);
 }
@@ -11,5 +11,5 @@
 .test-error-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 .test-error-muted { font-size: 12px; color: var(--subtle); }
 @media (prefers-reduced-motion: reduce) {
-    #content tr.test-error-pulse > td { animation: none; box-shadow: inset 0 3px #a33143, inset 0 -3px #a33143; }
+    #content tr.test-error-pulse > td:not(.statblock) { animation: none; box-shadow: inset 0 3px #a33143, inset 0 -3px #a33143; }
 }
