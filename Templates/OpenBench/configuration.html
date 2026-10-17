@@ -10,7 +10,7 @@
 {% block heading %}{% if editing %}{% if is_new %}Add {{ singular }}{% else %}{{ instance }}{% endif %}{% else %}Manage{% endif %}{% endblock %}
 {% block page_actions %}
     {% if editing %}<a class="button" href="/manage/{{ section }}/">Back to {{ title|lower }}</a>
-    {% elif section != 'site' and can_create %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
+    {% elif section != 'site' and section != 'training' and can_create %}<a class="button button-primary" href="/manage/{{ section }}/new/">Add {{ singular }}</a>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -121,6 +121,27 @@
                 <a class="button" href="/manage/{{ section }}/">Cancel</a>
                 <button type="submit" class="button button-primary">Save changes</button>
             </div>
+        </form>
+    {% elif section == 'training' %}
+        <form method="post" class="form form-stack form-medium">
+            {% csrf_token %}
+            {{ bullet_form.version }}
+            {{ bullet_form.non_field_errors }}
+            <fieldset class="form-section">
+                <legend>Pinned Bullet revision</legend>
+                <p>Current commit: <a href="{{ bullet_repository }}/commit/{{ bullet_commit }}">{{ bullet_commit }}</a></p>
+                <p>New schedules use this revision. Saved schedules and running jobs keep their pinned revisions.</p>
+                <div class="field">
+                    {{ bullet_form.bullet_ref.label_tag }}
+                    {{ bullet_form.bullet_ref }}
+                    {{ bullet_form.bullet_ref.errors }}
+                </div>
+                <p>Branches and tags are resolved to a fixed commit when saved. Bullet's default branch is main.</p>
+                <div class="form-actions">
+                    <button class="button button-primary" type="submit" name="action" value="save">Pin revision</button>
+                    <button class="button" type="submit" name="action" value="latest" formnovalidate>Pin latest main</button>
+                </div>
+            </fieldset>
         </form>
     {% elif section == 'site' %}
         <table class="stripes data-table">

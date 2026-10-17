@@ -9,10 +9,11 @@ from textwrap import indent
 from django.core.exceptions import ValidationError
 
 from OpenBench.training import DEFAULT_SETTINGS, validate_schedule
+from OpenBench.bullet import DEFAULT_BULLET_COMMIT
 from OpenBench.builder_export import export_recipe, split_inputs, upgrade_export, validate_export
 
 
-BULLET_COMMIT = 'b24b38d53905273bf78548990da816d11510ca9f'
+BULLET_COMMIT = DEFAULT_BULLET_COMMIT
 MANIFEST = 'mattbench-builder.json'
 MANIFEST_VERSION = 7
 SOURCE = 'examples/mattbench.rs'
@@ -260,7 +261,7 @@ def builder_state(schedule):
         return None, False
 
 
-def generate_schedule(value):
+def generate_schedule(value, bullet_commit=BULLET_COMMIT):
     spec = validate_spec(value)
     template, auxiliary, adapter, licence = assets()
     bucket_type = 'ChessBucketsMirrored' if spec['mirrored'] else 'ChessBuckets'
@@ -427,7 +428,7 @@ if count < max_active {
     )
     files = {SOURCE: source, 'LICENSE.txt': licence}
     settings = {
-        **DEFAULT_SETTINGS, 'bullet_ref': BULLET_COMMIT, 'backend': spec['backend'],
+        **DEFAULT_SETTINGS, 'bullet_ref': bullet_commit, 'backend': spec['backend'],
         'threads': spec['threads'], 'shuffle_seed': spec['seed'], 'resume_supported': True,
         **{key: spec[key] for key in ('shuffle', 'interleave', 'shuffle_memory_mb', 'interleave_fan_in', 'dataset_shard_mb')},
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
@@ -438,7 +439,7 @@ if count < max_active {
         'optimizer': {'name': spec['optimizer'], 'decay': 0.01, 'beta1': 0.99 if ranger else 0.9, 'beta2': 0.999,
                       'alpha': spec['ranger_alpha'] if ranger else None, 'k': spec['ranger_k'] if ranger else None,
                       'lookahead_checkpoint_version': 1 if ranger else None},
-        'bullet_source': 'https://github.com/jw1912/bullet/tree/' + BULLET_COMMIT,
+        'bullet_source': 'https://github.com/jw1912/bullet/tree/' + bullet_commit,
         'export': {'mode': spec['export_mode'], 'tensors': export_tensors, 'byte_order': 'little', 'padding': 'bullet_to_64_bytes',
                    'feature_weights': 'per_tensor' if spec['export_mode'] == 'custom' and spec['feature_export'] else spec['feature_format'],
                    'feature_scale': None if spec['export_mode'] == 'custom' and spec['feature_export'] else 255 if spec['feature_format'] == 'i16' else 1,

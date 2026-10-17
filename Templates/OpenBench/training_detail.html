@@ -21,8 +21,8 @@
                 <tr><td class="td-label">Schedule</td><td>{% if run.schedule_id %}<a href="/training/schedules/{{ run.schedule_id }}/">{{ run.snapshot.name }}</a>{% else %}{{ run.snapshot.name }}{% endif %} · v{{ run.snapshot.version }}</td></tr>
                 <tr><td class="td-label">Bullet source</td><td><a href="{{ run.snapshot.settings.bullet_repo }}">{{ run.snapshot.settings.bullet_repo }}</a></td></tr>
                 <tr><td class="td-label">Bullet SHA</td><td>{{ run.snapshot.bullet_commit|default:'—' }}</td></tr>
-                <tr><td class="td-label">Dataset</td><td><a href="{{ run.dataset_url }}" rel="noreferrer">{{ run.dataset.repo }}</a></td></tr>
-                <tr><td class="td-label">Dataset SHA</td><td>{{ run.dataset.commit|default:'—' }}</td></tr>
+                <tr><td class="td-label">Datasets</td><td>{% if run.dataset.stages %}{% for stage in run.dataset.stages %}<div>Stage {{ forloop.counter }}{% if stage.start %} (SB {{ stage.start }}–{{ stage.end }}){% endif %}: {% if stage.sources %}{% for source in stage.sources %}<a href="https://huggingface.co/datasets/{{ source.repo }}" rel="noreferrer">{{ source.name|default:source.repo }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}<a href="https://huggingface.co/datasets/{{ stage.repo }}" rel="noreferrer">{{ stage.name|default:stage.repo }}</a>{% endif %}</div>{% endfor %}{% else %}<a href="{{ run.dataset_url }}" rel="noreferrer">{{ run.dataset.repo }}</a>{% endif %}</td></tr>
+                <tr><td class="td-label">Dataset SHAs</td><td>{% for revision in dataset_revisions %}<div>{{ revision.repo }}: {{ revision.commit|default:'—' }}</div>{% empty %}—{% endfor %}</td></tr>
                 <tr><td class="td-label">Worker</td><td>{% if run.worker %}<a href="/workers/{{ run.worker_id }}/">{{ run.worker.name }}</a>{% else %}Unassigned{% endif %}</td></tr>
                 <tr><td class="td-label">Eligible workers</td><td>{% if run.requested_worker %}Only <a href="/workers/{{ run.requested_worker_id }}/">{{ run.requested_worker.name }}</a>{% else %}Any compatible worker accepting {{ run.owner.username }}’s workloads{% endif %}</td></tr>
                 <tr><td class="td-label">Hardware</td><td>{{ run.worker.info.gpu|default:'—' }}</td></tr>
@@ -34,6 +34,7 @@
                 <tr><td class="td-label">Checkpoints</td><td>{% if run.snapshot.settings.checkpoint_keep_last %}Keep latest {{ run.snapshot.settings.checkpoint_keep_last }}{% else %}Keep all{% endif %}</td></tr>
                 <tr><td class="td-label">Local copies</td><td>{{ run.snapshot.settings.delete_uploaded_checkpoints|yesno:'Delete after upload,Keep on worker' }}</td></tr>
                 <tr><td class="td-label">Dataset preparation</td><td>Shuffle {{ run.snapshot.settings.shuffle|yesno:'on,off' }} · Analysis {{ run.snapshot.settings.analyse_dataset|yesno:'on,off' }}</td></tr>
+                <tr><td class="td-label">Dataset publishing</td><td>{% include 'OpenBench/Blocks/training_dataset_publication.html' %}</td></tr>
             </table>
         {% endlive_region %}</div>
     </div>

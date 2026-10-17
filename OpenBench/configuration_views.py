@@ -15,7 +15,8 @@ from OpenBench.views import render
 
 SECTIONS = {'engines': ('Engines', EngineConfig), 'books': ('Books', OpeningBook),
             'variants': ('Variants', Variant), 'runners': ('Runners', Runner),
-            'releases': ('Runner releases', RunnerRelease), 'site': ('Site settings', None), 'notifications': ('Notifications', None)}
+            'releases': ('Runner releases', RunnerRelease), 'training': ('Training', None),
+            'site': ('Site settings', None), 'notifications': ('Notifications', None)}
 RELATIONS = {Variant: ('runner_release', RunnerRelease),
              RunnerRelease: ('runner', Runner)}
 
@@ -50,6 +51,11 @@ def manage(request, section='engines', identifier=None):
                'singular': {'engines': 'engine', 'books': 'book', 'variants': 'variant', 'runners': 'runner', 'releases': 'release'}.get(section),
                'can_create': staff, 'can_manage_maintainers': staff,
                'navigation': [(key, label) for key, (label, _) in SECTIONS.items() if key != 'releases' and (request.user.is_superuser or key == 'engines')]}
+    if section == 'training':
+        if identifier is not None:
+            raise Http404
+        from OpenBench.training_configuration import manage_training
+        return manage_training(request, context)
     if section == 'site':
         if request.method != 'GET' or identifier is not None:
             raise PermissionDenied

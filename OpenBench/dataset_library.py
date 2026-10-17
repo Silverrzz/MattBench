@@ -24,7 +24,12 @@ class DatasetForm(forms.ModelForm):
         fields = ['name', 'repo', 'revision', 'patterns', 'notes']
         labels = {'repo': 'Hugging Face repository', 'patterns': 'Included files'}
         widgets = {'patterns': forms.Textarea(attrs={'rows': 3}), 'notes': forms.Textarea(attrs={'rows': 3})}
-        help_texts = {'patterns': 'One file path or wildcard per line. Use * for all supported training files.'}
+        help_texts = {
+            'revision': 'Use a branch such as main to publish prepared data back to Hugging Face after preparation and any enabled analysis. '
+                        'A commit SHA or tag keeps preparation local without uploading the data. '
+                        'Every run pins its exact input commit. Changing the revision affects future runs only.',
+            'patterns': 'One file path or wildcard per line. Use * for all supported training files.',
+        }
 
     def clean_repo(self):
         return repo_id(self.cleaned_data['repo'])

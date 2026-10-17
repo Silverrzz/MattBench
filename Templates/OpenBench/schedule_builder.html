@@ -3,6 +3,7 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'schedule_builder.css' %}?{{ static_version }}"><script src="{% static 'builder_values.js' %}?{{ static_version }}" defer></script><script src="{% static 'schedule_builder.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block content %}
 {% include 'OpenBench/Blocks/training_nav.html' %}
+<p>Bullet revision: <a href="https://github.com/jw1912/bullet/commit/{{ bullet_commit }}">{{ bullet_commit|slice:':12' }}</a>{% if user.is_superuser %} · <a href="/manage/training/">Manage default revision</a>{% endif %}</p>
 <form class="form schedule-builder" id="schedule-builder" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">
     {% csrf_token %}
     {% if builder_data.notice %}<p class="builder-notice">{{ builder_data.notice }}</p>{% endif %}

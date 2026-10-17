@@ -10,11 +10,13 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from OpenBench.models import HuggingFaceCredential
+from OpenBench.bullet import DEFAULT_BULLET_COMMIT, pinned_bullet_commit
+from OpenBench.training_sources import has_multiple_sources, stage_sources
 
 
 DEFAULT_SETTINGS = {
     'bullet_repo': 'https://github.com/jw1912/bullet',
-    'bullet_ref': 'main',
+    'bullet_ref': DEFAULT_BULLET_COMMIT,
     'build': ['cargo', 'build', '--release', '--manifest-path', 'crates/bullet_lib/Cargo.toml', '--example', 'mattbench', '--features', 'cuda'],
     'run': ['target/release/examples/mattbench'],
     'example_name': 'mattbench',
@@ -45,8 +47,14 @@ DEFAULT_SETTINGS = {
 DATA_SUFFIXES = ('.pgn.tar', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst', '.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst', '.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst')
 
 
-def worker_requirement_errors(info, config, disk_required=None):
+def default_settings():
+    return {**DEFAULT_SETTINGS, 'bullet_ref': pinned_bullet_commit()}
+
+
+def worker_requirement_errors(info, config, disk_required=None, dataset=None):
     errors = []
+    if dataset and has_multiple_sources(dataset) and 'multi-dataset-stages' not in info.get('capabilities', []):
+        errors.append('Update this worker to support multiple datasets per stage.')
     if info.get('backend') != config['backend']:
         errors.append('GPU backend: worker reports %s; schedule requires %s.' % (info.get('backend', 'unknown'), config['backend']))
     disk = info.get('disk_gb', 0)
@@ -190,20 +198,33 @@ def resolve_inputs(run):
     stages = []
     selected = []
     resolved = {}
-    for index, source in enumerate(sources):
-        key = (source['repo'], source['ref'], tuple(source['patterns']))
-        if key in resolved:
-            stages.append({**source, **resolved[key]})
-            continue
-        info = api.dataset_info(source['repo'], revision=source['ref'], files_metadata=True)
-        if not re.fullmatch(r'[0-9a-f]{40}', info.sha):
-            raise ValidationError('Could not pin the dataset revision.')
-        from OpenBench.dataset_manifest import resolve_dataset
-        metadata = resolve_dataset(source['repo'], info, source['patterns'], hf_token(run.owner_id))
-        files = [{**file, 'repo': source['repo'], 'commit': info.sha, 'stage': index} for file in metadata.pop('files')]
-        resolved[key] = {**metadata, 'commit': info.sha, 'size': sum(file['size'] for file in files), 'file_indices': list(range(len(selected), len(selected) + len(files)))}
-        selected.extend(files)
-        stages.append({**source, **resolved[key]})
+    repositories = {}
+    file_indices = {}
+    for index, group in enumerate(sources):
+        pinned = []
+        for source in stage_sources(group):
+            key = (source['repo'], source['ref'], tuple(source['patterns']))
+            if key not in resolved:
+                repo_key = key[:2]
+                if repo_key not in repositories:
+                    repositories[repo_key] = api.dataset_info(source['repo'], revision=source['ref'], files_metadata=True)
+                info = repositories[repo_key]
+                if not re.fullmatch(r'[0-9a-f]{40}', info.sha):
+                    raise ValidationError('Could not pin the dataset revision.')
+                from OpenBench.dataset_manifest import resolve_dataset
+                metadata = resolve_dataset(source['repo'], info, source['patterns'], hf_token(run.owner_id))
+                files = [{**file, 'repo': source['repo'], 'commit': info.sha, 'stage': index} for file in metadata.pop('files')]
+                indices = []
+                for file in files:
+                    file_key = (file['repo'], file['commit'], file['path'])
+                    if file_key not in file_indices:
+                        file_indices[file_key] = len(selected)
+                        selected.append(file)
+                    indices.append(file_indices[file_key])
+                resolved[key] = {**metadata, 'commit': info.sha, 'size': sum(file['size'] for file in files), 'file_indices': indices}
+            pinned.append({**source, **resolved[key]})
+        indices = list(dict.fromkeys(index for source in pinned for index in source['file_indices']))
+        stages.append({**group, 'sources': pinned, 'file_indices': indices, 'size': sum(selected[i]['size'] for i in indices)} if group.get('sources') else pinned[0])
     if len(selected) > 4096:
         raise ValidationError('Select at most 4096 dataset files per run.')
     repository = config['bullet_repo'].removeprefix('https://github.com/')
@@ -211,10 +232,10 @@ def resolve_inputs(run):
     response = requests.get('https://api.github.com/repos/%s/commits/%s' % (repository, quote(bullet_ref or config['bullet_ref'], safe='')), timeout=30)
     response.raise_for_status()
     commit = response.json()['sha']
-    if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[0-9a-f]{40}', info.sha):
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValidationError('Could not pin the dataset and Bullet revisions.')
     snapshot = {**run.snapshot, 'bullet_commit': commit}
-    dataset = {**run.dataset, **resolved[next(iter(resolved))], 'commit': stages[0]['commit'], 'files': selected, 'size': sum(file['size'] for file in selected)}
+    dataset = {**run.dataset, **resolved[next(iter(resolved))], 'commit': stage_sources(stages[0])[0]['commit'], 'files': selected, 'size': sum(file['size'] for file in selected)}
     dataset.pop('file_indices', None)
     if run.dataset.get('stages'):
         dataset['stages'] = stages

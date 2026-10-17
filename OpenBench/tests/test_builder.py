@@ -361,7 +361,7 @@ class BuilderTests(SimpleTestCase):
         first, files, settings = generate_schedule(self.spec())
         second, other_files, _ = generate_schedule({**first, 'presentation': {'lr': 'boundaries', 'wdl': 'boundaries'}})
         self.assertEqual(files[SOURCE], other_files[SOURCE])
-        self.assertEqual(json.loads(files[MANIFEST])['version'], 6)
+        self.assertEqual(json.loads(files[MANIFEST])['version'], MANIFEST_VERSION)
         restored, current = builder_state(SimpleNamespace(files=files, settings=settings))
         self.assertTrue(current)
         self.assertEqual(restored, first)

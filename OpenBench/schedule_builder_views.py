@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from OpenBench.models import EngineConfig, TrainingSchedule
+from OpenBench.bullet import pinned_bullet_commit
 from OpenBench.schedule_builder import DEFAULT_SPEC, SOURCE, builder_state, generate_schedule
 from OpenBench.training_views import enabled, error_text, schedules_for
 
@@ -21,6 +22,7 @@ def schedule_builder(request, schedule_id=None):
     enabled(request.user)
     selected = get_object_or_404(schedules_for(request.user), pk=schedule_id) if schedule_id else None
     spec, unchanged = builder_state(selected) if selected else (DEFAULT_SPEC, True)
+    bullet_commit = (selected.settings.get('bullet_ref') if selected else None) or pinned_bullet_commit()
     editable = not selected or selected.owner_id == request.user.pk or selected.owner_id is None and request.user.is_superuser
     if request.method == 'POST':
         try:
@@ -29,7 +31,7 @@ def schedule_builder(request, schedule_id=None):
             data = json.loads(request.body)
             if not isinstance(data, dict) or data.get('action') not in ('preview', 'save'):
                 raise ValidationError('Invalid builder request.')
-            normalized, files, config = generate_schedule(data.get('spec'))
+            normalized, files, config = generate_schedule(data.get('spec'), bullet_commit)
             if data['action'] == 'preview':
                 return JsonResponse({'source': files[SOURCE]})
             if selected:
@@ -80,7 +82,7 @@ def schedule_builder(request, schedule_id=None):
         notice = 'The Rust source or build settings have been edited. Saving here creates a copy from the last builder settings.'
     elif selected and not editable:
         notice = 'Saving creates a personal copy of this shared schedule.'
-    spec, files, config = generate_schedule(spec or DEFAULT_SPEC)
+    spec, files, config = generate_schedule(spec or DEFAULT_SPEC, bullet_commit)
     payload = {
         'id': str(selected.pk) if selected and not copy else '', 'version': selected.version if selected and not copy else 0,
         'spec': spec, 'source': files[SOURCE], 'notice': notice,
@@ -92,5 +94,5 @@ def schedule_builder(request, schedule_id=None):
     }
     return render(request, 'schedule_builder.html', {
         'page_title': 'Schedule builder', 'training_tab': 'schedules', 'builder_data': payload,
-        'engines': EngineConfig.objects.filter(enabled=True).order_by('name'),
+        'engines': EngineConfig.objects.filter(enabled=True).order_by('name'), 'bullet_commit': bullet_commit,
     })

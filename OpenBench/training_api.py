@@ -189,7 +189,7 @@ def claim(request):
         disk_required = required_disk_bytes(run.dataset, config) / 1024 ** 3 + config.get('disk_reserve_gb', 10)
         if config.get('execution_image') and config['execution_image'] != info.get('execution_image'):
             continue
-        if worker_requirement_errors(info, config, disk_required):
+        if worker_requirement_errors(info, config, disk_required, dataset=run.dataset):
             continue
         eligible.append(run)
     request.workload_blacklist = data.get('blacklist', [])
@@ -360,6 +360,8 @@ def report(request, pk):
         if type(value) in (int, float) and math.isfinite(value) and abs(value) <= 1e20:
             clean_metrics[key] = value
         elif key == 'current_file' and isinstance(value, str) and len(value) <= 256:
+            clean_metrics[key] = value
+        elif key == 'preparation_step' and isinstance(value, str) and len(value) <= 80:
             clean_metrics[key] = value
         else:
             raise ValueError

@@ -1,0 +1,21 @@
+{% for selector, plan in run.preparation.items %}
+<div>
+    <strong>{{ plan.repo|default:'Dataset' }}</strong>
+    {% if plan.published %}
+        <div>Published to Hugging Face{% if plan.branch %} · <code>{{ plan.branch }}</code>{% endif %}{% if plan.repo %} · <a href="https://huggingface.co/datasets/{{ plan.repo }}/commit/{{ plan.published }}" target="_blank" rel="noopener">View commit &nearr;</a>{% endif %}</div>
+    {% elif plan.mode == 'local' %}
+        <div>Local preparation only · No Hugging Face upload</div>
+        <div class="field-note">The selected revision is a commit or tag, so prepared data is not published.</div>
+    {% elif plan.mode == 'prepare' %}
+        <div>{% if run.terminal %}Not published{% else %}Publication pending{% endif %} · Target branch <code>{{ plan.branch }}</code></div>
+        <div class="field-note">Prepared files and metadata are published after preparation and any enabled analysis.</div>
+    {% elif plan.mode == 'ready' %}
+        <div>Ready for training · No upload needed</div>
+    {% else %}
+        <div>Publication status unavailable for this run.</div>
+    {% endif %}
+</div>
+{% empty %}
+{% if run.state == 'QUEUED' or run.state == 'RESOLVING' or run.state == 'DOWNLOADING' or run.state == 'CONVERTING' %}Waiting for the worker to check dataset revisions.{% else %}No publication status recorded for this run.{% endif %}
+<div class="field-note">Branches allow publishing prepared data to Hugging Face. Commits and tags keep preparation local.</div>
+{% endfor %}

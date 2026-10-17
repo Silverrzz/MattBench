@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -36,10 +37,16 @@ def training_telemetry(job):
 def worker_rows(user, identifier=None):
     now = timezone.now()
     cutoff = now - timedelta(minutes=2)
+    # Guard JSON comparisons so missing keys also work under exclude().
+    recent = Q(updated__gte=cutoff) | (Q(info__has_key='demo_online') & Q(info__demo_online=True))
     machines = Machine.objects.select_related('user').order_by('-pk')
     if identifier is not None:
         machines = machines.filter(pk=identifier) if str(identifier).isdigit() else machines.none()
-    machines = list(machines[:250])
+        machines = list(machines)
+    else:
+        connected = recent & (~Q(info__has_key='disconnected') | Q(info__disconnected=False) | Q(info__disconnected=None))
+        # Historical registrations must not displace connected workers.
+        machines = list(machines.filter(connected)) + list(machines.exclude(connected)[:250])
     capabilities = {worker.machine_id: worker for worker in TrainingWorker.objects.filter(machine__in=machines, enabled=True)}
     active_training = {run.worker_id: run for run in TrainingRun.objects.filter(worker__in=capabilities.values(), state__in=TRAINING_ACTIVE).only('id', 'name', 'worker_id', 'metrics')}
     jobs = {row.pk: row for row in Test.objects.filter(pk__in=[machine.workload for machine in machines]).select_related('dev')}
@@ -97,7 +104,11 @@ def worker_rows(user, identifier=None):
         gpu_workers = gpu_workers.none()
     elif not user.is_superuser:
         gpu_workers = gpu_workers.filter(owner=user)
-    gpu_workers = list(gpu_workers[:250])
+    if identifier is not None:
+        gpu_workers = list(gpu_workers)
+    else:
+        connected = Q(enabled=True) & recent
+        gpu_workers = list(gpu_workers.filter(connected)) + list(gpu_workers.exclude(connected)[:250])
     training = {run.worker_id: run for run in TrainingRun.objects.filter(worker__in=gpu_workers, state__in=TRAINING_ACTIVE).only('id', 'name', 'worker_id', 'metrics')}
     for worker in gpu_workers:
         info = worker.info

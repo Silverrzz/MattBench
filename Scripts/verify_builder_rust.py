@@ -56,5 +56,5 @@ for name, spec in variants:
         text += '\n[[example]]\nname = "%s"\npath = "../../examples/%s.rs"\n' % (name, name)
 manifest.write_text(text)
 for name, _ in variants:
-    subprocess.run(['cargo', 'check', '--locked', '-p', 'bullet_lib', '--example', 'verify_' + name, '--features', 'cuda'], cwd=root, check=True)
+    subprocess.run(['cargo', 'check', '--locked', '-p', 'bullet_lib', '--example', 'verify_' + name, '--features', sys.argv[2] if len(sys.argv) > 2 else 'cuda'], cwd=root, check=True)
 print('All representative generated trainers compiled against Bullet ' + BULLET_COMMIT)

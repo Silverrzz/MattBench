@@ -1,4 +1,5 @@
 import bz2
+from concurrent.futures import ThreadPoolExecutor, wait
 import io
 import json
 from pathlib import Path
@@ -6,10 +7,10 @@ import tarfile
 import tempfile
 import threading
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from django.test import SimpleTestCase
-from Client import training_cache
+from Client import training_cache, training_data
 from Client.training_worker import cleanup_runs, convert_dataset, WorkerSession
 
 
@@ -70,6 +71,7 @@ class DatasetConversionTests(SimpleTestCase):
                     self.assertEqual(reporter.abort_reason, '')
                     self.assertEqual(reporter.metrics['converted_files'], 2)
                     self.assertEqual(reporter.metrics['converted_bytes'], 20)
+                    self.assertEqual(reporter.metrics['progress'], 100)
                     self.assertEqual(reporter.metrics.get('skipped_games', 0), 2 if skip_broken else 0)
                     self.assertIn('7626.35810.1865729.pgn.bz2', ''.join(call.args[0] for call in reporter.write.call_args_list))
 
@@ -86,6 +88,45 @@ class DatasetConversionTests(SimpleTestCase):
             self.assertEqual(command.call_count, len(paths))
             self.assertEqual(reporter.metrics['skipped_games'], 10)
             self.assertEqual(list((root / 'data').iterdir()), [])
+
+    def test_conversion_progress_waits_for_sanitisation_of_files_and_archive_members(self):
+        for archive in (False, True):
+            with self.subTest(archive=archive), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path = root / ('games.tar' if archive else 'games.pgn')
+                if archive:
+                    with tarfile.open(path, 'w') as output:
+                        member = tarfile.TarInfo('games.pgn')
+                        member.size = 5
+                        output.addfile(member, io.BytesIO(b'valid'))
+                else:
+                    path.write_bytes(b'valid')
+                reporter = self.reporter([path])
+                sanitising, draining, release = threading.Event(), threading.Event(), threading.Event()
+                def command(arguments, *args, **kwargs):
+                    if arguments[1] == 'sanitise':
+                        sanitising.set()
+                        if not release.wait(5):
+                            raise RuntimeError('Test did not release sanitisation.')
+                    return self.command(arguments, *args, **kwargs)
+                def drain(*args, **kwargs):
+                    draining.set()
+                    return wait(*args, **kwargs)
+                with patch('Client.training_worker.command', side_effect=command), patch('Client.training_worker.wait', side_effect=drain), ThreadPoolExecutor(max_workers=1) as executor:
+                    result = executor.submit(convert_dataset, [path], root, 'pawnocchio', {}, reporter, [{'format': 'pgn'}])
+                    try:
+                        self.assertTrue(sanitising.wait(5))
+                        self.assertTrue(draining.wait(5))
+                        self.assertFalse(result.done())
+                        self.assertEqual(reporter.metrics['progress'], 0)
+                        self.assertEqual(reporter.metrics['progress_known'], 1)
+                        if archive:
+                            self.assertTrue(any(call.kwargs.get('progress_known') == 0 for call in reporter.update.call_args_list))
+                    finally:
+                        release.set()
+                    self.assertEqual(len(result.result(timeout=5)), 1)
+                self.assertEqual(reporter.metrics['progress'], 100)
+                self.assertEqual(reporter.metrics['converted_files'], 1)
 
     def test_empty_viriformat_is_skipped(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -111,6 +152,74 @@ class DatasetConversionTests(SimpleTestCase):
                     with self.assertRaisesRegex(RuntimeError, expected):
                         convert_dataset([source], root, 'pawnocchio', {}, reporter, [{}])
                 self.assertTrue(reporter.stop.is_set())
+
+
+class DatasetPreparationProgressTests(SimpleTestCase):
+    def reporter(self):
+        reporter = Mock(metrics={'progress': 100, 'progress_known': 1}, stop=threading.Event())
+        reporter.update.side_effect = lambda **values: reporter.metrics.update(values)
+        return reporter
+
+    def assert_step(self, reporter, name):
+        self.assertEqual(reporter.metrics['preparation_step'], name)
+        self.assertEqual(reporter.metrics['progress_known'], 0)
+        self.assertEqual(reporter.metrics['progress'], 0)
+
+    def test_completed_conversion_and_upload_percentages_do_not_leak_into_other_steps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / 'data.vf'
+            path.write_bytes(b'valid-game')
+            reporter = self.reporter()
+            job = {'id': 1, 'snapshot': {'settings': {}}, 'dataset': {'size': 10, 'files': [{}]},
+                   'worker_info': {'threads': 1, 'combiner_path': 'combiner', 'runtime': {'dataset_tools': {'combiner': 'test'}}}}
+            plan = {'mode': 'prepare', 'steps': ['shuffle', 'analyse'], 'prefix': 'prepared/', 'repo': 'test/data'}
+            def order(*args):
+                self.assert_step(reporter, 'Shuffling and interleaving')
+                return [path], 1
+            def analyse(*args, **kwargs):
+                self.assert_step(reporter, 'Analysing dataset')
+                return 'analysis'
+            def digest(*args):
+                self.assert_step(reporter, 'Hashing dataset')
+                return 'a' * 64
+            def upload(*args):
+                reporter.update(preparation_step='Uploading dataset', progress_known=1, progress=100)
+            def publish(*args, **kwargs):
+                self.assert_step(reporter, 'Publishing dataset')
+                return Mock(json=Mock(return_value={'stored': True, 'revision': 'b' * 40}))
+            connection = Mock()
+            connection.request.side_effect = publish
+            with patch.object(training_data, 'order_games', side_effect=order), patch.object(training_data, 'file_digest', side_effect=digest), patch.object(training_data, 'upload_prepared_files', side_effect=upload):
+                selected = training_data.prepare_and_publish(connection, job, plan, [path], root, 'pawnocchio', {}, reporter, analyse)
+            self.assertEqual(selected, [path])
+            self.assertEqual(job['dataset_publication']['revision'], 'b' * 40)
+
+    def test_upload_is_not_complete_until_the_server_confirms_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'data.vf'
+            path.write_bytes(b'valid-game')
+            reporter = self.reporter()
+            descriptor = {'path': 'data.vf', 'size': 10, 'sha256': 'a' * 64}
+            def request(*args, **kwargs):
+                if kwargs['json'].get('verify'):
+                    self.assertEqual(reporter.metrics['uploaded_bytes'], 10)
+                    self.assertEqual(reporter.metrics['progress'], 0)
+                    result = {'stored': True}
+                else:
+                    result = {'upload': {'href': 'https://unused.invalid/upload'}}
+                return Mock(json=Mock(return_value=result))
+            def put(url, data, **kwargs):
+                while data.read():
+                    pass
+                self.assertEqual(reporter.metrics['progress'], 0)
+                return MagicMock()
+            connection = Mock()
+            connection.request.side_effect = request
+            with patch.object(training_data.requests, 'put', side_effect=put):
+                training_data.upload_prepared_files(connection, {'id': 1}, [path], [descriptor], reporter)
+            self.assertEqual(reporter.metrics['progress'], 100)
+            self.assertEqual(reporter.metrics['uploaded_files'], 1)
 
 
 class ClientWorkloadTests(SimpleTestCase):

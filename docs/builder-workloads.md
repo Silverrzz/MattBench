@@ -1,6 +1,6 @@
 # Builder v6 and sequential training workloads
 
-Builder manifests now use version 6. Existing schedules retain their LR interpolation and legacy export conventions when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New builder runs default to 50 SB per workload; custom source requires uninterrupted training. A new run may reuse an architecture-compatible checkpoint.
+Builder manifests now use version 6. Existing schedules retain their LR interpolation and legacy export conventions when opened, and existing run snapshots are not regenerated. Existing runs get workload size 0 (uninterrupted) and priority 0 through migrations 0024–0025. New runs default to workload size 0 (uninterrupted), including blank or omitted form values. Compatible builder schedules accept an explicit positive SB count; custom source requires uninterrupted training. Existing runs retain their saved workload size. A new run may reuse an architecture-compatible checkpoint.
 
 ## Network export and clipping
 
@@ -69,6 +69,10 @@ Position/move filters, result consistency, WDL-model sampling, and piece-count s
 ## Worker protocol and persistence
 
 Protocol 4 workers advertise `training-workloads` and `typed-assignments`. Protocol 3 workers continue to receive uninterrupted runs. Training requests carry `X-Training-Claim` for sliced runs. Reports, artifacts, checkpoint registration, dataset preparation and completion are fenced against expired claims. Artifact names include the claim UUID; logs and manifests are stored per attempt. The run retains cumulative history and overall progress.
+
+The new-training form accepts one or more registered datasets per stage. Each source is pinned and prepared in its own repository; the worker combines its prepared file paths with the other sources for that stage. A source reused in later stages reuses its preparation. Checkpoint forms restore all selected datasets, and the run details list each source by stage. Dataset selection is stored on the run, so existing saved schedules require no migration. Legacy single-dataset runs, preparations and checkpoint selections remain supported, including older builder manifests and custom Rust schedules.
+
+Workers supporting multiple datasets advertise `multi-dataset-stages`. Update and register the client before assigning these runs. Older workers remain eligible for single-dataset runs; diagnostics explain when an update is needed. Preparation requests identify a member as `stage=STAGE.SOURCE`; legacy single-source requests continue using `stage=STAGE`.
 
 Each workload takes the latest committed checkpoint, starts at the next SB, and intersects its execution with dataset stages. Generated trainers honor `MATTBENCH_START_SUPERBATCH` and `MATTBENCH_END_SUPERBATCH`, restore weights/momentum/velocity, and force a complete checkpoint at the workload end. LR and WDL remain indexed globally. Dataset reading, shuffling and adaptive counters restart.
 

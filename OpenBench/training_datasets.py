@@ -15,6 +15,7 @@ from OpenBench.lifecycle import record_event
 from OpenBench.models import TrainingRun
 from OpenBench.training import hf_token
 from OpenBench.training_api import json_body, owned_run, worker_endpoint
+from OpenBench.training_sources import stage_sources
 
 
 def raw_source_input(run, stage=None):
@@ -22,9 +23,17 @@ def raw_source_input(run, stage=None):
         if run.dataset.get('stages'):
             raise ValidationError('Choose a dataset stage.')
         return run.dataset
-    if not str(stage).isdigit() or not 0 <= int(stage) < len(run.dataset.get('stages', [])):
+    parts = str(stage).split('.')
+    if len(parts) not in (1, 2) or any(not part.isascii() or not part.isdigit() for part in parts) or not 0 <= int(parts[0]) < len(run.dataset.get('stages', [])):
         raise ValidationError('Invalid dataset stage.')
-    source = run.dataset['stages'][int(stage)]
+    group = run.dataset['stages'][int(parts[0])]
+    sources = stage_sources(group)
+    if len(parts) == 1 and len(sources) > 1:
+        raise ValidationError('Choose a dataset within this stage.')
+    source_index = int(parts[1]) if len(parts) == 2 else 0
+    if not 0 <= source_index < len(sources):
+        raise ValidationError('Invalid dataset source.')
+    source = sources[source_index]
     return {**source, 'files': [run.dataset['files'][index] for index in source['file_indices']]}
 
 
@@ -51,14 +60,21 @@ def effective_dataset(run):
     files = []
     stages = []
     seen = {}
-    for index in range(len(run.dataset['stages'])):
-        source = source_input(run, index)
-        key = (source['repo'], source['commit'], tuple(file['path'] for file in source['files']))
-        if key not in seen:
-            seen[key] = list(range(len(files), len(files) + len(source['files'])))
-            files.extend(source['files'])
-        stages.append({**{key: value for key, value in source.items() if key != 'files'}, 'file_indices': seen[key]})
-    return {**run.dataset, 'stages': stages, 'files': files, 'size': sum(file['size'] for file in files), 'commit': stages[0]['commit']}
+    for index, group in enumerate(run.dataset['stages']):
+        sources = []
+        for source_index, _ in enumerate(stage_sources(group)):
+            source = source_input(run, '%d.%d' % (index, source_index) if group.get('sources') else index)
+            indices = []
+            for file in source['files']:
+                key = (file.get('repo', source['repo']), file.get('commit', source['commit']), file['path'])
+                if key not in seen:
+                    seen[key] = len(files)
+                    files.append({**file, 'repo': key[0], 'commit': key[1]})
+                indices.append(seen[key])
+            sources.append({**{key: value for key, value in source.items() if key != 'files'}, 'file_indices': indices})
+        indices = list(dict.fromkeys(index for source in sources for index in source['file_indices']))
+        stages.append({**group, 'sources': sources, 'file_indices': indices, 'size': sum(files[i]['size'] for i in indices)} if group.get('sources') else sources[0])
+    return {**run.dataset, 'stages': stages, 'files': files, 'size': sum(file['size'] for file in files), 'commit': stage_sources(stages[0])[0]['commit']}
 
 
 def stage_key(stage):
@@ -152,6 +168,20 @@ def dataset_upload(request, pk):
             raise ValidationError('Hugging Face did not provide an upload URL.')
         if token in json.dumps(upload):
             raise ValidationError('Hugging Face returned an upload requiring account credentials.')
+        header = upload.get('header', {})
+        if isinstance(header, dict) and 'chunk_size' in header:
+            chunk_size = int(header['chunk_size'])
+            if chunk_size <= 0:
+                raise ValidationError('Hugging Face returned an invalid upload chunk size.')
+            # HF uses zero-padded part numbers; workers address parts as 1, 2, ...
+            part_keys = [key for key in header if re.fullmatch(r'[0-9]+', key)]
+            parts = {str(int(key)): header[key] for key in part_keys}
+            expected = (size + chunk_size - 1) // chunk_size
+            if len(parts) != len(part_keys) or len(parts) != expected or set(parts) != {str(index) for index in range(1, expected + 1)}:
+                raise ValidationError('Hugging Face returned an incomplete multipart upload.')
+            if any(not isinstance(url, str) or not url for url in parts.values()):
+                raise ValidationError('Hugging Face returned an invalid multipart upload URL.')
+            upload = {**upload, 'header': {**{key: value for key, value in header.items() if key not in part_keys}, **parts}}
         result = {'stored': False, 'upload': upload}
     result = JsonResponse(result)
     result['Cache-Control'] = 'no-store'

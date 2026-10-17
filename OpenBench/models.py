@@ -425,7 +425,7 @@ class WorkloadPreset(Model):
         verify_preset(self.workload_type, self.settings)
 
 
-from OpenBench.training_models import HuggingFaceCredential, TrainingSchedule, TrainingWorker
+from OpenBench.training_models import HuggingFaceCredential, TrainingSchedule, TrainingWorker, TrainingConfiguration
 from OpenBench.training_models import TrainingRun, TrainingArtifact, DatasetUpload
 from OpenBench.training_models import TrainingCheckpoint, LifecycleEvent
 from OpenBench.training_models import TrainingDataset
