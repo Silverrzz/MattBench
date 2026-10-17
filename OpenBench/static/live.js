@@ -29,7 +29,7 @@
             return;
         }
         pendingRegions.delete(id);
-        if (regions.get(id) === html && id !== 'live-networks') return;
+        if (regions.get(id) === html) return;
         target.innerHTML = html;
         regions.set(id, html);
         format_live_content(target);

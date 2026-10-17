@@ -15,7 +15,7 @@
 
     <form method="post" class="form form-stack dataset-library-form">
         {% csrf_token %}{{ form.non_field_errors }}
-        {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<span class="field-note">{{ field.help_text }}</span>{% endif %}</div>{% endfor %}
+        {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<span class="field-note" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</span>{% endif %}</div>{% endfor %}
         {% if editable %}<div class="dataset-save"><button class="button button-primary" name="action" value="save">Save dataset</button></div>{% endif %}
     </form>
     {% if selected %}<div class="dataset-management"><a href="https://huggingface.co/datasets/{{ selected.repo }}" target="_blank" rel="noopener">View repository &nearr;</a>{% if editable %}<form method="post">{% csrf_token %}{% if selected.archived %}<button class="button" name="action" value="restore">Restore dataset</button>{% else %}<button class="button" name="action" value="archive">Archive dataset</button>{% endif %}<button class="button" name="action" value="delete" onclick="return confirm('Permanently delete this dataset from your library? Existing training runs and files on Hugging Face will be kept.')">Delete dataset</button></form>{% endif %}</div>{% endif %}

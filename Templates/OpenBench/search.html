@@ -148,7 +148,7 @@
         <thead><tr class="column-headings"><th scope="col">Date</th><th scope="col">Author</th><th scope="col">Engine</th><th scope="col">Identifier</th><th scope="col">Code</th><th scope="col">Time control</th><th scope="col"><div class="results-heading"><span>Results</span>{% include "OpenBench/Blocks/notes_toggle.html" %}</div></th></tr></thead>
         <tbody>
         {% for test in tests %}
-            <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">
+            <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}{% if test.pulse_errors %} test-error-pulse{% endif %}">
                 <td class="datestamp">{{test.creation|date:"U"}}</td>
                 {% include "OpenBench/Blocks/testsummary.html" %}
             </tr>

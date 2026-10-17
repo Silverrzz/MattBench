@@ -18,6 +18,8 @@
     {{ form.stage_datasets }}{{ form.stage_datasets.errors }}
         <section class="training-form-section" aria-labelledby="training-data-heading">
             <div class="training-dataset-heading"><h3 id="training-data-heading">Datasets by stage</h3><a href="/training/datasets/">Manage datasets</a></div>
+            <p class="field-note">Choose one or more datasets for each stage. Their files are trained together during that stage.</p>
+            <p class="field-note">Datasets using a branch revision, such as <code>main</code>, can publish prepared data back to Hugging Face after preparation and any enabled analysis. Commit and tag revisions keep preparation local without uploading it. Every run pins its exact input commit.</p>
             {{ form.dataset }}{{ form.dataset.errors }}
             <div id="training-stage-datasets"></div>
             <label class="choice training-local-cleanup">{{ form.skip_broken_games }}{{ form.skip_broken_games.label }}</label>
@@ -27,7 +29,7 @@
             <summary>Run settings <span id="training-settings-summary"></span></summary>
             <div class="training-settings-grid">
             <div class="field">{{ form.priority.label_tag }}{{ form.priority }}{{ form.priority.errors }}</div>
-            <div class="field">{{ form.workload_size.label_tag }}{{ form.workload_size }}{{ form.workload_size.errors }}<p class="field-note">Compatible builder runs default to 50 SB. Use 0 for uninterrupted training.</p></div>
+            <div class="field">{{ form.workload_size.label_tag }}{{ form.workload_size }}{{ form.workload_size.errors }}<p class="field-note" id="training-workload-help">Default: uninterrupted (0). Set a positive SB count to split training into workloads.</p></div>
             <p class="field-note training-settings-note">Any compatible worker accepting your account's workloads can pick up this run. Optimizer state and schedule progress carry over between workloads; dataset reading, shuffling and adaptive sampling restart.</p>
             <div class="field training-checkpoint-settings"><label for="train-checkpoint_retention">Checkpoints</label>
                 <div class="training-retention">

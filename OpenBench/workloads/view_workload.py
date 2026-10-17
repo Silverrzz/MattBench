@@ -29,13 +29,15 @@ import datetime
 
 from collections import defaultdict
 
-from django.db.models import BooleanField, ExpressionWrapper, F, Q
+from django.core.paginator import Paginator
+from django.db.models import Avg, BooleanField, ExpressionWrapper, F, Q
 from django.utils import timezone
 
 import OpenBench.views
 import OpenBench.stats
 from OpenBench.models import *
 from OpenBench.llr_history import workload_llr_history
+from OpenBench.formatting import format_nps
 
 def view_workload(request, workload, workload_type):
 
@@ -48,6 +50,14 @@ def view_workload(request, workload, workload_type):
     data = {
         'workload' : workload,
     }
+
+    speeds = Machine.objects.filter(workload=workload.pk, updated__gte=timezone.now() - datetime.timedelta(minutes=2)).filter(Q(info__disconnected=False) | Q(info__disconnected__isnull=True)).aggregate(
+        dev=Avg('dev_mnps', filter=Q(dev_mnps__gt=0)),
+        base=Avg('base_mnps', filter=Q(base_mnps__gt=0)),
+    )
+    data['average_nps'] = {side: format_nps(value * 1e6 if value is not None else None) for side, value in speeds.items()}
+    errors = LogEvent.objects.filter(test_id=workload.pk).exclude(machine_id=0).order_by('-id')
+    data['test_errors'] = Paginator(errors, 50).get_page(request.GET.get('error_page'))
 
     if workload.test_mode == 'SPRT':
         data['llr_history'] = workload_llr_history(workload)

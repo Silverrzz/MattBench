@@ -24,10 +24,10 @@ assert.equal(text(), 'Progress: 28.2% (Downloading)\nOverall training: 5.2%\nDow
 update('DOWNLOADING', {...initial, phase_progress: 40});
 assert.match(text(), /^Progress: 40.0% \(Downloading\)\nOverall training: 5.2%/);
 for (const [state, label] of Object.entries({DOWNLOADING: 'Downloading', CONVERTING: 'Converting', COMPILING: 'Compiling', SAVING: 'Uploading'})) {
-    update(state, {progress: 50, phase_progress: 0});
+    update(state, {progress: 50, phase_progress: 0, progress_known: 1});
     assert.equal(text(), `Progress: 0.0% (${label})\nOverall training: 50.0%`);
     for (const metrics of [{progress: 12.5}, {progress: 12.5, phase_progress: null}, {}]) {
-        update(state, metrics);
+        update(state, {...metrics, progress_known: 1});
         assert.equal(text(), `Progress: ${(metrics.progress || 0).toFixed(1)}% (${label})`);
     }
 }
@@ -37,4 +37,16 @@ for (const state of ['TRAINING', 'QUEUED', 'FAILED', 'CANCELLED', 'COMPLETED']) 
 }
 update('TRAINING', {progress: 50, phase_progress: 99, stage: 2, stage_count: 3});
 assert.equal(text(), 'Progress: 50.0% (Stage 2 of 3)');
+update('CONVERTING', {progress: 100, progress_known: 0, preparation_step: 'Analysing dataset'});
+assert.equal(text(), 'Progress: In progress (Analysing dataset)');
+update('CONVERTING', {progress: 50, phase_progress: 100, progress_known: 0, preparation_step: 'Publishing dataset'});
+assert.equal(text(), 'Progress: In progress (Publishing dataset)\nOverall training: 50.0%');
+update('CONVERTING', {progress: 25, progress_known: 1, preparation_step: 'Converting files'});
+assert.equal(text(), 'Progress: 25.0% (Converting files)');
+update('TRAINING', {progress: 50, progress_known: 0, preparation_step: 'Analysing dataset'});
+assert.equal(text(), 'Progress: 50.0%');
+update('CONVERTING', {progress: 100});
+assert.equal(text(), 'Progress: In progress (Converting)');
+update('CONVERTING', {progress: 50, phase_progress: 100});
+assert.equal(text(), 'Progress: In progress (Converting)\nOverall training: 50.0%');
 console.log('Training progress initial render and live-update regressions passed.');

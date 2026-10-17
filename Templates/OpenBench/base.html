@@ -18,6 +18,8 @@
         <script>document.documentElement.classList.add('js');</script>
         <script src="{% static 'theme.js' %}?{{ static_version }}" defer></script>
         <script src="{% static 'live.js' %}?{{ static_version }}" defer></script>
+        <link rel="stylesheet" href="{% static 'error_alerts.css' %}?{{ static_version }}">
+        <script src="{% static 'error_alerts.js' %}?{{ static_version }}" defer></script>
         <link rel="stylesheet" href="{% static 'responsive.css' %}?{{ static_version }}">
         {% block scripts %}{% endblock %}
     </head>

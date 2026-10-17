@@ -10,8 +10,8 @@
         {% if group.workers %}
         <div class="table-scroll" role="region" aria-label="{{ group.title }}; scroll horizontally for more columns" tabindex="0">
             <table class="index-tests hoverable workers-table" aria-label="{{ group.title }}">
-                <colgroup><col class="workers-name"><col class="workers-hardware"><col class="workers-capacity"><col class="workers-job"><col class="workers-status"></colgroup>
-                <thead><tr class="table-header"><th scope="col">Worker</th><th scope="col">Hardware</th><th scope="col">Capacity</th><th scope="col">Current job</th><th scope="col">Status</th></tr></thead>
+                <colgroup><col class="workers-name"><col class="workers-hardware"><col class="workers-capacity"><col class="workers-job"><col class="workers-nps"><col class="workers-nps"><col class="workers-status"></colgroup>
+                <thead><tr class="table-header"><th scope="col">Worker</th><th scope="col">Hardware</th><th scope="col">Capacity</th><th scope="col">Current job</th><th scope="col" class="workers-speed">Dev NPS</th><th scope="col" class="workers-speed">Base NPS</th><th scope="col">Status</th></tr></thead>
                 <tbody>
                 {% for worker in group.workers %}
                     <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">
@@ -19,6 +19,8 @@
                         <td class="test-author">{{ worker.hardware }}<div class="revision-meta">{{ worker.platform }}{% if worker.gpu_memory %} &middot; {{ worker.gpu_memory|floatformat:0 }} GB VRAM{% endif %}</div></td>
                         <td class="test-author">{{ worker.threads }} threads{% if worker.memory %}<div class="revision-meta">{{ worker.memory }} GB RAM</div>{% endif %}</td>
                         <td class="test-author">{% if worker.job %}{% if worker.job_url %}<a href="{{ worker.job_url }}">{{ worker.job }}</a>{% else %}{{ worker.job }}{% endif %}<div class="revision-meta">{{ worker.rate }}</div>{% else %}<div class="revision-meta">{{ worker.capabilities|join:' · ' }}</div>{% endif %}</td>
+                        <td class="workers-speed">{{ worker.dev_nps|default:"&mdash;" }}</td>
+                        <td class="workers-speed">{{ worker.base_nps|default:"&mdash;" }}</td>
                         <td class="test-author"><span class="worker-state" data-state="{{ worker.state|lower }}">{{ worker.state }}</span><div class="revision-meta">{{ worker.updated|timesince }} ago</div></td>
                     </tr>
                 {% endfor %}

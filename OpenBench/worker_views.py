@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -10,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
 from OpenBench.training_models import TRAINING_ACTIVE
 from OpenBench.config import OPENBENCH_CONFIG
+from OpenBench.formatting import format_nps
 from OpenBench.workloads.get_workload import machine_info_list
 
 
@@ -35,10 +37,16 @@ def training_telemetry(job):
 def worker_rows(user, identifier=None):
     now = timezone.now()
     cutoff = now - timedelta(minutes=2)
+    # Guard JSON comparisons so missing keys also work under exclude().
+    recent = Q(updated__gte=cutoff) | (Q(info__has_key='demo_online') & Q(info__demo_online=True))
     machines = Machine.objects.select_related('user').order_by('-pk')
     if identifier is not None:
         machines = machines.filter(pk=identifier) if str(identifier).isdigit() else machines.none()
-    machines = list(machines[:250])
+        machines = list(machines)
+    else:
+        connected = recent & (~Q(info__has_key='disconnected') | Q(info__disconnected=False) | Q(info__disconnected=None))
+        # Historical registrations must not displace connected workers.
+        machines = list(machines.filter(connected)) + list(machines.exclude(connected)[:250])
     capabilities = {worker.machine_id: worker for worker in TrainingWorker.objects.filter(machine__in=machines, enabled=True)}
     active_training = {run.worker_id: run for run in TrainingRun.objects.filter(worker__in=capabilities.values(), state__in=TRAINING_ACTIVE).only('id', 'name', 'worker_id', 'metrics')}
     jobs = {row.pk: row for row in Test.objects.filter(pk__in=[machine.workload for machine in machines]).select_related('dev')}
@@ -71,7 +79,9 @@ def worker_rows(user, identifier=None):
             'state': 'Disconnected' if info.get('disconnected') else 'Busy' if online and job and not job.finished else 'Available' if online else 'Offline',
             'job': job.dev.name if online and job and not job.finished else '',
             'job_url': '/%s/%s/' % (job.workload_type_str(), job.pk) if job else '',
-            'rate': '%s MNPS' % round(machine.mnps, 2) if machine.mnps else '',
+            'rate': '',
+            'dev_nps': format_nps(machine.dev_mnps * 1e6) if online and job and not job.finished else '',
+            'base_nps': format_nps(machine.base_mnps * 1e6) if online and job and not job.finished else '',
             'details': [('Operating system', info.get('os_name', '')), ('CPU', info.get('cpu_name', '')), ('Instruction set', info.get('isa_name', '')), ('Logical cores', info.get('logical_cores', '')), ('Python', info.get('python_ver', '')), ('Client', info.get('client_ver', ''))],
         })
         capability = capabilities.get(machine.pk)
@@ -83,7 +93,7 @@ def worker_rows(user, identifier=None):
             row['details'].append(('GPU', capability.info.get('gpu', '')))
             training_job = active_training.get(capability.pk)
             if training_job:
-                row.update(state='Busy' if online else 'Offline', activity='Training', job='Training', job_url='', rate='', current_workload='training:%s' % training_job.pk)
+                row.update(state='Busy' if online else 'Offline', activity='Training', job='Training', job_url='', rate='', dev_nps='', base_nps='', current_workload='training:%s' % training_job.pk)
             if training_job and (user.pk == machine.user_id or user.is_superuser):
                 row['telemetry'] = training_telemetry(training_job)
                 row.update(state='Busy' if online else 'Offline', job=training_job.name, job_url='/training/%s/' % training_job.pk, rate='%s M pos/s' % round(training_job.metrics.get('positions_per_second', 0) / 1000000, 2))
@@ -94,7 +104,11 @@ def worker_rows(user, identifier=None):
         gpu_workers = gpu_workers.none()
     elif not user.is_superuser:
         gpu_workers = gpu_workers.filter(owner=user)
-    gpu_workers = list(gpu_workers[:250])
+    if identifier is not None:
+        gpu_workers = list(gpu_workers)
+    else:
+        connected = Q(enabled=True) & recent
+        gpu_workers = list(gpu_workers.filter(connected)) + list(gpu_workers.exclude(connected)[:250])
     training = {run.worker_id: run for run in TrainingRun.objects.filter(worker__in=gpu_workers, state__in=TRAINING_ACTIVE).only('id', 'name', 'worker_id', 'metrics')}
     for worker in gpu_workers:
         info = worker.info

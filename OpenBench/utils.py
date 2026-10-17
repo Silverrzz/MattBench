@@ -433,6 +433,8 @@ def update_test(request, machine):
 
         # Consider only Crashes or Illegal moves as real errors
         test.error = bool(test.error or crashes or illegals)
+        if crashes or illegals:
+            test.errors_acknowledged = False
 
         if test.test_mode == 'SPRT':
 

@@ -119,14 +119,16 @@ class Connection:
 
 
 class StageConnection(Connection):
-    def __init__(self, connection, stage):
+    def __init__(self, connection, stage, source=None):
         self.server = connection.server
         self.headers = connection.headers
         self.stage = stage
+        self.source = source
 
     def url(self, path):
         url = super().url(path)
-        return url + ('&' if '?' in url else '?') + 'stage=%d' % self.stage
+        selector = str(self.stage) + ('.%d' % self.source if self.source is not None else '')
+        return url + ('&' if '?' in url else '?') + 'stage=' + selector
 
 
 class Reporter:
@@ -230,6 +232,8 @@ class Reporter:
         with self.lock:
             self.state = state
             self.metrics['progress'] = 100 if state == 'COMPLETED' else 0
+            self.metrics['progress_known'] = int(state != 'CONVERTING')
+            self.metrics['preparation_step'] = 'Preparing dataset' if state == 'CONVERTING' else ''
         self.write('\n%s\n' % state.capitalize())
         while True:
             self.check()
@@ -379,6 +383,7 @@ def download_dataset(connection, job, directory, reporter):
     from tqdm import tqdm
     downloads = directory / 'downloads'
     downloads.mkdir()
+    reporter.update(progress=0, progress_known=1, preparation_step='Downloading dataset')
     total = job['dataset']['size']
     files = job['dataset']['files']
     paths = [None] * len(files)
@@ -490,9 +495,18 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
     pending = {}
     outputs = {}
     completed_bytes = 0
+    completed = 0
     count = 0
+    archive_suffixes = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst')
+    # A streamed archive's member count is unknown until enumeration finishes.
+    total = None if any(path.name.lower().endswith(archive_suffixes) for path in paths) else len(paths)
     reporter.write('Preparing dataset with %d assigned CPU threads.\n' % workers)
-    reporter.update(preparation_threads=workers)
+    reporter.update(preparation_threads=workers, progress=0, progress_known=int(total is not None),
+                    preparation_step='Converting files')
+
+    def report_progress():
+        reporter.update(converted_files=len(outputs), converted_bytes=completed_bytes,
+                        progress=100 * completed / total if total else 0, progress_known=int(total is not None))
 
     def convert_file(source_path, name, expected_format, number, staged):
         reporter.check()
@@ -572,18 +586,17 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
         return target
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dataset-prep') as executor:
-        def drain(all_pending=False):
-            nonlocal completed_bytes
+        def drain():
+            nonlocal completed_bytes, completed
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            if all_pending:
-                done = set(pending)
             for future in done:
                 number = pending.pop(future)
                 target = future.result()
+                completed += 1
                 if target:
                     outputs[number] = target
                     completed_bytes += target.stat().st_size
-                reporter.update(converted_files=len(outputs), converted_bytes=completed_bytes)
+                report_progress()
 
         def submit(source_path, name, expected_format, staged=False):
             nonlocal count
@@ -598,7 +611,7 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
             for index, path in enumerate(paths):
                 expected_format = source_files[index].get('format')
                 name = path.name.lower()
-                if name.endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst')):
+                if name.endswith(archive_suffixes):
                     with ExitStack() as stack:
                         raw = stack.enter_context(path.open('rb'))
                         stream = decompressed(stack, raw, name)
@@ -618,7 +631,8 @@ def convert_dataset(paths, directory, pawnocchio, environment, reporter, source_
                     path.unlink()
                 else:
                     submit(path, name, expected_format)
-                reporter.update(progress=100 * (index + 1) / len(paths))
+            total = count
+            report_progress()
             while pending:
                 drain()
         except BaseException as error:
@@ -675,6 +689,59 @@ def save_outputs(connection, job, directory, reporter):
         reporter.update(progress=100 * (index + 1) / len(artifacts))
 
 
+def prepare_stage_datasets(connection, job, directory, reporter, pawnocchio, environment, cache_root, dataset_caches):
+    dataset = job['dataset']
+    resume_superbatch = job['snapshot'].get('resume', {}).get('superbatch', 0)
+    stage_data, stage_statistics, prepared_sources = [], [], {}
+    for index, group in enumerate(dataset.get('stages') or [dataset]):
+        paths_for_stage, statistics_for_stage = [], []
+        if group.get('end', float('inf')) <= resume_superbatch or group.get('start', 1) > (job.get('workload') or {}).get('end', float('inf')):
+            stage_data.append([])
+            stage_statistics.append({})
+            continue
+        for source_index, source in enumerate(group.get('sources') or [group]):
+            indices = source.get('file_indices', list(range(len(dataset['files']))))
+            key = tuple(indices)
+            if key in prepared_sources:
+                prepared, statistics = prepared_sources[key]
+            else:
+                reporter.update(progress=0, progress_known=0, preparation_step='Preparing dataset')
+                label = 'stage-%d' % index + ('-source-%d' % source_index if group.get('sources') else '')
+                source_directory = directory / label
+                source_directory.mkdir()
+                source_connection = StageConnection(connection, index, source_index if group.get('sources') else None) if dataset.get('stages') else connection
+                source_job = {**job, 'dataset': {**source, 'files': [dataset['files'][i] for i in indices]}}
+                plan = source_connection.request('POST', '%d/dataset/prepare/' % job['id'], json={}).json()
+                reporter.write('Dataset stage %d, source %d remaining steps: %s.\n' % (index + 1, source_index + 1, ', '.join(plan['steps']) or 'none'))
+                cache_key = training_cache.key({'source': plan['source_key'], 'settings': job['snapshot']['settings'], 'tools': [PAWNOCCHIO_REF, COMBINER_REF]})
+                cached = training_cache.take(cache_root / 'datasets', cache_key, source_directory) if job.get('workload') else None
+                if cached:
+                    if reporter.state == 'DOWNLOADING':
+                        reporter.stage('CONVERTING')
+                    prepared = [source_directory / item['path'] for item in cached['files']]
+                    statistics = cached['metadata'].get('statistics', {})
+                    reporter.write('Reusing verified dataset preparation for stage %d, source %d.\n' % (index + 1, source_index + 1))
+                else:
+                    paths = download_dataset(source_connection, source_job, source_directory, reporter)
+                    if reporter.state == 'DOWNLOADING':
+                        reporter.stage('CONVERTING')
+                    if 'convert' in plan['steps'] or 'extract' in plan['steps']:
+                        paths = convert_dataset(paths, source_directory, pawnocchio, environment, reporter, source_job['dataset']['files'])
+                    prepared = prepare_and_publish(source_connection, source_job, plan, paths, source_directory, pawnocchio, environment, reporter, command)
+                    statistics = source_job.get('dataset_statistics', {})
+                if not prepared:
+                    raise RuntimeError('Dataset stage %d, source %d has no prepared files.' % (index + 1, source_index + 1))
+                prepared_sources[key] = (prepared, statistics)
+                if job.get('workload'):
+                    dataset_caches.append((cache_key, source_directory, prepared, statistics))
+            paths_for_stage.extend(prepared)
+            statistics_for_stage.append(statistics)
+        stage_data.append(list(dict.fromkeys(paths_for_stage)))
+        stage_statistics.append({'sources': statistics_for_stage} if group.get('sources') else statistics_for_stage[0])
+    job['dataset_statistics'] = {'stages': stage_statistics, 'games': sum(item.get('games', 0) for _, item in prepared_sources.values())}
+    return stage_data, list(dict.fromkeys(path for paths in stage_data for path in paths))
+
+
 def execute(connection, job, root, pawnocchio):
     if job.get('workload'):
         connection = Connection(connection.server, connection.headers['X-Training-Worker'], connection.headers['Authorization'].removeprefix('Bearer '))
@@ -722,56 +789,7 @@ def execute(connection, job, root, pawnocchio):
             save_outputs(connection, job, directory, reporter)
             reporter.stage('COMPLETED')
             return False
-        stage_data = []
-        stage_statistics = []
-        prepared_stages = {}
-        data = []
-        for index, stage in enumerate(source_dataset.get('stages') or [source_dataset]):
-            if stage.get('end', float('inf')) <= resume_superbatch or stage.get('start', 1) > (job.get('workload') or {}).get('end', float('inf')):
-                stage_data.append([])
-                stage_statistics.append({})
-                continue
-            indices = stage.get('file_indices', list(range(len(source_dataset['files']))))
-            key = tuple(indices)
-            if key in prepared_stages:
-                prepared, statistics = prepared_stages[key]
-                stage_data.append(prepared)
-                stage_statistics.append(statistics)
-                continue
-            stage_directory = directory / ('stage-%d' % index)
-            stage_directory.mkdir()
-            stage_connection = StageConnection(connection, index) if source_dataset.get('stages') else connection
-            stage_job = {**job, 'dataset': {**stage, 'files': [source_dataset['files'][i] for i in indices]}}
-            plan = stage_connection.request('POST', '%d/dataset/prepare/' % job['id'], json={}).json()
-            reporter.write('Dataset stage %d remaining steps: %s.\n' % (index + 1, ', '.join(plan['steps']) or 'none'))
-            dataset_cache_key = training_cache.key({'source': plan['source_key'], 'settings': job['snapshot']['settings'], 'tools': [PAWNOCCHIO_REF, COMBINER_REF]})
-            cached = training_cache.take(cache_root / 'datasets', dataset_cache_key, stage_directory) if job.get('workload') else None
-            if cached:
-                if reporter.state == 'DOWNLOADING':
-                    reporter.stage('CONVERTING')
-                prepared = [stage_directory / item['path'] for item in cached['files']]
-                statistics = cached['metadata'].get('statistics', {})
-                prepared_stages[key] = (prepared, statistics)
-                stage_data.append(prepared)
-                stage_statistics.append(statistics)
-                data.extend(prepared)
-                dataset_caches.append((dataset_cache_key, stage_directory, prepared, statistics))
-                reporter.write('Reusing verified dataset preparation for stage %d.\n' % (index + 1))
-                continue
-            paths = download_dataset(stage_connection, stage_job, stage_directory, reporter)
-            if reporter.state == 'DOWNLOADING':
-                reporter.stage('CONVERTING')
-            if 'convert' in plan['steps'] or 'extract' in plan['steps']:
-                paths = convert_dataset(paths, stage_directory, pawnocchio, environment, reporter, stage_job['dataset']['files'])
-            prepared = prepare_and_publish(stage_connection, stage_job, plan, paths, stage_directory, pawnocchio, environment, reporter, command)
-            statistics = stage_job.get('dataset_statistics', {})
-            prepared_stages[key] = (prepared, statistics)
-            stage_data.append(prepared)
-            stage_statistics.append(statistics)
-            data.extend(prepared)
-            if job.get('workload'):
-                dataset_caches.append((dataset_cache_key, stage_directory, prepared, statistics))
-        job['dataset_statistics'] = {'stages': stage_statistics, 'games': sum(item.get('games', 0) for _, item in prepared_stages.values())}
+        stage_data, data = prepare_stage_datasets(connection, job, directory, reporter, pawnocchio, environment, cache_root, dataset_caches)
         reporter.stage('COMPILING')
         repository = directory / 'bullet'
         snapshot = job['snapshot']
@@ -1066,7 +1084,7 @@ def main(argv=None, worker_config=None, gpu_info=None):
     args.pawnocchio = dataset_tools['pawnocchio']
     import getpass
     username = args.username or registration.get('username') or input('MattBench username: ')
-    info = {'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
+    info = {'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments', 'multi-dataset-stages'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
     info['combiner_path'] = str(dataset_tools['combiner'])
     info['runtime']['dataset_tools'] = tool_provenance
     info['runtime']['gpu_driver'] = driver_version.strip()

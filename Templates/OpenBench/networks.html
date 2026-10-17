@@ -38,7 +38,7 @@
         <tbody>
 
         {% for network in networks %}
-            <tr>
+            <tr data-default="{{ network.default|yesno:'1,0' }}" data-engine="{{ network.engine }}" data-author="{{ network.author }}" data-name="{{ network.name }}" data-sha256="{{ network.sha256 }}">
                 {% if network.default %}
                     <td><span class="sr-only">Default network</span><i class="fas fa-star default-network" aria-hidden="true"></i></td>
                 {% elif network.was_default %}

@@ -95,7 +95,7 @@ $bucket_mapping
             let score = 1.0 / (1.0 + (-f32::from(pos.score) / EVAL_SCALE).exp());
 $targets
         });
-        let reader = ViriBinpackLoader::new_concat_multiple(&paths, $buffer_mb, THREADS, $filter_expression);
+        let reader = ViriBinpackLoader::$loader_method(&paths, $buffer_mb, THREADS, $filter_expression);
         let mut loss_sum = 0.0;
         train(
             &mut optimiser,

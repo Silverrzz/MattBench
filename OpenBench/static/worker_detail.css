@@ -1,0 +1,67 @@
+#live-worker.worker-control { max-width: 1180px; margin-inline: auto; gap: 20px; }
+.worker-control .workspace-panel { padding: 22px; }
+.worker-control .worker-jobs { margin-top: 0; }
+.worker-control .worker-device h2 { font-size: 15px; line-height: 1.5; }
+.worker-mode-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.worker-control details summary { cursor: pointer; color: var(--subtle); font-size: 12px; }
+.worker-hardware-details .workspace-facts { margin-top: 18px; }
+.worker-settings { position: relative; }
+.worker-settings h2 { margin: 0 0 22px; font-size: 15px; }
+.worker-settings-form { display: grid; gap: 22px; }
+.worker-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.worker-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.worker-field label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; }
+.worker-field code { color: var(--subtle); font-size: 10px; }
+#content .worker-field input, #content .worker-field select { width: 100%; min-width: 0; margin: 0; box-sizing: border-box; }
+.worker-options { margin: 0; padding: 18px 0 0; border: 0; border-top: 1px solid var(--line); min-width: 0; }
+.worker-options legend { padding: 0 10px 0 0; font-size: 12px; color: var(--subtle); }
+.worker-engine-list { margin-top: 16px; }
+.worker-engine-list .worker-mode-tags { margin-top: 12px; }
+.worker-save { display: flex; border-top: 1px solid var(--line); padding-top: 18px; }
+.worker-disconnect { position: absolute; right: 22px; bottom: 22px; margin: 0; }
+.worker-control .diagnostic-form { max-width: 780px; }
+.worker-control #troubleshooting { gap: 16px; }
+@media (max-width: 800px) {
+    .worker-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+    .worker-fields { grid-template-columns: minmax(0, 1fr); }
+    .worker-control .workspace-panel { padding: 16px; }
+    .worker-disconnect { position: static; margin-top: 12px; }
+}
+
+.diagnostic-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.diagnostic-form label { grid-column: 1 / -1; color: var(--subtle); }
+#content .diagnostic-form select { min-width: 0; margin: 0; }
+.diagnostic-form .button { align-self: stretch; padding-inline: 24px; }
+.panel-heading .diagnostic-status { display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--accent); font-size: 11px; }
+.diagnostic-status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.panel-heading .diagnostic-status[data-eligible="true"] { color: var(--green); }
+#content .diagnostic-blockers { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.diagnostic-blockers li { display: flex; align-items: baseline; gap: 12px; padding: 13px 15px; background: var(--surface-raised); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.diagnostic-blockers li + li { border-top: 1px solid var(--line); }
+.diagnostic-blockers i { color: var(--accent); flex-shrink: 0; font-size: 11px; }
+.diagnostic-clear { display: flex; align-items: center; gap: 10px; color: var(--green); font-size: 13px; }
+
+.worker-overview { display: grid; gap: 20px; }
+.worker-overview-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.worker-overview .worker-device { min-width: 0; gap: 14px; }
+.worker-overview .worker-device h2 { margin: 0 0 6px; overflow-wrap: anywhere; }
+.worker-overview .worker-device > i { font-size: 20px; padding: 14px; }
+.worker-overview-state { display: grid; gap: 6px; justify-items: end; flex-shrink: 0; }
+.worker-overview-state > span:last-child { font-size: 11px; color: var(--subtle); }
+.worker-overview-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 18px; margin: 0; padding: 18px 0; border-block: 1px solid var(--line); }
+.worker-overview-stats dt, .worker-overview-label { display: block; color: var(--subtle); font-size: 11px; margin-bottom: 7px; }
+.worker-overview-stats dd { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.worker-overview-job { display: flex; gap: 20px; align-items: center; justify-content: space-between; }
+.worker-overview-job > div { min-width: 0; }
+.worker-current-job { font-size: 14px; overflow-wrap: anywhere; }
+.worker-overview-job form { margin: 0; flex-shrink: 0; }
+.worker-overview .worker-hardware-details { border-top: 1px solid var(--line); padding-top: 14px; }
+.worker-overview .worker-hardware-details .worker-jobs { margin-top: 16px; }
+.worker-overview .workspace-facts { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+@media (max-width: 520px) {
+    .worker-overview-heading { align-items: flex-start; flex-wrap: wrap; gap: 14px; }
+    .worker-overview-state { display: flex; align-items: center; gap: 12px; }
+    .worker-overview-job { align-items: flex-start; flex-wrap: wrap; }
+}

@@ -4,6 +4,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from OpenBench.bullet import DEFAULT_BULLET_COMMIT
+
 
 TRAINING_ACTIVE = ('DOWNLOADING', 'CONVERTING', 'COMPILING', 'TRAINING', 'SAVING')
 TRAINING_TERMINAL = ('COMPLETED', 'FAILED', 'CANCELLED')
@@ -14,6 +16,14 @@ TRAINING_STATES = (
     ('TRAINING', 'Training'), ('SAVING', 'Uploading'),
     ('COMPLETED', 'Completed'), ('FAILED', 'Failed'), ('CANCELLED', 'Cancelled'),
 )
+
+
+class TrainingConfiguration(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    bullet_commit = models.CharField(max_length=40, default=DEFAULT_BULLET_COMMIT)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(id=1), name='training_configuration_singleton')]
 
 
 class HuggingFaceCredential(models.Model):

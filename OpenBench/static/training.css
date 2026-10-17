@@ -206,6 +206,11 @@ body.editor-expanded { overflow: hidden; }
 .dataset-picker-option:hover, .dataset-picker-option.is-active { background: var(--surface-raised); outline: 1px solid var(--line-strong); outline-offset: -1px; }
 .dataset-picker-option[aria-selected="true"]::after { content: '\2713'; position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--accent); }
 .dataset-picker-empty { padding: 18px 12px; color: var(--muted); font-size: 12px; }
+.dataset-picker-done { margin-top: 8px; }
+.dataset-picker-selections { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.dataset-picker-selections[hidden] { display: none; }
+.dataset-picker-selections li { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 3px; }
+.dataset-picker-selections .button { flex: 0 0 auto; }
 @media (max-width: 600px) {
     .dataset-picker-card { grid-template-columns: minmax(0, 1fr); }
     .dataset-picker-revision { grid-column: 1; grid-row: auto; justify-self: start; max-width: 100%; }

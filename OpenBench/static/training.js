@@ -168,6 +168,7 @@
         try { overrides = JSON.parse(overridesInput.value || '[]'); } catch { overrides = []; }
         if (!Array.isArray(overrides)) overrides = [];
         overrides = overrides.filter(value => value && Number.isInteger(value.stage));
+        overrides = overrides.map(value => ({stage: value.stage, datasets: Array.isArray(value.datasets) ? value.datasets : value.dataset ? [value.dataset] : []}));
         let previousSchedule = schedule.value;
         const stages = () => {
             const selected = options.find(option => option.id === schedule.value);
@@ -180,13 +181,14 @@
         });
         function picker(root, selected, label, onChange) {
             root.classList.add('dataset-picker');
+            const selectedIds = new Set(selected.filter(id => datasets.some(dataset => dataset.id === id)));
             const input = document.createElement('select');
+            input.multiple = true;
             input.className = 'sr-only';
             input.tabIndex = -1;
             input.setAttribute('aria-hidden', 'true');
             input.required = true;
-            input.append(new Option('Choose a dataset', ''), ...datasets.map(dataset => new Option(dataset.name, dataset.id)));
-            input.value = selected;
+            input.append(...datasets.map(dataset => new Option(dataset.name, dataset.id)));
             const trigger = document.createElement('button');
             trigger.type = 'button';
             trigger.className = 'dataset-picker-trigger';
@@ -211,6 +213,7 @@
             list.id = 'dataset-choices-' + (++pickerNumber);
             list.className = 'dataset-picker-list';
             list.setAttribute('role', 'listbox');
+            list.setAttribute('aria-multiselectable', 'true');
             list.setAttribute('aria-label', label);
             panel.id = list.id + '-panel';
             trigger.setAttribute('aria-controls', panel.id);
@@ -245,7 +248,15 @@
             const empty = document.createElement('div');
             empty.className = 'dataset-picker-empty';
             empty.setAttribute('role', 'status');
-            panel.append(search, list, empty);
+            const done = document.createElement('button');
+            done.type = 'button';
+            done.className = 'button dataset-picker-done';
+            done.textContent = 'Done';
+            done.addEventListener('click', () => { close(); trigger.focus(); });
+            const selections = document.createElement('ul');
+            selections.className = 'dataset-picker-selections';
+            selections.setAttribute('aria-label', 'Selected datasets');
+            panel.append(search, list, empty, done);
             function filter() {
                 const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
                 visible = [];
@@ -282,23 +293,38 @@
                 search.value = query;
                 search.focus();
                 filter();
-                const selectedIndex = datasets.findIndex(dataset => dataset.id === input.value);
+                const selectedIndex = datasets.findIndex(dataset => selectedIds.has(dataset.id));
                 if (!query && visible.includes(selectedIndex)) activate(selectedIndex);
             }
             function sync() {
-                const match = datasets.find(dataset => dataset.id === input.value);
-                trigger.replaceChildren(match ? card(match) : document.createTextNode('Choose a dataset'));
-                trigger.classList.toggle('is-placeholder', !match);
+                const matches = [...selectedIds].map(id => datasets.find(dataset => dataset.id === id));
+                for (const option of input.options) option.selected = selectedIds.has(option.value);
+                trigger.replaceChildren(matches.length === 1 ? card(matches[0]) : document.createTextNode(matches.length ? matches.length + ' datasets selected' : 'Choose datasets'));
+                trigger.classList.toggle('is-placeholder', !matches.length);
                 trigger.removeAttribute('aria-invalid');
-                items.forEach((item, index) => item.setAttribute('aria-selected', String(datasets[index].id === input.value)));
-                onChange(match?.id || '');
+                items.forEach((item, index) => item.setAttribute('aria-selected', String(selectedIds.has(datasets[index].id))));
+                selections.replaceChildren();
+                selections.hidden = matches.length < 2;
+                for (const dataset of matches) {
+                    const row = document.createElement('li');
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'button';
+                    remove.textContent = '×';
+                    remove.setAttribute('aria-label', 'Remove ' + dataset.name);
+                    remove.addEventListener('click', () => { selectedIds.delete(dataset.id); sync(); trigger.focus(); });
+                    row.append(card(dataset), remove);
+                    selections.append(row);
+                }
+                onChange([...selectedIds]);
             }
             function choose(index) {
                 if (!datasets[index]) return;
-                input.value = datasets[index].id;
+                const id = datasets[index].id;
+                if (selectedIds.has(id)) selectedIds.delete(id);
+                else selectedIds.add(id);
                 sync();
-                close();
-                trigger.focus();
+                search.focus();
             }
             trigger.addEventListener('click', () => panel.hidden ? open() : close());
             trigger.addEventListener('keydown', event => {
@@ -327,19 +353,23 @@
                 trigger.setAttribute('aria-invalid', 'true');
                 if (!form.querySelector('.dataset-picker-trigger[aria-invalid="true"]:focus')) trigger.focus();
             });
-            input.addEventListener('change', sync);
-            root.append(input, trigger, panel);
+            input.addEventListener('change', () => {
+                selectedIds.clear();
+                for (const option of input.selectedOptions) selectedIds.add(option.value);
+                sync();
+            });
+            root.append(input, trigger, panel, selections);
             sync();
         }
         function persist() {
             overridesInput.value = JSON.stringify(overrides);
-            datasetInput.value = overrides.find(value => value.stage === 0)?.dataset || '';
+            datasetInput.value = overrides.find(value => value.stage === 0)?.datasets[0] || '';
         }
         function renderOverrides() {
             closePicker?.();
             container.replaceChildren();
             const ranges = stages();
-            overrides = ranges.map((_, index) => overrides.find(value => value.stage === index) || {stage: index, dataset: initialDataset});
+            overrides = ranges.map((_, index) => overrides.find(value => value.stage === index) || {stage: index, datasets: initialDataset ? [initialDataset] : []});
             if (!ranges.length) {
                 const empty = document.createElement('p');
                 empty.className = 'field-note';
@@ -361,19 +391,26 @@
                 bounds.textContent = range.start === null ? 'Entire training run' : (range.end - range.start + 1) + ' SB · SB ' + range.start + '–' + range.end;
                 stage.append(title, bounds);
                 const root = document.createElement('div');
-                picker(root, override.dataset, 'Dataset for stage ' + (index + 1), value => { override.dataset = value; persist(); });
+                picker(root, override.datasets, 'Datasets for stage ' + (index + 1), value => { override.datasets = value; persist(); });
                 row.append(stage, root);
                 container.append(row);
             });
             persist();
         }
         const workloadSize = document.getElementById('train-workload_size');
-        let preferredWorkloadSize = workloadSize.value || '50';
+        const workloadHelp = document.getElementById('training-workload-help');
+        let preferredWorkloadSize = workloadSize.value || '0';
         workloadSize.addEventListener('input', () => { preferredWorkloadSize = workloadSize.value; });
         function scheduleChanged() {
-            const compatible = options.find(option => option.id === schedule.value)?.workloads;
+            const selectedSchedule = options.find(option => option.id === schedule.value);
+            const compatible = selectedSchedule?.workloads;
             workloadSize.readOnly = !compatible;
             workloadSize.value = compatible ? preferredWorkloadSize : '0';
+            if (workloadHelp) workloadHelp.textContent = !selectedSchedule
+                ? 'Select a schedule to configure workload size.'
+                : compatible
+                    ? 'Default: uninterrupted (0). Set a positive SB count to split training into workloads.'
+                    : 'This schedule requires uninterrupted training (0). Save a copy through the schedule builder to enable workloads.';
             drafts.set(previousSchedule, overrides);
             overrides = drafts.get(schedule.value) || [];
             previousSchedule = schedule.value;
@@ -408,7 +445,7 @@
                 engine.value = selected.engine;
                 updateSchedules();
                 if (Array.from(schedule.options).some(option => option.value === selected.schedule)) schedule.value = selected.schedule;
-                overrides = selected.datasets.map((dataset, stage) => ({dataset, stage}));
+                overrides = selected.datasets.map((datasets, stage) => ({datasets: Array.isArray(datasets) ? datasets : datasets ? [datasets] : [], stage}));
                 drafts.set(schedule.value, overrides);
                 previousSchedule = schedule.value;
                 document.getElementById('train-name').value = `${selected.name.slice(0, 45)}-sb${selected.superbatch}`;
@@ -596,12 +633,16 @@
     };
     function update(data) {
         if (data.state) detail.dataset.runState = data.state;
-        const phase = {DOWNLOADING: 'Downloading', CONVERTING: 'Converting', COMPILING: 'Compiling', SAVING: 'Uploading'}[detail.dataset.runState];
+        let phase = {DOWNLOADING: 'Downloading', CONVERTING: 'Converting', COMPILING: 'Compiling', SAVING: 'Uploading'}[detail.dataset.runState];
+        if (detail.dataset.runState === 'CONVERTING' && data.metrics.preparation_step) phase = data.metrics.preparation_step;
         const overall = Number(data.metrics.progress || 0);
         const hasPhaseProgress = Boolean(phase) && data.metrics.phase_progress != null;
         const progress = detail.dataset.runState === 'COMPLETED' ? 100 : hasPhaseProgress ? Number(data.metrics.phase_progress) : overall;
         const stage = phase ? ` (${phase})` : detail.dataset.runState === 'TRAINING' && data.metrics.stage_count ? ` (Stage ${data.metrics.stage} of ${data.metrics.stage_count})` : '';
-        const lines = [`Progress: ${progress.toFixed(1)}%${stage}`];
+        // Older workers count queued input paths rather than finished conversions.
+        const unknown = Boolean(phase) && (data.metrics.progress_known === 0 ||
+            detail.dataset.runState === 'CONVERTING' && data.metrics.progress_known == null);
+        const lines = [`Progress: ${unknown ? 'In progress' : progress.toFixed(1) + '%'}${stage}`];
         if (hasPhaseProgress) lines.push(`Overall training: ${overall.toFixed(1)}%`);
         for (const [key, [label, unit]] of Object.entries(labels)) {
             const value = data.metrics[key];

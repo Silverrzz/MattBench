@@ -28,7 +28,7 @@ def training_reasons(capability, preferences, run):
     if config.get('execution_image') and config['execution_image'] != info.get('execution_image'):
         reasons.append('The worker’s execution image does not match the schedule’s required image.')
     required = required_disk_bytes(run.dataset, config) / 1024 ** 3 + config.get('disk_reserve_gb', 10)
-    reasons.extend(worker_requirement_errors(info, config, required))
+    reasons.extend(worker_requirement_errors(info, config, required, dataset=run.dataset))
     return reasons
 
 

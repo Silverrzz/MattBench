@@ -7,7 +7,7 @@
                 <tbody>
                     {% if groups|length > 1 or group.priority != 0 %}<tr class="table-small-header"><th colspan="6" scope="rowgroup">Priority {{ group.priority }}</th></tr>{% endif %}
                     {% for test in group.tests %}
-                        <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                        <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}{% if test.pulse_errors %} test-error-pulse{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
                         {% include "OpenBench/Blocks/testnotes.html" with columns=6 %}
                     {% endfor %}
                 </tbody>
@@ -15,7 +15,7 @@
         {% else %}
             <tbody>
                 {% for test in tests %}
-                    <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
+                    <tr class="{% if forloop.counter|divisibleby:2 %}test-row-shaded{% endif %}{% if test.pulse_errors %} test-error-pulse{% endif %}">{% include "OpenBench/Blocks/testsummary.html" %}</tr>
                     {% include "OpenBench/Blocks/testnotes.html" with columns=6 %}
                 {% endfor %}
             </tbody>

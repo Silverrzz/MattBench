@@ -18,8 +18,9 @@ from OpenBench.models import DatasetUpload, EngineConfig, HuggingFaceCredential,
 from OpenBench.models import Test, TrainingArtifact, TrainingRun, TrainingSchedule, TrainingWorker
 from OpenBench.models import LifecycleEvent, TrainingDataset, TrainingCheckpoint
 from OpenBench.lifecycle import record_event
-from OpenBench.training import DEFAULT_SETTINGS, hf_token, relative_path, repo_id, save_credential, validate_schedule
+from OpenBench.training import DEFAULT_SETTINGS, default_settings, hf_token, relative_path, repo_id, save_credential, validate_schedule
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
+from OpenBench.training_sources import dataset_revisions, registry_selections, stage_sources
 
 
 def enabled(user):
@@ -133,7 +134,7 @@ def schedules(request, schedule_id=None, create=False):
         'engine': str(selected.engine_id) if selected and selected.engine_id else request.GET.get('engine', ''),
         'scope': selected.scope if selected else 'personal',
         'files': selected.files if selected else {'examples/mattbench.rs': ''},
-        'settings': {**DEFAULT_SETTINGS, **selected.settings} if selected else DEFAULT_SETTINGS,
+        'settings': {**DEFAULT_SETTINGS, **selected.settings} if selected else default_settings(),
         'editable': not selected or selected.owner_id == request.user.pk or request.user.is_superuser,
     }
     if request.GET.get('copy') and selected:
@@ -149,7 +150,7 @@ from OpenBench.schedule_builder import schedule_dataset_stages, builder_state
 
 class TrainingForm(forms.Form):
     priority = forms.IntegerField(min_value=-2147483648, max_value=2147483647, initial=0, required=False)
-    workload_size = forms.IntegerField(label='Workload size (SB; 0 is uninterrupted)', min_value=0, max_value=1000000, initial=50, required=False)
+    workload_size = forms.IntegerField(label='Workload size (SB; 0 is uninterrupted)', min_value=0, max_value=1000000, initial=0, required=False)
     checkpoint = forms.ModelChoiceField(label='Starting point', queryset=TrainingCheckpoint.objects.none(), required=False, empty_label='Start from scratch')
     wdl = forms.FloatField(label='WDL for remaining training', min_value=0, max_value=1, required=False, widget=forms.NumberInput(attrs={'step': '0.01', 'placeholder': 'Use schedule values'}))
     skip_broken_games = forms.BooleanField(label='Skip invalid games and report discarded data', initial=True, required=False)
@@ -173,6 +174,7 @@ class TrainingForm(forms.Form):
             field.widget.attrs.update({'id': 'train-' + name})
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
         self.fields['name'].widget.attrs['placeholder'] = 'Network name'
+        self.fields['workload_size'].widget.attrs['aria-describedby'] = 'training-workload-help'
 
     def clean_environment(self):
         environment = {}
@@ -205,15 +207,24 @@ class TrainingForm(forms.Form):
                 if not isinstance(override, dict) or type(override.get('stage')) is not int or not 0 <= override['stage'] < stage_count or override['stage'] in selected:
                     self.add_error('stage_datasets', 'Choose each stage once.')
                     break
-                dataset = available.get(str(override.get('dataset', '')))
-                if not dataset:
+                identifiers = override.get('datasets', [override.get('dataset', '')])
+                if not isinstance(identifiers, list) or not identifiers or any(not isinstance(identifier, str) or identifier not in available for identifier in identifiers):
                     self.add_error('stage_datasets', 'Choose an available registered dataset for each stage.')
                     break
-                selected[override['stage']] = dataset
+                if len(set(identifiers)) != len(identifiers):
+                    self.add_error('stage_datasets', 'Choose each dataset once per stage.')
+                    break
+                selected[override['stage']] = [available[identifier] for identifier in identifiers]
         if schedule and len(selected) != stage_count:
             self.add_error('stage_datasets', 'Choose a dataset for every stage.')
-        data['dataset'] = selected.get(0)
-        data['dataset_stages'] = [{**selected[index].snapshot(), **bounds} for index, bounds in enumerate(ranges)] if len(selected) == stage_count else []
+        data['dataset'] = selected[0][0] if selected.get(0) else None
+        data['dataset_stages'] = []
+        if stage_count and len(selected) == stage_count:
+            for index, bounds in enumerate(ranges or [{}]):
+                sources = [dataset.snapshot() for dataset in selected[index]]
+                data['dataset_stages'].append({**(sources[0] if len(sources) == 1 else {'sources': sources}), **bounds})
+            if not ranges and len(selected[0]) == 1:
+                data['dataset_stages'] = []
         config = {**DEFAULT_SETTINGS, **(schedule.settings if schedule else {})}
         if data.get('checkpoint_retention') == 'all':
             config['checkpoint_keep_last'] = 0
@@ -244,10 +255,10 @@ class TrainingForm(forms.Form):
                         if stage['end'] > checkpoint.superbatch:
                             stage.update(kind='constant', initial=data['wdl'], final=data['wdl'])
             if current:
-                _, files, _ = generate_schedule(spec)
+                _, files, _ = generate_schedule(spec, config['bullet_ref'])
             data['priority'] = data.get('priority') or 0
             if data.get('workload_size') is None:
-                data['workload_size'] = 50 if current else 0
+                data['workload_size'] = 0
             if data.get('workload_size') and not current:
                 self.add_error('workload_size', 'This custom schedule requires uninterrupted training (0). Regenerate it with the builder to enable workloads.')
             if checkpoint and data.get('engine'):
@@ -272,9 +283,9 @@ def new_training(request):
             return redirect(request, '/training/new/', error='Choose a saved checkpoint.')
         selected_checkpoint = get_object_or_404(TrainingCheckpoint.objects.select_related('run').exclude(run__snapshot__has_key='demo'), pk=request.GET['checkpoint'], run__owner=request.user, run__snapshot__settings__resume_supported=True)
         source = selected_checkpoint.run
-        source_datasets = source.dataset.get('stages') or [source.dataset]
+        source_datasets = registry_selections(source.dataset)
         initial.update(checkpoint=selected_checkpoint.pk, engine=source.engine_id, schedule=source.schedule_id, name=('%s-sb%d' % (source.name[:45], selected_checkpoint.superbatch)),
-                       dataset=source_datasets[0].get('registry_id', ''), stage_datasets=[{'stage': index, 'dataset': stage.get('registry_id', '')} for index, stage in enumerate(source_datasets)],
+                       dataset=source_datasets[0][0], stage_datasets=[{'stage': index, 'datasets': datasets} for index, datasets in enumerate(source_datasets)],
                        environment='\n'.join('%s=%s' % pair for pair in source.snapshot.get('environment', {}).items()))
     form = TrainingForm(request.user, request.POST if request.method == 'POST' else None, initial=initial)
     if request.method == 'POST' and form.is_valid():
@@ -302,7 +313,7 @@ def new_training(request):
                     owner=request.user, engine=data['engine'], name=data['name'], schedule=schedule,
                     snapshot=snapshot, resume_from=checkpoint, priority=data['priority'], workload_size=data['workload_size'],
                     completed_superbatches=checkpoint.superbatch if checkpoint else 0,
-                    dataset=({'repo': data['dataset_stages'][0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
+                    dataset=({'repo': stage_sources(data['dataset_stages'][0])[0]['repo'], 'stages': data['dataset_stages']} if data['dataset_stages'] else data['dataset'].snapshot()),
                 )
             record_event('training.created', run, request.user.pk, {'engine': run.engine.name, 'name': run.name, 'checkpoint_id': checkpoint.pk if checkpoint else None}, actor_id=request.user.pk)
             if checkpoint:
@@ -313,7 +324,7 @@ def new_training(request):
     options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'scope': row.scope_label, 'stages': schedule_dataset_stages(row), 'workloads': builder_state(row)[1]} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
     dataset_options = [{'id': str(row.pk), 'name': row.name, 'repo': row.repo, 'revision': row.revision, 'owner': row.owner.username, 'is_owner': row.owner_id == request.user.pk} for row in form.fields['dataset'].queryset.select_related('owner')]
     dataset_options.sort(key=lambda row: (not row['is_owner'], row['name'].casefold(), row['owner'].casefold(), row['id']))
-    checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': [stage.get('registry_id', '') for stage in (row.run.dataset.get('stages') or [row.run.dataset])]} for row in form.fields['checkpoint'].queryset]
+    checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': registry_selections(row.run.dataset)} for row in form.fields['checkpoint'].queryset]
     return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'checkpoint_options': checkpoint_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists()})
 
 
@@ -390,11 +401,14 @@ def training_detail(request, pk):
             final = run.state == 'COMPLETED' and item.output_superbatch == run.metrics.get('end_superbatch', run.metrics.get('superbatch'))
             item.output_label = '%s · SB %d' % ('Final network' if final else 'Network', item.output_superbatch)
     output_artifacts.sort(key=lambda item: (item.kind != 'network', item.kind != 'checkpoint', -item.output_superbatch, item.name))
+    from OpenBench.training_datasets import effective_dataset
+    dataset = effective_dataset(run) if 'files' in run.dataset else run.dataset
     return render(request, 'training_detail.html', {
         'page_title': run.name, 'training_tab': 'runs', 'run': run, 'can_manage': manage and not run.snapshot.get('demo'),
         'can_register': manage and not run.snapshot.get('demo'),
         'latest_checkpoint': run.checkpoints.first(),
         'output_artifacts': output_artifacts,
+        'dataset_revisions': dataset_revisions(dataset),
     })
 
 

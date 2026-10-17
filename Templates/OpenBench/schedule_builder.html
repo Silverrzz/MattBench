@@ -3,6 +3,7 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'schedule_builder.css' %}?{{ static_version }}"><script src="{% static 'builder_values.js' %}?{{ static_version }}" defer></script><script src="{% static 'schedule_builder.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block content %}
 {% include 'OpenBench/Blocks/training_nav.html' %}
+<p>Bullet revision: <a href="https://github.com/jw1912/bullet/commit/{{ bullet_commit }}">{{ bullet_commit|slice:':12' }}</a>{% if user.is_superuser %} · <a href="/manage/training/">Manage default revision</a>{% endif %}</p>
 <form class="form schedule-builder" id="schedule-builder" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">
     {% csrf_token %}
     {% if builder_data.notice %}<p class="builder-notice">{{ builder_data.notice }}</p>{% endif %}
@@ -219,6 +220,7 @@
                         <div class="field"><label for="builder-backend">GPU backend</label><select id="builder-backend" name="backend"><option value="cuda">CUDA</option><option value="rocm">ROCm</option></select></div>
                         <div class="field"><label for="builder-threads">Loader threads</label><input id="builder-threads" name="threads" type="number" min="1" max="255" required></div>
                         <div class="field"><label for="builder-buffer">Read buffer (MB)</label><input id="builder-buffer" name="buffer_mb" type="number" min="16" max="65536" required></div>
+                        <label class="choice"><input type="checkbox" name="loader_interleave">Interleave source files while training</label>
                         <div class="field"><label for="builder-eval-scale">Evaluation scale</label><input id="builder-eval-scale" name="eval_scale" type="number" min="1" max="100000" step="any" required></div>
                         <div class="field"><label for="builder-seed">Random seed</label><input id="builder-seed" name="seed" type="number" min="0" max="9007199254740991" required></div>
                     </div></details>

@@ -42,6 +42,7 @@ def upload_prepared_files(connection, job, paths, descriptors, reporter):
     sent = [0] * len(paths)
     completed = set()
     total = sum(file['size'] for file in descriptors)
+    reporter.update(progress=0, progress_known=1, preparation_step='Uploading dataset')
 
     def check():
         reporter.check()
@@ -53,9 +54,10 @@ def upload_prepared_files(connection, job, paths, descriptors, reporter):
         with lock:
             sent[index] = min(descriptors[index]['size'], sent[index] + amount)
             uploaded = sum(sent)
+            confirmed = sum(descriptors[index]['size'] for index in completed)
             reporter.update(current_file='Uploading prepared dataset: %d/%d files confirmed' % (len(completed), len(paths)),
                             uploaded_bytes=uploaded, upload_total_bytes=total, uploaded_files=len(completed),
-                            progress=100 * uploaded / max(1, total))
+                            progress=100 * confirmed / max(1, total))
 
     def upload(index):
         descriptor = descriptors[index]
@@ -288,15 +290,20 @@ def order_games(paths, destination, config, reporter, shuffle, combiner, environ
 
 
 def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, environment, reporter, command):
+    # These operations do not have a useful denominator. Do not retain the
+    # completed conversion percentage while preparing or publishing its output.
+    reporter.update(progress=0, progress_known=0, preparation_step='Preparing dataset')
     config = job['snapshot']['settings']
     steps = plan['steps']
     statistics = dict(plan.get('statistics', {}))
     statistics['source_bytes'] = job['dataset']['size']
     selected = paths
     if any(step in steps for step in ('convert', 'extract')) and not any(step in steps for step in ('shuffle', 'interleave')):
+        reporter.update(preparation_step='Sharding dataset')
         selected = converted_shards(paths, directory / 'converted', reporter, config.get('dataset_shard_mb', 512) * 1024 ** 2)
     if 'shuffle' in steps or 'interleave' in steps:
-        reporter.update(current_file='Preparing Viriformat game order')
+        reporter.update(current_file='Preparing Viriformat game order',
+                        preparation_step='Shuffling and interleaving' if 'shuffle' in steps else 'Interleaving dataset')
         selected, games = order_games(selected, directory / 'ordered', config, reporter, 'shuffle' in steps, job['worker_info']['combiner_path'], environment, command)
         statistics['interleave_tool'] = job['worker_info']['runtime']['dataset_tools']['combiner']
         statistics.update(games=games, shuffle_seed=config.get('shuffle_seed', 42), interleave_algorithm='pawnocchio-viriformat-combiner-v1', interleave_fan_in=config.get('interleave_fan_in', 32), dataset_shard_mb=config.get('dataset_shard_mb', 512))
@@ -304,6 +311,7 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
             statistics.update(shuffle_algorithm='viriformat32-chunk-shuffle-pawnocchio-interleave-v3', shuffle_memory_mb=config.get('shuffle_memory_mb', 256))
     statistics.update(converted_bytes=sum(path.stat().st_size for path in selected), converted_files=len(selected))
     if 'analyse' in steps:
+        reporter.update(preparation_step='Analysing dataset')
         statistics.pop('analysis_kind', None)
         analysis = directory / 'analysis'
         analysis.mkdir()
@@ -330,6 +338,7 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
     shuffled = 'shuffle' in steps or all(file.get('shuffled', False) for file in job['dataset']['files'])
     interleaved = 'shuffle' in steps or 'interleave' in steps or all(file.get('interleaved', False) for file in job['dataset']['files'])
     if changed:
+        reporter.update(preparation_step='Hashing dataset')
         descriptors = [{'path': plan['prefix'] + ('%05d.vf' % index), 'size': path.stat().st_size, 'sha256': file_digest(path, reporter), 'format': 'vf', 'shuffled': shuffled, 'interleaved': interleaved} for index, path in enumerate(selected)]
         (directory / 'prepared-upload.json').write_text(json.dumps({'files': descriptors, 'statistics': statistics,
             'paths': [path.relative_to(directory).as_posix() for path in selected]}, indent=2))
@@ -337,6 +346,7 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
     else:
         descriptors = [{**{key: file[key] for key in ('path', 'size', 'sha256', 'format', 'shuffled')}, 'interleaved': file.get('interleaved', False)} for file in job['dataset']['files']]
     payload = {'files': descriptors, 'statistics': statistics}
+    reporter.update(progress=0, progress_known=0, preparation_step='Publishing dataset')
     for attempt in range(5):
         reporter.check()
         try:
