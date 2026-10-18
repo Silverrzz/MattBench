@@ -130,5 +130,18 @@ def apply_parameters(options, asset):
     values = parameter_values(asset['values'])
     remaining = options
     for key in values:
-        remaining = re.sub(r'(?<!\S)' + re.escape(key) + r'=[^\s]*(?:\s+|$)', '', remaining)
+        remaining = re.sub(r'(?<!\S)' + re.escape(key) + r'''=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$)''', '', remaining, flags=re.IGNORECASE)
     return ' '.join([remaining.strip(), *('%s=%s' % (key, value) for key, value in values.items())]).strip()
+
+
+def metric_values(value, depth=0):
+    if not isinstance(value, dict) or depth > 8 or len(value) > 256:
+        raise ValidationError('Supply a metric object with at most eight levels.')
+    for key, item in value.items():
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,127}', key):
+            raise ValidationError('Use simple metric names.')
+        if isinstance(item, dict):
+            metric_values(item, depth + 1)
+        elif type(item) not in (int, float) or not math.isfinite(item):
+            raise ValidationError('Metrics require finite numeric values.')
+    return value

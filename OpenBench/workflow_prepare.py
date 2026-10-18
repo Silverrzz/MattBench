@@ -26,6 +26,8 @@ def prepare(node, definition, user):
         else:
             from OpenBench.workflow_workloads import prepare as workload
             config['workload'] = workload(node, engine, profile, user)
+        if kind == 'datagen' and config['workload']['upload_pgns'] == 'FALSE':
+            raise ValidationError('Enable PGN uploads for a workflow datagen node to produce its dataset output.')
         if kind == 'datagen' and 'parameters' not in config:
             games = config.get('games', 10000000)
             if type(games) is not int or games < 2 or games > 10000000000 or games % 2:

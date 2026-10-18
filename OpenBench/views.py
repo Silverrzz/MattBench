@@ -851,6 +851,16 @@ def client_submit_nps(request, machine):
     # Pass back an empty JSON response
     return JsonResponse({})
 
+
+@csrf_exempt
+@verify_worker
+def client_workflow_bench(request, machine):
+    from OpenBench.workflow_bench import record
+    try:
+        return JsonResponse({'bench': record(request.POST, machine)})
+    except django.core.exceptions.ValidationError as error:
+        return JsonResponse({'error': '; '.join(error.messages)}, status=400)
+
 @csrf_exempt
 @verify_worker
 @transaction.atomic

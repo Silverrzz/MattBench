@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 from OpenBench.models import WorkflowArtifact, WorkflowTask
 from OpenBench.training_api import json_body, worker_endpoint
 from OpenBench.training_storage import artifact_path, make_directory, storage_lock, sync_directory, verify_artifact
-from OpenBench.workflow_contracts import parameter_values, ports
+from OpenBench.workflow_contracts import metric_values, parameter_values, ports
 
 
 def owned(request, pk, active=True):
@@ -189,7 +189,7 @@ def outputs(request, pk):
                 raise ValidationError('Output type differs from the declared port.')
             if kind in ('parameters', 'metrics'):
                 values = asset.get('values')
-                parameter_values(values)
+                (parameter_values if kind == 'parameters' else metric_values)(values)
                 clean[port] = {'type': kind, 'values': values}
                 continue
             descriptors = asset.get('files', [])

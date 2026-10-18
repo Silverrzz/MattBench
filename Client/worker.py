@@ -62,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 54
+CLIENT_VERSION   = 55
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1356,7 +1356,8 @@ def safe_run_benchmarks(config, branch, engine):
 
     try:
         print('\nRunning %dx Benchmarks for %s' % (config.threads, name))
-        speed, nodes = bench.run_benchmark(binary, config.threads, 1, expected)
+        import workflow_bench
+        speed, nodes = workflow_bench.run(config, branch, binary, expected, ServerReporter.report)
 
     except utils.OpenBenchBadBenchException as error:
         ServerReporter.report_bad_bench(config, error.message)

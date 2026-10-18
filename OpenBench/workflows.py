@@ -140,7 +140,7 @@ def validate_definition(value, draft=False):
 
 def workload_snapshot(test):
     values = {name: copy.deepcopy(getattr(test, name)) for name in TEST_FIELDS}
-    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation')}
+    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation', 'automatic_bench', 'bench_discoveries')}
     for side in ('dev', 'base'):
         values[side] = {name: getattr(getattr(test, side), name) for name in ('name', 'source', 'sha', 'bench')}
     return values
@@ -220,7 +220,7 @@ def launch(step, node, outputs):
         approval = Profile.objects.get(user=run.owner)
         from OpenBench.config import OPENBENCH_CONFIG
         values['approved'] = approval.approver and not OPENBENCH_CONFIG['use_cross_approval']
-        shared = ('dev', 'base') if node['kind'] in ('datagen', 'tune') else ('dev',)
+        shared = ('dev', 'base') if node['kind'] == 'tune' else ('dev',)
         for name, sides in (('network', shared), ('base_network', ('base',))):
             if name not in inputs:
                 continue
@@ -232,11 +232,15 @@ def launch(step, node, outputs):
                 values.update({side + '_network': network.sha256, side + '_netname': network.name})
                 values[side].bench = 0
                 values[side].save(update_fields=['bench'])
+                values['execution'].setdefault('automatic_bench', []).append(side)
         from OpenBench.workflow_contracts import apply_parameters
         for name, sides in (('parameters', shared), ('base_parameters', ('base',))):
             if name in inputs:
                 for side in sides:
                     values[side + '_options'] = apply_parameters(values[side + '_options'], inputs[name])
+                    from OpenBench.utils import extract_option
+                    if any(int(extract_option(values[side + '_options'], option)) < 1 for option in ('Threads', 'Hash')):
+                        raise ValidationError('Workflow parameters must keep Threads and Hash positive.')
         if node['kind'] == 'datagen' and 'parameters' not in config:
             values.update(max_games=config.get('games', 10000000), upload_pgns='COMPACT')
         elif node['kind'] == 'test':
@@ -288,7 +292,7 @@ def launch(step, node, outputs):
         metric = source.get('values', source.get('metrics', source))
         for part in config['field'].split('.'):
             metric = metric.get(part) if isinstance(metric, dict) else None
-        if type(metric) not in (int, float):
+        if type(metric) not in (int, float) or not math.isfinite(metric):
             raise ValidationError('The selected metric is unavailable.')
         result = getattr(operator, {'gt': 'gt', 'gte': 'ge', 'lt': 'lt', 'lte': 'le', 'eq': 'eq'}[config['operator']])(metric, config['value'])
         publish(step, metrics=source)
@@ -343,6 +347,14 @@ def poll(step, node):
             Test.objects.filter(pk=test.pk).update(finished=True)
             test.finished = True
         step.message = 'Waiting for workload approval.' if not test.approved else '%s games' % test.games
+        if test.deleted or test.finished and test.error:
+            finish(step, 'cancelled' if test.deleted else 'error', 'The workload was deleted.' if test.deleted else 'The workload stopped with an execution error.')
+            return
+        if test.finished and node['kind'] in ('datagen', 'tune'):
+            target = test.max_games if node['kind'] == 'datagen' else 2 * test.spsa_run.pairs_per * test.spsa_run.iterations
+            if test.games < target:
+                finish(step, 'cancelled', 'The workload stopped before reaching its configured target.')
+                return
         if test.finished and node['kind'] == 'datagen' and test.games >= test.max_games:
             from OpenBench.utils import getRecentMachines
             archive = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % test.pk)
@@ -377,7 +389,7 @@ def poll(step, node):
         step.message = training.get_state_display()
         if training.state == 'COMPLETED':
             checkpoint = training.checkpoints.order_by('-superbatch').first()
-            artifact = checkpoint.network if checkpoint else training.artifacts.filter(kind='network').order_by('-pk').first()
+            artifact = training.artifacts.filter(kind='network').order_by('-pk').first()
             if artifact is None:
                 raise ValidationError('Training completed without a network artifact.')
             network = imported_network(artifact, step)
@@ -422,6 +434,10 @@ def stop_jobs(step):
 
 
 def jobs_stopped(step):
+    if step.test_id:
+        from OpenBench.utils import getRecentMachines
+        if Test.objects.filter(pk=step.test_id, finished=False, deleted=False).exists() or getRecentMachines().filter(workload=step.test_id).exists():
+            return False
     if step.task_id:
         from OpenBench.models import WorkflowTask
         if WorkflowTask.objects.filter(pk=step.task_id, state__in=('QUEUED', 'RUNNING')).exists():
@@ -472,9 +488,13 @@ def advance(run_id):
                     step.started = None
                 if run.state == 'RUNNING' and step.state == 'PENDING':
                     incoming = [edge for edge in run.snapshot['edges'] if edge['to'] == key]
-                    ready = [steps[edge['from']].state in TERMINAL and not (steps[edge['from']].outcome == 'error' and steps[edge['from']].attempts <= nodes[edge['from']]['retries']) and jobs_stopped(steps[edge['from']]) for edge in incoming]
-                    selected = [done and steps[edge['from']].outcome in edge['on'] for done, edge in zip(ready, incoming)]
-                    active = not incoming or (all(selected) if node['join'] == 'all' else any(selected))
+                    def settled(parent):
+                        row = steps[parent]
+                        return row.state in TERMINAL and not (row.outcome == 'error' and row.attempts <= nodes[parent]['retries']) and jobs_stopped(row)
+                    gates = [edge for edge in incoming if not edge.get('output')] or incoming
+                    ready = [settled(edge['from']) for edge in gates]
+                    selected = [done and steps[edge['from']].outcome in edge['on'] for done, edge in zip(ready, gates)]
+                    active = not gates or (all(selected) if node['join'] == 'all' else any(selected))
                     bound = copy.deepcopy(node)
                     bound['inputs'] = {}
                     waiting, missing = False, False
@@ -484,7 +504,7 @@ def advance(run_id):
                         available = []
                         for item in references(source):
                             parent = item if isinstance(item, str) else item['node']
-                            if steps[parent].state not in TERMINAL:
+                            if not settled(parent):
                                 waiting = True
                                 continue
                             routes = [edge for edge in incoming if edge.get('output') and edge['from'] == parent and edge.get('input') == name and (isinstance(item, str) or edge['output'] == item['port'])]
@@ -497,9 +517,9 @@ def advance(run_id):
                                 pass
                         if available:
                             bound['inputs'][name] = available if isinstance(source, list) else available[0]
-                        elif not ports(node)[0].get(name, '').endswith('?'):
+                        else:
                             missing = True
-                    can_launch = active and (not waiting or node['join'] == 'any') and not missing
+                    can_launch = active and not waiting and not missing
                     if can_launch:
                         if step.started is None:
                             step.started = timezone.now()
@@ -527,7 +547,7 @@ def advance(run_id):
             if run.state == 'CANCELLING':
                 run.state = 'CANCELLED'
             else:
-                unhandled = [step for step in steps.values() if step.outcome in ('fail', 'error', 'inconclusive', 'cancelled') and not any(edge['from'] == step.key and step.outcome in edge['on'] for edge in run.snapshot['edges'])]
+                unhandled = [step for step in steps.values() if step.outcome in ('fail', 'error', 'inconclusive', 'cancelled') and not any(edge['from'] == step.key and step.outcome in edge['on'] and steps[edge['to']].attempts for edge in run.snapshot['edges'])]
                 run.state = 'FAILED' if unhandled else 'COMPLETED'
             run.finished = timezone.now()
         run.updated = timezone.now()

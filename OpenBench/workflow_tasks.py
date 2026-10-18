@@ -87,9 +87,14 @@ def enqueue(step, node, inputs):
 
 def assignment(task, info):
     from OpenBench.worker_policy import allocation
+    from OpenBench.training import DEFAULT_SETTINGS
+    from OpenBench.training_profiles import profile_settings
     selected = allocation(info, task.snapshot.get('worker_policy', {}), info['threads'])
+    if selected is None:
+        raise ValidationError('This worker cannot satisfy the workflow CPU allocation.')
+    profile = task.snapshot['node']['config'].get('training_profile', {})
     return {'run': None, 'assignment': {'type': 'workflow-task', 'task': {'id': task.pk, 'name': task.snapshot['node']['name'], 'state': task.state,
-        'snapshot': {'settings': {'max_hours': task.snapshot['node']['timeout_hours'], 'disk_reserve_gb': 2, 'threads': selected['threads'], 'training_profile': task.snapshot['node']['config'].get('training_profile', {}), 'execution_image': task.snapshot['node']['config'].get('execution_image', '')}},
+        'snapshot': {'settings': {**DEFAULT_SETTINGS, **(profile_settings(profile) if profile else {}), 'max_hours': task.snapshot['node']['timeout_hours'], 'disk_reserve_gb': 2, 'threads': selected['threads'], 'execution_image': task.snapshot['node']['config'].get('execution_image', '')}},
         'specification': task.snapshot['node'], 'inputs': task.inputs, 'dataset': {'files': task.snapshot['files'], 'size': sum(file['size'] for file in task.snapshot['files'])},
         'worker_info': {**info, **selected}, 'report_sequence': task.report_sequence, 'cancel_requested': task.cancel_requested}}}
 
