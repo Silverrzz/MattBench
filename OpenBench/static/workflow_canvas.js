@@ -230,8 +230,8 @@
         const profile = data.profiles.find(row => row.id === profileId), engineName = data.engines.find(row => String(row.id) === engine)?.name;
         if (step.kind === 'train') field(body, 'Engine', config.engine || '', value => { config.engine = value; renderInspector(); }, choices(data.engines, engineName ? 'Default · ' + engineName : 'Choose engine'));
         if (['datagen', 'test', 'tune'].includes(step.kind)) {
-            const parameters = config.parameters || {}, selectedEngine = engineName || data.engines[0]?.name || '';
-            const values = {dev_engine: selectedEngine, base_engine: selectedEngine, variant: profile?.variant || '', ...parameters};
+            const parameters = config.parameters || {};
+            const values = {...(engineName ? {dev_engine: engineName} : {}), ...parameters};
             if (config.games && !('datagen_max_games' in values)) values.datagen_max_games = String(config.games);
             if (config.control && config.control !== 'template' && !('dev_time_control' in values)) values.dev_time_control = values.base_time_control = config.control === 'nodes' ? 'N=' + (config.nodes || 25000) : config.time_control || (config.control === 'ltc' ? '60.0+0.6' : '10.0+0.1');
             configure('Configure ' + ({test: 'test', tune: 'tune', datagen: 'datagen'}[step.kind]), '/' + step.kind + '/new/', {values, preset: config.preset, edited: config.edited || []}, result => {

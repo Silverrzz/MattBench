@@ -24,7 +24,7 @@
                 if (initial) {
                     if (initial.values.base_engine && '{{workload}}' !== 'TUNE') set_engine(initial.values.base_engine, 'base');
                     window.WorkflowNodeEditor.apply(document.getElementById('workload-form'), initial.values);
-                    selectedPreset = presetState.presets.find(row => row.id === initial.preset) || null;
+                    if (initial.preset !== undefined) selectedPreset = presetState.presets.find(row => row.id === initial.preset) || null;
                     for (const key of initial.edited || []) editedFields.add(key);
                     render_presets();
                 }
