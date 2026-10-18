@@ -123,6 +123,9 @@ def delete_training_artifact(run, artifact_id, user):
         run = TrainingRun.objects.select_for_update().get(pk=run.pk)
         artifact = get_object_or_404(TrainingArtifact.objects.select_for_update(), pk=artifact_id, run=run)
         checkpoint = TrainingCheckpoint.objects.select_for_update().filter(Q(archive=artifact) | Q(network=artifact)).first()
+        from OpenBench.models import WorkflowAssetPin
+        if WorkflowAssetPin.objects.filter(Q(artifact=artifact) | Q(checkpoint=checkpoint) if checkpoint else Q(artifact=artifact)).exists():
+            raise ValidationError('A workflow still references this artifact.')
         error = artifact_deletion_error(run, artifact, checkpoint, checkpoint is not None and checkpoint_users([checkpoint]).exists())
         if error:
             raise ValidationError(error)
@@ -148,6 +151,10 @@ def prune_checkpoints(run, newest_id=None):
         TrainingRun.objects.select_for_update().get(pk=run.pk)
         candidates = list(run.checkpoints.select_for_update().select_related('archive', 'network').order_by('-superbatch')[keep:])
         protected = set(checkpoint_users(candidates).values_list('resume_from_id', flat=True))
+        from OpenBench.models import WorkflowAssetPin
+        protected.update(WorkflowAssetPin.objects.filter(Q(checkpoint__in=candidates) | Q(artifact__in=[row.archive_id for row in candidates]) | Q(artifact__in=[row.network_id for row in candidates])).values_list('checkpoint_id', flat=True))
+        pinned_artifacts = set(WorkflowAssetPin.objects.filter(artifact__isnull=False).values_list('artifact_id', flat=True))
+        protected.update(row.pk for row in candidates if row.archive_id in pinned_artifacts or row.network_id in pinned_artifacts)
         protected.update(TrainingRun.objects.filter(continuation_checkpoint__in=candidates).exclude(state__in=TRAINING_TERMINAL).values_list('continuation_checkpoint_id', flat=True))
         from OpenBench.models import TrainingWorkload
         protected.update(TrainingWorkload.objects.filter(state='ACTIVE', resume_checkpoint__in=candidates).values_list('resume_checkpoint_id', flat=True))

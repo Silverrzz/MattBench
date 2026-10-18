@@ -1,3 +1,4 @@
+from itertools import chain
 import hashlib
 import json
 import shutil
@@ -9,7 +10,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.utils import timezone
 
-from OpenBench.models import TrainingArtifact
+from OpenBench.models import TrainingArtifact, WorkflowArtifact
 from OpenBench.training_storage import artifact_path, offline_operation, storage_lock, sync_file, valid_file
 
 
@@ -45,7 +46,7 @@ class Command(BaseCommand):
             sync_file(fixture)
             with fixture.open('rb') as source:
                 files.append({'path': 'database.json', 'size': fixture.stat().st_size, 'sha256': hashlib.file_digest(source, 'sha256').hexdigest()})
-            for row in TrainingArtifact.objects.iterator():
+            for row in chain(TrainingArtifact.objects.iterator(), WorkflowArtifact.objects.iterator()):
                 source = artifact_path(row.path)
                 if not valid_file(source, row.size, row.sha256):
                     raise CommandError('Artifact %s is missing or corrupt. Repair storage first.' % row.pk)

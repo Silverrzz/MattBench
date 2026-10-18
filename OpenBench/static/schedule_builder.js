@@ -249,6 +249,7 @@
         if (kingInputs.length) featureGroups.push('(' + kingInputs.join(' + ') + ')x' + count('input_buckets') + (field('mirrored').checked ? 'hm' : ''));
         if (field('threat_inputs').checked) featureGroups.push((field('pawn_pair_inputs').checked ? '59808' : '60144') + ' TIhm');
         if (field('pawn_pair_inputs').checked) featureGroups.push('4560 PPhm');
+        if (field('duck_inputs').checked) featureGroups.push('64 DUCK');
         const inputs = featureGroups.join(' + ') || 'no inputs';
         const heads = [];
         if (field('score_outputs').checked) heads.push('SCOREx' + count('score_buckets'));
@@ -277,15 +278,14 @@
         if (dualLayers.length) byId('activations').textContent += ' · Dual: concatenate CReLU(x) and CReLU(x²) at ' + dualLayers.map(layer => 'L' + layer).join(', ') + ' (doubles width).';
         syncExport();
         const duck = data.profiles.find(item => item.id === field('training_profile').value)?.generator === 'duckchess';
-        for (const name of ['psqt_inputs', 'input_buckets', 'score_outputs', 'score_buckets', 'activation', 'pairwise_activation', 'dual_activation', 'pairwise_left_activation', 'pairwise_right_activation']) field(name).disabled = duck;
+        for (const name of ['score_outputs', 'score_buckets', 'activation', 'pairwise_activation', 'dual_activation', 'pairwise_left_activation', 'pairwise_right_activation']) field(name).disabled = duck;
         if (duck) {
-            byId('assign-buckets').hidden = true;
             byId('pairwise-layers').disabled = true;
             byId('dual-layers').disabled = true;
             byId('add-layer').disabled = true;
             byId('layers').querySelectorAll('button').forEach(button => { button.disabled = true; });
             byId('export-note').textContent = 'Wakwak integer export: feature i16 ×255, packed L1 i8 ×128, remaining tensors i32; padded to 64 bytes.';
-            if (field('duck_inputs').checked) byId('architecture').textContent = '832 DuckChess inputs · ' + byId('architecture').textContent;
+
         }
     };
     const syncSkipConnection = () => {
@@ -359,7 +359,7 @@
                 layout = Array(64).fill(0);
             }
         }
-        const restricted = ['threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'merged_king_planes', 'wdl_outputs', 'uncertainty_outputs', 'skip_connection', 'position_filtering', 'piece_count_sampling', 'result_filtering', 'wdl_filtered', 'hidden_layers_bucketed', 'export_mode', 'split_features', 'feature_format', 'filter_check', 'filter_castling', 'loader_interleave', 'random_fen_skip'];
+        const restricted = ['wdl_outputs', 'uncertainty_outputs', 'skip_connection', 'position_filtering', 'piece_count_sampling', 'result_filtering', 'wdl_filtered', 'hidden_layers_bucketed', 'export_mode', 'split_features', 'feature_format', 'filter_check', 'filter_castling', 'loader_interleave', 'random_fen_skip'];
         for (const name of restricted) {
             const input = field(name);
             const label = input?.closest('label') || input?.closest('.field');

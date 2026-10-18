@@ -432,4 +432,4 @@ from OpenBench.training_models import TrainingDataset
 from OpenBench.training_models import TrainingServiceLease
 from OpenBench.training_models import TrainingWorkload
 from OpenBench.notification_models import DiscordConfiguration, NotificationPreferences, NotificationDelivery
-from OpenBench.workflow_models import TrainingProfile, Workflow, WorkflowRun, WorkflowStep
+from OpenBench.workflow_models import TrainingProfile, Workflow, WorkflowRun, WorkflowStep, WorkflowTask, WorkflowArtifact, WorkflowAssetPin

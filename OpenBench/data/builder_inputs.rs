@@ -31,6 +31,7 @@ pub struct AuxiliaryInputs {
     threats: Option<Arc<Threats>>,
     pairs: bool,
     masks: [u64; 64],
+    duck: bool,
 }
 
 impl AuxiliaryInputs {
@@ -38,7 +39,12 @@ impl AuxiliaryInputs {
     const MAX_PAIRS: usize = 16 * 15 / 2;
 
     pub fn new(threats: bool, pairs: bool) -> Self {
-        Self { threats: threats.then(|| Arc::new(Threats::new(!pairs))), pairs, masks: three_file_band_mask() }
+        Self { threats: threats.then(|| Arc::new(Threats::new(!pairs))), pairs, masks: three_file_band_mask(), duck: false }
+    }
+
+    pub fn for_duck(mut self) -> Self {
+        self.duck = true;
+        self
     }
 
     pub fn _total_threats(&self) -> usize {
@@ -91,7 +97,9 @@ impl AuxiliaryInputs {
         let bbs = build_bbs(pos);
         if let Some(threats) = &self.threats {
             let offset = if self.pairs { Self::TOTAL_PAIRS } else { 0 };
-            threats.map(bbs, |stm| on_stm(offset + stm), |ntm| on_ntm(offset + ntm));
+            let square = usize::from(pos.extra[0]);
+            let blocker = if self.duck && square < 64 { 1u64 << square } else { 0 };
+            threats.map(bbs, blocker, |stm| on_stm(offset + stm), |ntm| on_ntm(offset + ntm));
         }
         if self.pairs {
             self.collect_pairs(normalize_hm(bbs), &mut on_stm);
@@ -183,7 +191,7 @@ impl Threats {
         2 * self.offsets[4]
     }
 
-    pub fn map(&self, bbs: [u64; 8], mut on_stm: impl FnMut(usize), mut on_ntm: impl FnMut(usize)) {
+    pub fn map(&self, bbs: [u64; 8], blocker: u64, mut on_stm: impl FnMut(usize), mut on_ntm: impl FnMut(usize)) {
         let stm_king = (bbs[Side::WHITE] & bbs[Piece::KING]).trailing_zeros() as usize;
         let ntm_king = (bbs[Side::BLACK] & bbs[Piece::KING]).trailing_zeros() as usize;
         let stm_mask = if stm_king % 8 > 3 { 7 } else { 0 };
@@ -197,7 +205,8 @@ impl Threats {
             }
         }
 
-        let occ = bbs[0] | bbs[1];
+        let pieces_occupied = bbs[0] | bbs[1];
+        let occ = pieces_occupied | blocker;
 
         for side in [Side::WHITE, Side::BLACK] {
             let stm_offset = self.offsets[4] * side;
@@ -212,7 +221,7 @@ impl Threats {
                         Piece::ROOK => Attacks::rook(sq, occ),
                         Piece::QUEEN => Attacks::queen(sq, occ),
                         _ => unreachable!(),
-                    } & occ;
+                    } & pieces_occupied;
 
                     map_bb(threats, |dest| {
                         let target = pieces[dest];
@@ -328,11 +337,18 @@ pub struct Inputs<Base> {
     clock: bool,
     merged_kings: bool,
     psqt: bool,
+    clock_index: usize,
 }
 
 impl<Base: SparseInputType<RequiredDataType = ChessBoard>> Inputs<Base> {
     pub fn new(base: Base, threats: bool, pairs: bool, clock: bool, merged_kings: bool, psqt: bool) -> Self {
-        Self { base, auxiliary: AuxiliaryInputs::new(threats, pairs), clock, merged_kings, psqt }
+        Self { base, auxiliary: AuxiliaryInputs::new(threats, pairs), clock, merged_kings, psqt, clock_index: 0 }
+    }
+
+    pub fn for_duck(mut self) -> Self {
+        self.auxiliary = self.auxiliary.for_duck();
+        self.clock_index = 1;
+        self
     }
 
     fn piece_features(&self) -> usize {
@@ -373,8 +389,8 @@ impl<Base: SparseInputType<RequiredDataType = ChessBoard>> SparseInputType for I
                 f(self.remap(stm), self.remap(ntm));
             }
         });
-        if self.clock && pos.extra[0] >= 14 {
-            let clock = usize::from(pos.extra[0].min(100) - 14) / 8;
+        if self.clock && pos.extra[self.clock_index] >= 14 {
+            let clock = usize::from(pos.extra[self.clock_index].min(100) - 14) / 8;
             let offset = self.piece_features() + clock.min(10);
             f(buckets.0 * self.bucket_width() + offset, buckets.1 * self.bucket_width() + offset);
         }

@@ -7,8 +7,11 @@ use bullet_lib::{
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
         settings::LocalSettings,
     },
-    value::{ValueTrainerBuilder, loader::WakFormatLoader},
+    value::ValueTrainerBuilder,
 };
+mod feature_inputs;
+mod mattbench_wak_loader;
+use mattbench_wak_loader::WakFormatLoader;
 
 const L1_SIZE: usize = $l1;
 const L2_SIZE: usize = $l2;
@@ -24,27 +27,28 @@ const FT_SHIFT_SCALE: f32 = Q0 as f32 / ((1 << FT_SHIFT) as f32);
 const I8_RANGE: f32 = i8::MAX as f32 / Q1 as f32;
 const L1_RANGE: f32 = I8_RANGE * FT_SHIFT_SCALE * FT_SHIFT_SCALE;
 
-#[derive(Clone, Copy, Default)]
-struct DuckInputs;
+#[derive(Clone)]
+struct DuckInputs<Base> { base: feature_inputs::Inputs<Base> }
 
-impl SparseInputType for DuckInputs {
+impl<Base: SparseInputType<RequiredDataType = ChessBoard>> SparseInputType for DuckInputs<Base> {
     type RequiredDataType = ChessBoard;
 
     fn num_inputs(&self) -> usize {
-        768 + if DUCK { 64 } else { 0 }
+        self.base.num_inputs() + if DUCK { 64 } else { 0 }
     }
 
     fn max_active(&self) -> usize {
-        32 + usize::from(DUCK)
+        self.base.max_active() + usize::from(DUCK)
     }
 
     fn map_features<F: FnMut(usize, usize)>(&self, pos: &ChessBoard, mut f: F) {
-        if MIRRORED { ChessBucketsMirrored::default().map_features(pos, &mut f); } else { ChessBuckets::new([0; 64]).map_features(pos, &mut f); }
+        self.base.map_features(pos, &mut f);
         let square = usize::from(pos.extra()[DUCK_EXTRA_INDEX]);
         if DUCK && square < 64 {
             let stm_flip = if MIRRORED && pos.our_ksq() % 8 > 3 { 7 } else { 0 };
             let ntm_flip = if MIRRORED && pos.opp_ksq() % 8 > 3 { 7 } else { 0 };
-            f(768 + (square ^ stm_flip), 768 + (square ^ 56 ^ ntm_flip));
+            let offset = self.base.num_inputs();
+            f(offset + (square ^ stm_flip), offset + (square ^ 56 ^ ntm_flip));
         }
     }
 
@@ -65,7 +69,8 @@ fn main() {
     let end: usize = std::env::var("MATTBENCH_END_SUPERBATCH").unwrap_or_else(|_| "$superbatches".into()).parse().unwrap();
     assert!(start >= 1 && start <= end && end <= $superbatches, "Invalid workload bounds");
     let threads = std::env::var("MATTBENCH_THREADS").map(|value| value.parse::<usize>().expect("Invalid CPU allocation")).unwrap_or($threads).clamp(1, 255);
-    let inputs = DuckInputs;
+    let inputs = DuckInputs { base: feature_inputs::Inputs::new($base_inputs, $threats, $pairs, $clock, $merged, $psqt).for_duck() };
+    let feature_count = inputs.num_inputs();
     let mut trainer = ValueTrainerBuilder::default()
         .dual_perspective()
         .optimiser(AdamW)
@@ -98,7 +103,7 @@ fn main() {
         ])
         .loss_fn(|output, target| output.sigmoid().squared_error(target))
         .build(|builder, stm_inputs, ntm_inputs| {
-            let l0 = builder.new_affine("l0", inputs.num_inputs(), L1_SIZE);
+            let l0 = builder.new_affine("l0", feature_count, L1_SIZE);
             let l1 = builder.new_affine("l1", L1_SIZE, L2_SIZE);
             let l2 = builder.new_affine("l2", L2_SIZE * 2, L3_SIZE);
             let l3 = builder.new_affine("l3", L3_SIZE, 1);

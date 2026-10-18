@@ -62,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 53
+CLIENT_VERSION   = 54
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1142,8 +1142,8 @@ def configure_training(config):
         try:
             detected = detect_gpu(device=args.training_device)
         except RuntimeError as error:
-            print('Training not configured: %s' % error)
-            return
+            print('GPU training unavailable: %s; enabling workflow data tasks.' % error)
+            detected = {'backend': 'cpu'}
     backend = args.training_backend or detected['backend']
     print('Configuring %s training support...' % backend.upper())
     import training_worker

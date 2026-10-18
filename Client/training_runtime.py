@@ -151,19 +151,23 @@ def identity(directory, server):
     return path, data
 
 
-def runtime_info(pawnocchio, image):
+def runtime_info(pawnocchio, image, compiler=True):
     root = Path(__file__).parent
     digest = hashlib.sha256()
-    for name in ('training_worker.py', 'training_data.py', 'variant_data.py', 'resource_policy.py', 'training_tools.py', 'training_checkpoints.py', 'training_cache.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
+    for name in ('training_worker.py', 'training_data.py', 'dataset_tools.py', 'workflow_runtime.py', 'variant_data.py', 'resource_policy.py', 'training_tools.py', 'training_checkpoints.py', 'training_cache.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
         digest.update(name.encode())
         digest.update((root / name).read_bytes())
     def version(command):
+        if not shutil.which(command[0]):
+            return 'unavailable'
         return subprocess.check_output(command, text=True, timeout=30, stderr=subprocess.STDOUT).strip()
-    with pawnocchio.open('rb') as source:
-        pawnocchio_hash = hashlib.file_digest(source, 'sha256').hexdigest()
+    pawnocchio_hash = ''
+    if pawnocchio:
+        with pawnocchio.open('rb') as source:
+            pawnocchio_hash = hashlib.file_digest(source, 'sha256').hexdigest()
     packages = dependency_versions()
     runtime = {'worker_sha256': digest.hexdigest(), 'python': platform.python_version(), 'platform': sys.platform, 'packages': packages, 'execution_image': image, 'rust': 'image-pinned' if image else version(['rustc', '--version']), 'cargo': 'image-pinned' if image else version(['cargo', '--version']), 'pawnocchio_sha256': pawnocchio_hash}
-    if os.name == 'nt' and not image:
+    if os.name == 'nt' and not image and compiler:
         configured = windows_build_environment(dict(os.environ))
         runtime['msvc'] = Path(configured['VCTOOLSINSTALLDIR']).name
         runtime['windows_sdk'] = configured.get('WINDOWSSDKVERSION', '').rstrip('\\/')
@@ -224,10 +228,11 @@ def isolated_command(args, cwd, environment, reporter, cpu_threads=None):
     command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '1024', '--user', '%d:%d' % (os.getuid(), os.getgid()), '--cpus', str(cpu_threads or info['threads']), '--memory', '%sg' % info['memory_gb'], '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '--mount', 'type=bind,src=%s,dst=%s' % (directory, directory), '--workdir', str(cwd)]
     if info.get('cpu_ids'):
         command += ['--cpuset-cpus', ','.join(map(str, info['cpu_ids']))]
-    for key in ('pawnocchio_path', 'combiner_path'):
-        executable = info[key]
-        command.extend(['--mount', 'type=bind,src=%s,dst=%s,readonly' % (executable, executable)])
-    if reporter.state in ('TRAINING', 'SAVING'):
+    for key in ('pawnocchio_path', 'combiner_path', 'wakformat_path'):
+        executable = info.get(key)
+        if executable:
+            command.extend(['--mount', 'type=bind,src=%s,dst=%s,readonly' % (executable, executable)])
+    if reporter.state in ('TRAINING', 'SAVING') or reporter.job.get('workflow_task') and reporter.job['specification']['config'].get('accelerator', 'cpu') != 'cpu':
         if info['backend'] == 'cuda':
             command.extend(['--gpus', 'device=' + info['device']])
         else:

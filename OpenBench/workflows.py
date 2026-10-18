@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.files import File
 from django.core.files.storage import FileSystemStorage
 from django.db import transaction
@@ -17,7 +17,10 @@ from OpenBench.models import DatasetUpload, Engine, EngineConfig, Network, Profi
 from OpenBench.worker_policy import validate_policy
 
 
-KINDS = ('datagen', 'upload', 'train', 'test', 'decision', 'approval')
+from OpenBench.workflow_contracts import PORTS, inputs as asset_inputs, ports, publish, ref, references
+
+
+KINDS = tuple(PORTS)
 OUTCOMES = ('completed', 'pass', 'fail', 'inconclusive', 'error', 'cancelled')
 TERMINAL = ('COMPLETED', 'SKIPPED', 'CANCELLED')
 TEST_FIELDS = ('book_name', 'dev_repo', 'dev_engine', 'dev_options', 'dev_network', 'dev_netname', 'dev_time_control',
@@ -27,15 +30,15 @@ TEST_FIELDS = ('book_name', 'dev_repo', 'dev_engine', 'dev_options', 'dev_networ
                'max_games', 'genfens_args', 'play_reverses', 'use_tri', 'use_penta')
 
 
-def validate_definition(value):
-    if not isinstance(value, dict) or set(value) - {'profile', 'engine', 'steps', 'edges'}:
+def validate_definition(value, draft=False):
+    if not isinstance(value, dict) or set(value) - {'profile', 'engine', 'steps', 'edges', 'layout'}:
         raise ValidationError('Invalid workflow definition.')
     from OpenBench.training_profiles import resolve_profile
     resolve_profile(value.get('profile', 'standard'))
-    if not EngineConfig.objects.filter(pk=value.get('engine'), enabled=True).exists():
+    if value.get('engine') and not EngineConfig.objects.filter(pk=value.get('engine'), enabled=True).exists():
         raise ValidationError('Choose an enabled engine.')
     steps, edges = value.get('steps'), value.get('edges', [])
-    if not isinstance(steps, list) or not 1 <= len(steps) <= 64 or not isinstance(edges, list) or len(edges) > 256:
+    if not isinstance(steps, list) or not (0 if draft else 1) <= len(steps) <= 64 or not isinstance(edges, list) or len(edges) > 256:
         raise ValidationError('Use 1–64 steps and at most 256 connections.')
     normalized = []
     keys = set()
@@ -59,11 +62,11 @@ def validate_definition(value):
     graph = {key: [] for key in keys}
     connections = []
     for edge in edges:
-        if not isinstance(edge, dict) or set(edge) != {'from', 'to', 'on'} or edge['from'] not in keys or edge['to'] not in keys or edge['from'] == edge['to']:
+        if not isinstance(edge, dict) or set(edge) - {'from', 'to', 'on', 'output', 'input'} or not {'from', 'to', 'on'} <= set(edge) or edge['from'] not in keys or edge['to'] not in keys or edge['from'] == edge['to']:
             raise ValidationError('Connect existing, different steps.')
         if not isinstance(edge['on'], list) or not edge['on'] or set(edge['on']) - set(OUTCOMES):
             raise ValidationError('Choose valid connection outcomes.')
-        if any(e['from'] == edge['from'] and e['to'] == edge['to'] for e in connections):
+        if any((e['from'], e['to'], e.get('output'), e.get('input')) == (edge['from'], edge['to'], edge.get('output'), edge.get('input')) for e in connections):
             raise ValidationError('Connect each pair of steps once.')
         graph[edge['from']].append(edge['to'])
         connections.append(edge)
@@ -85,17 +88,51 @@ def validate_definition(value):
     def ancestors(key):
         parents = {edge['from'] for edge in connections if edge['to'] == key}
         return parents | set().union(*(ancestors(parent) for parent in parents)) if parents else set()
+    wired = {}
+    for edge in connections:
+        if 'output' in edge or 'input' in edge:
+            target = by_key[edge['to']]
+            available = ports(target)[0]
+            if edge.get('input') not in available:
+                raise ValidationError('Choose an existing input port.')
+            reference = ref({'node': edge['from'], 'port': edge.get('output')}, by_key, available[edge['input']])
+            wired.setdefault((target['id'], edge['input']), []).append(reference)
     for step in normalized:
         parents = ancestors(step['id'])
-        for name, source in step['inputs'].items():
-            if name not in ('dataset', 'network', 'source') or source not in parents:
+        available = ports(step)[0]
+        for name in available:
+            connected = wired.get((step['id'], name))
+            if connected:
+                if '[]' not in available[name] and len(connected) > 1:
+                    raise ValidationError('This input accepts one source. Use a merge node for multiple datasets.')
+                step['inputs'][name] = connected if '[]' in available[name] else connected[0]
+        for name, source in list(step['inputs'].items()):
+            if name not in available:
+                raise ValidationError('Choose a supported input port.')
+            values = references(source)
+            if not values or len(values) > 256 or isinstance(source, list) and '[]' not in available[name]:
+                raise ValidationError('Invalid number of input connections.')
+            values = [ref(item, by_key, available[name]) for item in values]
+            if any(item['node'] not in parents for item in values):
                 raise ValidationError('Step inputs must come from connected upstream steps.')
-        required = {'upload': ('dataset', ('datagen',)), 'train': ('dataset', ('upload',)), 'test': ('network', ('train', 'test')), 'decision': ('source', KINDS)}.get(step['kind'])
-        if required:
-            name, kinds = required
-            if step['inputs'].get(name) not in by_key or by_key[step['inputs'][name]]['kind'] not in kinds:
-                raise ValidationError(step['name'] + ' needs a compatible upstream ' + name + '.')
-    return {'profile': value.get('profile', 'standard'), 'engine': str(value['engine']), 'steps': normalized, 'edges': connections}
+            step['inputs'][name] = values if '[]' in available[name] else values[0]
+        if not draft:
+            for name, kind in available.items():
+                if not kind.endswith('?') and name not in step['inputs']:
+                    raise ValidationError(step['name'] + ' needs an upstream ' + name + ' connection.')
+    layout = value.get('layout', {})
+    if not isinstance(layout, dict) or set(layout) - {'nodes', 'viewport'} or not isinstance(layout.get('nodes', {}), dict):
+        raise ValidationError('Invalid canvas layout.')
+    positions = layout.get('nodes', {})
+    viewport = layout.get('viewport', {'x': 0, 'y': 0, 'zoom': 1})
+    if set(positions) - keys or not isinstance(viewport, dict) or set(viewport) != {'x', 'y', 'zoom'}:
+        raise ValidationError('Invalid canvas layout.')
+    for point in [*positions.values(), viewport]:
+        if not isinstance(point, dict) or (set(point) != {'x', 'y', 'zoom'} if point is viewport else set(point) != {'x', 'y'}) or any(type(number) not in (int, float) or not math.isfinite(number) or abs(number) > 10000000 for number in point.values()):
+            raise ValidationError('Invalid canvas position.')
+    if not 0.15 <= viewport['zoom'] <= 2:
+        raise ValidationError('Invalid canvas zoom.')
+    return {'profile': value.get('profile', 'standard'), 'engine': str(value.get('engine') or ''), 'steps': normalized, 'edges': connections, 'layout': {'nodes': positions, 'viewport': viewport}}
 
 
 def workload_snapshot(test):
@@ -113,54 +150,17 @@ def start(workflow, user, identifier=None):
     definition = validate_definition(workflow.definition)
     from OpenBench.training_profiles import resolve_profile
     definition['training_profile'] = resolve_profile(definition['profile'])
-    from OpenBench.training_views import schedules_for
+    from OpenBench.workflow_prepare import prepare
     for node in definition['steps']:
-        config = node['config']
-        if node['kind'] in ('datagen', 'test'):
-            source = Test.objects.select_related('dev', 'base').filter(pk=config.get('template'), deleted=False).first()
-            expected = 'DATAGEN' if node['kind'] == 'datagen' else 'SPRT'
-            if source is None or source.test_mode != expected or source.dev_engine != EngineConfig.objects.get(pk=definition['engine']).name:
-                raise ValidationError(node['name'] + ': choose a matching ' + expected + ' workload template.')
-            if source.execution.get('demo'):
-                raise ValidationError('Demo workloads cannot be workflow templates.')
-            variant = source.execution.get('fastchess_variant', 'standard')
-            if variant != definition['training_profile']['variant']:
-                raise ValidationError('The workload variant must match the training profile.')
-            config['workload'] = workload_snapshot(source)
-            if node['kind'] == 'datagen':
-                games = config.get('games', 10000000)
-                if type(games) is not int or games < 2 or games > 10000000000 or games % 2:
-                    raise ValidationError('Datagen targets must be an even number from 2 to 10 billion.')
-            else:
-                if config.get('control', 'template') not in ('template', 'nodes', 'stc', 'ltc'):
-                    raise ValidationError('Choose fixed nodes, STC, LTC or the template time control.')
-                if config.get('control') == 'nodes' and (type(config.get('nodes')) is not int or not 1 <= config['nodes'] <= 1000000000000):
-                    raise ValidationError('Choose a positive node limit.')
-                if config.get('max_games', 0) and (type(config['max_games']) is not int or not 2 <= config['max_games'] <= 10000000000):
-                    raise ValidationError('Choose a valid SPRT game cap.')
-        elif node['kind'] == 'train':
-            schedule = schedules_for(user).filter(pk=config.get('schedule')).first()
-            if schedule is None or 'mattbench-demo.json' in schedule.files:
-                raise ValidationError('Choose an available runnable training schedule.')
-            if schedule.engine_id and str(schedule.engine_id) != definition['engine']:
-                raise ValidationError('The training schedule must match the workflow engine.')
-            from OpenBench.schedule_builder import builder_state, generate_schedule
-            spec, managed = builder_state(schedule)
-            if not managed or spec['training_profile'] != definition['profile']:
-                raise ValidationError('Choose a builder schedule for this workflow’s training profile.')
-            _, files, options = generate_schedule(spec, definition['training_profile']['bullet_ref'], definition['training_profile'])
-            config['schedule_snapshot'] = {'name': schedule.name, 'version': schedule.version, 'files': files, 'settings': options, 'environment': {}}
-        elif node['kind'] == 'upload':
-            from OpenBench.training import hf_token, repo_id
-            hf_token(user.pk)
-            config['repo'] = repo_id(config.get('repo', ''))
-            if type(config.get('private', True)) is not bool:
-                raise ValidationError('Choose the upload visibility.')
-        elif node['kind'] == 'decision':
-            if config.get('field') not in ('games', 'llr', 'loss', 'positions_per_second', 'superbatch') or config.get('operator') not in ('gt', 'gte', 'lt', 'lte', 'eq') or type(config.get('value')) not in (int, float) or not math.isfinite(config['value']):
-                raise ValidationError('Choose a supported metric, comparison and numeric value.')
+        prepare(node, definition, user)
     run = WorkflowRun.objects.create(**({"id": identifier} if identifier else {}), workflow=workflow, owner=user, version=workflow.version, snapshot=definition)
     WorkflowStep.objects.bulk_create([WorkflowStep(run=run, key=node['id']) for node in definition['steps']])
+    from OpenBench.models import WorkflowAssetPin
+    for node in definition['steps']:
+        if node['kind'] == 'load_checkpoint':
+            WorkflowAssetPin.objects.get_or_create(run=run, checkpoint_id=node['config']['checkpoint'])
+        elif node['kind'] == 'load_artifact' and node['config'].get('provider', 'training') == 'training':
+            WorkflowAssetPin.objects.get_or_create(run=run, artifact_id=node['config']['artifact'])
     return run
 
 
@@ -205,7 +205,8 @@ def imported_network(artifact, step):
 
 def launch(step, node, outputs):
     config, run = node['config'], step.run
-    if node['kind'] in ('datagen', 'test'):
+    inputs = asset_inputs(node, outputs)
+    if node['kind'] in ('datagen', 'test', 'tune'):
         values = copy.deepcopy(config['workload'])
         for side in ('dev', 'base'):
             values[side] = Engine.objects.create(**values[side])
@@ -214,13 +215,26 @@ def launch(step, node, outputs):
         approval = Profile.objects.get(user=run.owner)
         from OpenBench.config import OPENBENCH_CONFIG
         values['approved'] = approval.approver and not OPENBENCH_CONFIG['use_cross_approval']
+        shared = ('dev', 'base') if node['kind'] in ('datagen', 'tune') else ('dev',)
+        for name, sides in (('network', shared), ('base_network', ('base',))):
+            if name not in inputs:
+                continue
+            candidate = inputs[name]
+            network = Network.objects.filter(sha256=candidate['network']).first()
+            if not network or any(network.engine != values[side + '_engine'] for side in sides):
+                raise ValidationError('The network output belongs to a different engine.')
+            for side in sides:
+                values.update({side + '_network': network.sha256, side + '_netname': network.name})
+                values[side].bench = 0
+                values[side].save(update_fields=['bench'])
+        from OpenBench.workflow_contracts import apply_parameters
+        for name, sides in (('parameters', shared), ('base_parameters', ('base',))):
+            if name in inputs:
+                for side in sides:
+                    values[side + '_options'] = apply_parameters(values[side + '_options'], inputs[name])
         if node['kind'] == 'datagen':
             values.update(max_games=config.get('games', 10000000), upload_pgns='COMPACT')
-        else:
-            candidate = outputs[node['inputs']['network']]
-            values.update(dev_network=candidate['network'], dev_netname=candidate['network_name'])
-            values['dev'].bench = 0
-            values['dev'].save(update_fields=['bench'])
+        elif node['kind'] == 'test':
             control = config.get('control', 'template')
             if control != 'template':
                 tc = 'N=%d' % config['nodes'] if control == 'nodes' else config.get('time_control') or ('10.0+0.1' if control == 'stc' else '60.0+0.6')
@@ -229,38 +243,90 @@ def launch(step, node, outputs):
                 values.update(dev_time_control=tc, base_time_control=tc)
             values['execution']['workflow_game_cap'] = config.get('max_games', 0)
         step.test = Test.objects.create(**values)
+        if node['kind'] == 'tune':
+            from types import SimpleNamespace
+            from OpenBench.spsa_utils import create_spsa_run
+            options = copy.deepcopy(config['spsa'])
+            if inputs.get('parameters'):
+                initial = inputs['parameters']['values']
+                rows = []
+                for line in options['spsa_inputs'].splitlines():
+                    cells = [cell.strip() for cell in line.split(',')]
+                    if cells[0] in initial:
+                        value = initial[cells[0]]
+                        if not float(cells[3]) <= value <= float(cells[4]):
+                            raise ValidationError('Initial parameter is outside the tune bounds: ' + cells[0])
+                        cells[2] = str(value)
+                    rows.append(', '.join(cells))
+                options['spsa_inputs'] = '\n'.join(rows)
+            create_spsa_run(step.test, SimpleNamespace(POST=options))
         from OpenBench.lifecycle import test_event
         test_event('created', step.test, run.owner_id)
         if values['approved']:
             test_event('approved', step.test, run.owner_id)
-    elif node['kind'] == 'upload':
-        workload = Test.objects.get(pk=outputs[node['inputs']['dataset']]['test'])
-        archive = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % workload.pk)
-        from OpenBench.utils import getRecentMachines
-        if not archive.is_file() or getRecentMachines().filter(workload=workload.pk).exists() or timezone.now().timestamp() - archive.stat().st_mtime < 30:
-            step.message = 'Waiting for final workers and PGN archive assembly.'
-            return False
-        step.upload = DatasetUpload.objects.create(owner=run.owner, workload=workload, repo=config['repo'], private=config.get('private', True), filename='workflow-%s-%s-%d.pgn.tar' % (str(run.pk)[:8], step.key, step.attempts + 1))
     elif node['kind'] == 'train':
-        dataset = outputs[node['inputs']['dataset']]['dataset']
+        from OpenBench.workflow_assets import dataset_for_training, resolve_data
+        dataset = dataset_for_training(resolve_data(inputs['dataset'], run.owner))
         from OpenBench.schedule_builder import MANIFEST, dataset_stages
         ranges = dataset_stages(json.loads(config['schedule_snapshot']['files'][MANIFEST])['spec'])
         dataset = {**dataset, 'stages': [{**dataset, **bounds} for bounds in ranges]}
-        step.training = TrainingRun.objects.create(owner=run.owner, engine_id=run.snapshot['engine'], name='wf-%s-%s' % (str(run.pk)[:8], step.key),
-            snapshot={**config['schedule_snapshot'], 'workflow': reference(step), 'worker_policy': node['worker']},
-            dataset=dataset, priority=config.get('priority', 0))
+        snapshot = {**config['schedule_snapshot'], 'workflow': reference(step), 'worker_policy': node['worker']}
+        resume = None
+        if inputs.get('checkpoint'):
+            from OpenBench.models import TrainingCheckpoint
+            from OpenBench.training_checkpoints import checkpoint_provenance, validate_checkpoint_schedule
+            resume = TrainingCheckpoint.objects.select_related('run', 'archive').get(pk=inputs['checkpoint']['checkpoint'])
+            if resume.run.owner_id != run.owner_id and not run.owner.is_superuser:
+                raise ValidationError('Checkpoint access denied.')
+            validate_checkpoint_schedule(resume, EngineConfig.objects.get(pk=config['engine']), snapshot['files'], snapshot['settings'])
+            snapshot['resume'] = checkpoint_provenance(resume)
+        step.training = TrainingRun.objects.create(owner=run.owner, engine_id=config.get('engine') or run.snapshot['engine'], name='wf-%s-%s' % (str(run.pk)[:8], step.key),
+            snapshot=snapshot, dataset=dataset, parameters=inputs.get('parameters', {}).get('values', {}), resume_from=resume, priority=config.get('priority', 0))
+    elif node['kind'] in ('convert', 'split', 'task', 'upload'):
+        from OpenBench.workflow_tasks import enqueue
+        enqueue(step, node, inputs)
     elif node['kind'] == 'approval':
         step.state = 'WAITING'
         step.message = 'Waiting for the workflow owner’s decision.'
     elif node['kind'] == 'decision':
         import operator
-        source = outputs[node['inputs']['source']]
-        metric = source.get(config['field'], source.get('metrics', {}).get(config['field']))
+        source = inputs['source']
+        metric = source.get('values', source.get('metrics', source))
+        for part in config['field'].split('.'):
+            metric = metric.get(part) if isinstance(metric, dict) else None
         if type(metric) not in (int, float):
             raise ValidationError('The selected metric is unavailable.')
         result = getattr(operator, {'gt': 'gt', 'gte': 'ge', 'lt': 'lt', 'lte': 'le', 'eq': 'eq'}[config['operator']])(metric, config['value'])
-        step.outputs = source
+        publish(step, metrics=source)
         finish(step, 'pass' if result else 'fail')
+    else:
+        from OpenBench import workflow_assets as assets
+        if node['kind'] == 'load_data':
+            asset = assets.dataset_source(config, run.owner)
+            if any(source.get('provider') == 'datagen' and not Test.objects.filter(pk=source['workload'], finished=True).exists() for source in asset['sources']):
+                step.message = 'Waiting for the source datagen workload.'
+                return False
+            publish(step, data=assets.resolve_data(asset, run.owner))
+        elif node['kind'] == 'load_parameters':
+            publish(step, parameters=assets.parameters_source(config, run.owner))
+        elif node['kind'] == 'load_network':
+            publish(step, network=assets.network_source(config))
+        elif node['kind'] == 'load_checkpoint':
+            asset = assets.checkpoint_source(config, run.owner)
+            from OpenBench.models import TrainingCheckpoint
+            checkpoint = TrainingCheckpoint.objects.select_related('network').get(pk=asset['checkpoint'])
+            network = imported_network(checkpoint.network, step)
+            publish(step, checkpoint=asset, network={'type': 'network', 'network': network.sha256, 'network_name': network.name, 'engine': network.engine})
+        elif node['kind'] == 'load_artifact':
+            publish(step, artifact=assets.training_artifact(config, run.owner))
+        elif node['kind'] == 'merge':
+            sources = [source for asset in inputs['data'] for source in asset['sources']]
+            unique = {json.dumps(source, sort_keys=True): source for source in sources}
+            publish(step, data={'type': 'dataset', 'sources': list(unique.values())})
+        elif node['kind'] == 'select':
+            selected, remaining = assets.select_data(assets.resolve_data(inputs['data'], run.owner), config.get('patterns', ['*']))
+            publish(step, matched=selected, remaining=remaining)
+        finish(step, 'completed')
     if step.state == 'PENDING':
         step.state = 'RUNNING'
     step.attempts += 1
@@ -283,11 +349,25 @@ def poll(step, node):
             Test.objects.filter(pk=test.pk).update(finished=True)
             test.finished = True
         step.message = 'Waiting for workload approval.' if not test.approved else '%s games' % test.games
+        if test.finished and node['kind'] == 'datagen' and test.games >= test.max_games:
+            from OpenBench.utils import getRecentMachines
+            archive = Path(settings.MEDIA_ROOT) / 'PGNs' / ('%d.pgn.tar' % test.pk)
+            if not archive.is_file() or getRecentMachines().filter(workload=test.pk).exists() or timezone.now().timestamp() - archive.stat().st_mtime < 30:
+                step.message = 'Waiting for final workers and PGN archive assembly.'
+                return
         if test.deleted or test.finished:
             step.outputs = {'test': test.pk, 'games': test.games, 'llr': test.currentllr}
             if node['kind'] == 'test':
                 step.outputs.update(network=test.dev_network, network_name=test.dev_netname)
-            finish(step, 'cancelled' if test.deleted else ('completed' if node['kind'] == 'datagen' and test.games >= test.max_games else 'pass' if test.passed else 'fail' if test.failed else 'inconclusive'))
+            publish(step, metrics={'type': 'metrics', 'values': {'games': test.games, 'llr': test.currentllr}})
+            if node['kind'] == 'datagen':
+                publish(step, data={'type': 'dataset', 'sources': [{'provider': 'datagen', 'workload': test.pk}]})
+            elif node['kind'] == 'tune':
+                from OpenBench.workflow_assets import parameters_from_tune
+                publish(step, parameters=parameters_from_tune(test))
+            elif test.dev_network:
+                publish(step, network={'type': 'network', 'network': test.dev_network, 'network_name': test.dev_netname, 'engine': test.dev_engine})
+            finish(step, 'cancelled' if test.deleted else ('completed' if node['kind'] == 'tune' or node['kind'] == 'datagen' and test.games >= test.max_games else 'pass' if test.passed else 'fail' if test.failed else 'inconclusive'))
     elif step.upload_id:
         task = DatasetUpload.objects.get(pk=step.upload_id)
         step.message = task.stage
@@ -308,15 +388,33 @@ def poll(step, node):
                 raise ValidationError('Training completed without a network artifact.')
             network = imported_network(artifact, step)
             step.outputs = {'training': training.pk, 'artifact': artifact.pk, 'network': network.sha256, 'network_name': network.name, 'sha256': artifact.sha256, 'metrics': training.metrics}
+            publish(step, network={'type': 'network', 'network': network.sha256, 'network_name': network.name, 'engine': network.engine}, metrics={'type': 'metrics', 'values': training.metrics})
+            if checkpoint:
+                from OpenBench.workflow_assets import checkpoint_source
+                publish(step, checkpoint=checkpoint_source({'checkpoint': checkpoint.pk}, step.run.owner))
             finish(step, 'completed')
         elif training.state in ('FAILED', 'CANCELLED'):
             if training.state == 'FAILED' and training.metrics.get('recovery_pending') and not training.cancel_requested:
                 step.message = 'Waiting for worker reconnection and checkpoint recovery.'
                 return
             finish(step, 'error' if training.state == 'FAILED' else 'cancelled', training.error)
+    elif step.task_id:
+        from OpenBench.models import WorkflowTask
+        task = WorkflowTask.objects.get(pk=step.task_id)
+        step.message = task.metrics.get('preparation_step') or task.state.title()
+        if task.state == 'COMPLETED':
+            publish(step, **task.outputs)
+            finish(step, 'completed')
+        elif task.state in ('FAILED', 'CANCELLED'):
+            finish(step, 'error' if task.state == 'FAILED' else 'cancelled', task.error)
+
 
 
 def stop_jobs(step):
+    if step.task_id:
+        from OpenBench.models import WorkflowTask
+        WorkflowTask.objects.filter(pk=step.task_id).exclude(state__in=('COMPLETED', 'FAILED', 'CANCELLED')).update(cancel_requested=True)
+        WorkflowTask.objects.filter(pk=step.task_id, state='QUEUED').update(state='CANCELLED', finished=timezone.now())
     if step.test_id:
         Test.objects.filter(pk=step.test_id, finished=False).update(finished=True)
     if step.training_id:
@@ -330,6 +428,10 @@ def stop_jobs(step):
 
 
 def jobs_stopped(step):
+    if step.task_id:
+        from OpenBench.models import WorkflowTask
+        if WorkflowTask.objects.filter(pk=step.task_id, state__in=('QUEUED', 'RUNNING')).exists():
+            return False
     if step.upload_id and DatasetUpload.objects.filter(pk=step.upload_id, state='UPLOADING').exists():
         return False
     if step.training_id:
@@ -368,8 +470,10 @@ def advance(run_id):
                         step.attempts += 1
                     finish(step, 'error', 'Step deadline exceeded.')
                 if run.state == 'RUNNING' and step.state == 'COMPLETED' and step.outcome == 'error' and step.attempts <= node['retries'] and jobs_stopped(step):
-                    step.history = [*step.history, {'attempt': step.attempts, 'test': step.test_id, 'training': step.training_id, 'upload': step.upload_id, 'message': step.message}]
+                    step.history = [*step.history, {'attempt': step.attempts, 'test': step.test_id, 'training': step.training_id, 'upload': step.upload_id, 'task': step.task_id, 'message': step.message}]
                     step.state, step.outcome, step.test, step.training, step.upload = 'PENDING', '', None, None, None
+                    step.task = None
+                    step.outputs = {}
                     step.finished = None
                     step.started = None
                 if run.state == 'RUNNING' and step.state == 'PENDING':
@@ -377,24 +481,48 @@ def advance(run_id):
                     ready = [steps[edge['from']].state in TERMINAL and not (steps[edge['from']].outcome == 'error' and steps[edge['from']].attempts <= nodes[edge['from']]['retries']) and jobs_stopped(steps[edge['from']]) for edge in incoming]
                     selected = [done and steps[edge['from']].outcome in edge['on'] for done, edge in zip(ready, incoming)]
                     active = not incoming or (all(selected) if node['join'] == 'all' else any(selected))
-                    sources = [steps[source] for source in node['inputs'].values()]
-                    if active and any(source.state in TERMINAL and not source.outputs for source in sources):
-                        step.state, step.finished = 'SKIPPED', timezone.now()
-                    elif active and all(source.state in TERMINAL for source in sources):
+                    bound = copy.deepcopy(node)
+                    bound['inputs'] = {}
+                    waiting, missing = False, False
+                    from OpenBench.workflow_contracts import read
+                    all_outputs = {name: row.outputs for name, row in steps.items()}
+                    for name, source in node['inputs'].items():
+                        available = []
+                        for item in references(source):
+                            parent = item if isinstance(item, str) else item['node']
+                            if steps[parent].state not in TERMINAL:
+                                waiting = True
+                                continue
+                            routes = [edge for edge in incoming if edge.get('output') and edge['from'] == parent and edge.get('input') == name and (isinstance(item, str) or edge['output'] == item['port'])]
+                            if routes and not any(steps[parent].outcome in edge['on'] for edge in routes):
+                                continue
+                            try:
+                                read(item, all_outputs)
+                                available.append(item)
+                            except ValidationError:
+                                pass
+                        if available:
+                            bound['inputs'][name] = available if isinstance(source, list) else available[0]
+                        elif not ports(node)[0].get(name, '').endswith('?'):
+                            missing = True
+                    can_launch = active and (not waiting or node['join'] == 'any') and not missing
+                    if can_launch:
                         if step.started is None:
                             step.started = timezone.now()
                         launching = True
                         try:
                             with transaction.atomic():
-                                launch(step, node, {name: row.outputs for name, row in steps.items()})
+                                launch(step, bound, all_outputs)
                         except Exception:
                             step.refresh_from_db()
                             raise
+                    elif active and not waiting and missing:
+                        step.state, step.finished = 'SKIPPED', timezone.now()
                     elif not active and all(ready):
                         step.state, step.finished = 'SKIPPED', timezone.now()
                 step.updated = timezone.now()
                 step.save()
-            except (ValidationError, ValueError, KeyError) as error:
+            except (ValidationError, ObjectDoesNotExist, ValueError, KeyError, TypeError) as error:
                 stop_jobs(step)
                 finish(step, 'error', str(error)[:2000])
                 step.attempts = max(step.attempts, attempts_before + 1 if launching else max(1, attempts_before))
@@ -413,5 +541,7 @@ def advance(run_id):
 
 
 def tick():
+    from OpenBench.workflow_tasks import expire
+    expire()
     for identifier in WorkflowRun.objects.filter(state__in=('RUNNING', 'PAUSED', 'CANCELLING')).order_by('updated').values_list('pk', flat=True)[:100]:
         advance(identifier)

@@ -23,7 +23,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
-from OpenBench.models import Machine, Profile, TrainingArtifact, TrainingRun, TrainingWorker, TrainingWorkload
+from OpenBench.models import Machine, Profile, TrainingArtifact, TrainingRun, TrainingWorker, TrainingWorkload, WorkflowTask
 from OpenBench.training import download_access, hf_token, xet_access
 from OpenBench.training import worker_requirement_errors
 from OpenBench.training_models import TRAINING_ACTIVE, TRAINING_TERMINAL
@@ -84,14 +84,14 @@ def register(request):
             info['threads'] = machine.info['concurrency']
         if not isinstance(info, dict) or len(json.dumps(info)) > 131072:
             raise ValueError
-        if info.get('protocol') not in (3, 4) or info.get('backend') not in ('cuda', 'rocm'):
+        if info.get('protocol') not in (3, 4) or info.get('backend') not in ('cuda', 'rocm', 'cpu'):
             raise ValueError
         if info.get('protocol') == 4 and (not isinstance(info.get('capabilities'), list) or any(not isinstance(capability, str) for capability in info['capabilities'])):
             raise ValueError
-        for field in ('vram_gb', 'disk_gb', 'threads'):
+        for field in (('disk_gb', 'threads') if info.get('backend') == 'cpu' else ('vram_gb', 'disk_gb', 'threads')):
             if type(info.get(field)) not in (int, float) or not math.isfinite(info[field]) or info[field] <= 0:
                 raise ValueError
-        if not re.fullmatch(r'[a-f0-9]{64}', info.get('pawnocchio_sha256', '')):
+        if not re.fullmatch(r'[a-f0-9]{64}', info.get('pawnocchio_sha256', '')) and 'profile-dataset-tools-v1' not in info.get('capabilities', []):
             raise ValueError
         name = request.POST.get('name', '').strip()
         if not 1 <= len(name) <= 128:
@@ -117,7 +117,7 @@ def register(request):
         if not created:
             if worker.owner_id != user.pk or not worker.enabled or not secrets.compare_digest(worker.secret_hash, hashlib.sha256(secret.encode()).hexdigest()):
                 return JsonResponse({'error': 'Worker identity is revoked or belongs to another account.'}, status=403)
-            if TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).exists() and worker.info.get('runtime') != info.get('runtime'):
+            if (TrainingRun.objects.filter(worker=worker, state__in=TRAINING_ACTIVE).exists() or WorkflowTask.objects.filter(worker=worker, state='RUNNING').exists()) and worker.info.get('runtime') != info.get('runtime'):
                 return JsonResponse({'error': 'Finish or cancel the active training run before changing this worker runtime.'}, status=409)
             if worker.info.get('custom_name'):
                 info['custom_name'] = worker.info['custom_name']
@@ -166,6 +166,10 @@ def claim(request):
     for attempt in worker.workloads.filter(state='ACTIVE', run__state__in=TRAINING_TERMINAL).select_related('run'):
         attempt.state, attempt.finished = attempt.run.state, now
         attempt.save(update_fields=['state', 'finished'])
+    from OpenBench.workflow_tasks import claim as claim_task
+    task_assignment = claim_task(worker, machine, claim_id, info)
+    if task_assignment:
+        return JsonResponse(task_assignment)
     previous = TrainingWorkload.objects.filter(worker=worker, claim_token=claim_id).first()
     if previous and previous.state != 'ACTIVE':
         return JsonResponse({'run': None, 'claim_finished': True})
@@ -487,6 +491,13 @@ def dataset_file(request, pk, file_index):
         return JsonResponse({'error': 'Dataset access is closed for this run.'}, status=403)
     dataset = dataset_input(run, request.GET.get('stage'))
     file = dataset['files'][file_index]
+    if file.get('provider'):
+        from django.http import FileResponse
+        from OpenBench.workflow_assets import local_file
+        path = local_file(file, run.owner)
+        if not path.is_file() or path.stat().st_size != file['size']:
+            raise ValidationError('Pinned dataset file is missing or changed.')
+        return FileResponse(path.open('rb'), content_type='application/octet-stream')
     if file['size'] > 32 * 1024 ** 2:
         return JsonResponse({'error': 'Large files must use Hugging Face Xet or LFS storage.'}, status=400)
     url = hf_hub_url(file.get('repo', dataset['repo']), file['path'], repo_type='dataset', revision=file.get('commit', dataset['commit']))

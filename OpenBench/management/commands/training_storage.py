@@ -1,3 +1,4 @@
+from itertools import chain
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -6,7 +7,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from OpenBench.models import TrainingArtifact
+from OpenBench.models import TrainingArtifact, WorkflowArtifact
 from OpenBench.training_storage import artifact_path, replicate, storage_lock, sync_file, valid_file
 
 
@@ -21,7 +22,7 @@ class Command(BaseCommand):
         failures = []
         with storage_lock():
             paths = set()
-            for row in TrainingArtifact.objects.iterator():
+            for row in chain(TrainingArtifact.objects.iterator(), WorkflowArtifact.objects.iterator()):
                 paths.add(row.path)
                 primary = artifact_path(row.path)
                 if not valid_file(primary, row.size, row.sha256):
@@ -46,7 +47,7 @@ class Command(BaseCommand):
                 if not configured:
                     continue
                 root = Path(configured).resolve()
-                for path in root.glob('*/artifacts/*'):
+                for path in chain(root.glob('*/artifacts/*'), root.glob('workflows/*/*')):
                     if not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(root) and path.relative_to(root).as_posix() not in paths and path.stat().st_mtime < cutoff:
                         self.stdout.write('Unreferenced: ' + str(path))
                         if options['remove_orphans']:

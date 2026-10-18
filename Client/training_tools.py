@@ -108,7 +108,7 @@ def zig_toolchain(root, version, target):
     return executable
 
 
-def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_repo, combiner_ref, image, threads, memory_gb):
+def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_repo, combiner_ref, image, threads, memory_gb, runner=None):
     root = directory / 'tools'
     root.mkdir(exist_ok=True)
     machine = {'amd64': 'x86_64', 'x86_64': 'x86_64', 'arm64': 'aarch64', 'aarch64': 'aarch64'}.get(platform.machine().lower())
@@ -147,8 +147,12 @@ def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_rep
                 ['git', '-C', str(source), 'fetch', '--depth', '1', 'origin', revision],
                 ['git', '-C', str(source), 'checkout', '--detach', 'FETCH_HEAD'],
             ):
-                subprocess.run(args, check=True, env=environment, timeout=300)
-            actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True, env=environment, timeout=30).strip()
+                if runner:
+                    runner(args, work, environment)
+                else:
+                    subprocess.run(args, check=True, env=environment, timeout=300)
+            revision_command = ['git', '-C', str(source), 'rev-parse', 'HEAD']
+            actual = (runner(revision_command, work, environment) if runner else subprocess.check_output(revision_command, text=True, env=environment, timeout=30)).strip()
             if actual != revision:
                 raise RuntimeError('Dataset tool checkout does not match its pinned commit.')
             args = [str(zig), 'build', '-Doptimize=ReleaseFast', '-j%d' % threads, '--prefix', str(work / 'install'), *flags]
@@ -157,7 +161,10 @@ def build_dataset_tools(directory, pawnocchio_repo, pawnocchio_ref, combiner_rep
             else:
                 environment['ZIG_GLOBAL_CACHE_DIR'] = str(work / 'zig-cache')
             print('Building %s with Zig %s' % (name, version), flush=True)
-            subprocess.run(args, cwd=source, env=environment, check=True, timeout=3600)
+            if runner:
+                runner(args, source, environment)
+            else:
+                subprocess.run(args, cwd=source, env=environment, check=True, timeout=3600)
             built = work / 'install' / 'bin' / executable.name
             if not built.is_file():
                 raise RuntimeError('Dataset tool build did not produce ' + binary)

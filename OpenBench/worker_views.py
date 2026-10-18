@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker
+from OpenBench.models import Machine, Test, TrainingRun, TrainingWorker, WorkflowTask
 from OpenBench.training_models import TRAINING_ACTIVE
 from OpenBench.config import OPENBENCH_CONFIG
 from OpenBench.formatting import format_nps
@@ -93,8 +93,9 @@ def worker_rows(user, identifier=None):
         capability = capabilities.get(machine.pk)
         if capability:
             row = rows[-1]
-            row['capabilities'].extend(['Training', 'Data preparation'])
-            row['gpu_memory'] = capability.info.get('vram_gb')
+            row['workflow_worker'] = capability.pk
+            row['capabilities'].extend((['Training'] if capability.info.get('backend') != 'cpu' else []) + ['Data preparation', 'Workflow tasks'])
+            row['gpu_memory'] = capability.info.get('vram_gb') if capability.info.get('backend') != 'cpu' else None
             row['accept_any_owner'] = capability.accept_any_owner
             row['details'].append(('GPU', capability.info.get('gpu', '')))
             training_job = active_training.get(capability.pk)
@@ -128,11 +129,11 @@ def worker_rows(user, identifier=None):
             'current_workload': 'training:%s' % job.pk if job else '',
             'activity': 'Training' if job else 'Idle',
             'owner': worker.owner, 'hardware': info.get('gpu', 'GPU'),
-            'platform': info.get('backend', '').upper(), 'capabilities': ['Training', 'Data preparation'],
+            'platform': info.get('backend', '').upper(), 'capabilities': (['Training'] if info.get('backend') != 'cpu' else []) + ['Data preparation', 'Workflow tasks'], 'workflow_worker': worker.pk,
             'threads': info.get('threads', 0), 'memory': info.get('ram_gb'),
             'workflow_protocol': info.get('workflow_protocol', 0), 'workflow_threads': info.get('worker_settings', {}).get('workflow_threads', info.get('workflow_threads', info.get('threads', 1))),
             'thread_limit': len(info.get('cpu_topology', {}).get('logical', [])), 'tags': ', '.join(info.get('worker_settings', {}).get('tags', [])),
-            'gpu_memory': info.get('vram_gb'), 'updated': worker.updated, 'demo': bool(info.get('demo')),
+            'gpu_memory': info.get('vram_gb') if info.get('backend') != 'cpu' else None, 'updated': worker.updated, 'demo': bool(info.get('demo')),
             'state': 'Disconnected' if not worker.enabled else 'Busy' if online and job else 'Available' if online else 'Offline',
             'job': job.name if online and job else '', 'job_url': '/training/%s/' % job.pk if job else '',
             'rate': '%s M pos/s' % round(job.metrics.get('positions_per_second', 0) / 1000000, 2) if job else '',
@@ -140,7 +141,14 @@ def worker_rows(user, identifier=None):
             'disconnect': worker.enabled and not info.get('demo') and (user.pk == worker.owner_id or user.is_superuser),
             'details': [('Backend', info.get('backend', '').upper()), ('GPU', info.get('gpu', '')), ('Free storage', '%s GB' % round(info.get('disk_gb', 0))), ('Device', info.get('device', '')), ('Protocol', info.get('protocol', ''))],
         })
+    active_tasks = {task.worker_id: task for task in WorkflowTask.objects.filter(worker_id__in=[row.get('workflow_worker') for row in rows], state='RUNNING')}
     for row in rows:
+        task = active_tasks.get(row.get('workflow_worker'))
+        if task:
+            manage = user.pk == task.owner_id or user.is_superuser
+            row.update(state='Busy' if row['online'] else 'Offline', activity='Workflow', job=task.snapshot['node']['name'] if manage else 'Workflow task', job_url='/workflows/tasks/%d/' % task.pk if manage else '', current_workload='workflow:%d' % task.pk, rate='', dev_nps='', base_nps='')
+            if manage:
+                row['telemetry'] = training_telemetry(task)
         row['modes'] = WORKER_MODES
         if row['mode'] == 'paused' and row['online'] and row['activity'] == 'Idle':
             row['state'] = 'Paused'
@@ -162,7 +170,7 @@ def index(request):
         'online_count': len(connected),
         'busy_count': sum(row['state'] == 'Busy' for row in rows),
         'thread_count': sum(row['threads'] for row in connected if row['activity'] in ('Testing', 'Datagen') or row['activity'] == 'Idle' and row['mode'] in ('automatic', 'testing-only') and 'Tests' in row['capabilities']),
-        'activity_counts': [(label, sum(row['activity'] == label for row in connected)) for label in ('Testing', 'Datagen', 'Training', 'Idle')],
+        'activity_counts': [(label, sum(row['activity'] == label for row in connected)) for label in ('Testing', 'Datagen', 'Training', 'Workflow', 'Idle')],
     })
 
 
@@ -258,10 +266,13 @@ def detail(request, pk):
                 if action == 'stop':
                     current = request.POST.get('workload', '')
                     run = TrainingRun.objects.filter(worker=capability, state__in=TRAINING_ACTIVE).first() if capability else None
-                    expected = 'training:%s' % run.pk if run else 'test:%s' % machine.workload if machine and machine.workload else ''
+                    task = WorkflowTask.objects.filter(worker=capability, state='RUNNING').first() if capability else None
+                    expected = 'workflow:%d' % task.pk if task else 'training:%s' % run.pk if run else 'test:%s' % machine.workload if machine and machine.workload else ''
                     if not expected or current != expected:
                         return redirect(request, worker['url'], error='The workload changed. Refresh and try again.')
-                    if run:
+                    if task:
+                        WorkflowTask.objects.filter(pk=task.pk, state='RUNNING').update(cancel_requested=True)
+                    elif run:
                         if TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE, cancel_requested=False).update(cancel_requested=True):
                             record_event('training.cancel.requested', run, request.user.pk, actor_id=request.user.pk)
                     elif machine:
@@ -289,6 +300,8 @@ def detail(request, pk):
                 if TrainingRun.objects.filter(pk=run.pk, state__in=TRAINING_ACTIVE).update(state='FAILED', error='Worker disconnected by its owner.', finished=timezone.now(), updated=timezone.now()):
                     run.refresh_from_db()
                     record_event('training.interrupted', run, run.owner_id, {'reason': 'worker_disconnected'}, actor_id=request.user.pk)
+            if capability:
+                WorkflowTask.objects.filter(worker=capability, state='RUNNING').update(state='FAILED', cancel_requested=True, error='Worker disconnected by its owner.', finished=timezone.now())
             record_event('worker.disconnected', machine or capability, request.user.pk, actor_id=request.user.pk)
         return redirect(request, worker['url'])
     from OpenBench.worker_diagnostics import diagnose_test, diagnose_training

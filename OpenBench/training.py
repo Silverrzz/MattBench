@@ -54,6 +54,8 @@ def default_settings():
 
 def worker_requirement_errors(info, config, disk_required=None, dataset=None):
     errors = []
+    if config.get('training_profile', {}).get('data_tool') and 'profile-dataset-tools-v1' not in info.get('capabilities', []):
+        errors.append('Update this worker to install the profile’s dataset tools when claiming a workload.')
     if config.get('dataset_format') == 'wf' and 'wakformat-v1' not in info.get('capabilities', []):
         errors.append('Update this worker to support DuckChess Wakformat training.')
     minimum = config.get('training_profile', {}).get('rust_minimum')
@@ -206,10 +208,27 @@ def validate_schedule(files, config):
     return config
 
 
-def resolve_inputs(run):
+def resolve_hf_source(source, repositories, owner_id, stage):
     from huggingface_hub import HfApi
+    from OpenBench.dataset_manifest import resolve_dataset
+    key = (source['repo'], source['ref'])
+    if key not in repositories:
+        repositories[key] = HfApi(token=hf_token(owner_id)).dataset_info(source['repo'], revision=source['ref'], files_metadata=True)
+    info = repositories[key]
+    if not re.fullmatch(r'[0-9a-f]{40}', info.sha):
+        raise ValidationError('Could not pin the dataset revision.')
+    metadata = resolve_dataset(source['repo'], info, source['patterns'], hf_token(owner_id))
+    files = metadata.pop('files')
+    if source.get('files'):
+        pinned = {file['path']: file for file in source['files']}
+        files = [file for file in files if file['path'] in pinned]
+        if set(pinned) != {file['path'] for file in files} or any(file['size'] != pinned[file['path']]['size'] or pinned[file['path']].get('sha256') and file.get('sha256') != pinned[file['path']]['sha256'] for file in files):
+            raise ValidationError('Pinned dataset file selection changed.')
+    return {**metadata, 'commit': info.sha}, [{**file, 'repo': source['repo'], 'commit': info.sha, 'stage': stage} for file in files]
+
+
+def resolve_inputs(run):
     config = run.snapshot['settings']
-    api = HfApi(token=hf_token(run.owner_id))
     sources = run.dataset.get('stages') or [run.dataset]
     stages = []
     selected = []
@@ -221,15 +240,14 @@ def resolve_inputs(run):
         for source in stage_sources(group):
             key = (source['repo'], source['ref'], tuple(source['patterns']))
             if key not in resolved:
-                repo_key = key[:2]
-                if repo_key not in repositories:
-                    repositories[repo_key] = api.dataset_info(source['repo'], revision=source['ref'], files_metadata=True)
-                info = repositories[repo_key]
-                if not re.fullmatch(r'[0-9a-f]{40}', info.sha):
-                    raise ValidationError('Could not pin the dataset revision.')
-                from OpenBench.dataset_manifest import resolve_dataset
-                metadata = resolve_dataset(source['repo'], info, source['patterns'], hf_token(run.owner_id))
-                files = [{**file, 'repo': source['repo'], 'commit': info.sha, 'stage': index} for file in metadata.pop('files')]
+                if source.get('provider'):
+                    from OpenBench.workflow_assets import resolve_source
+                    native = resolve_source(source, run.owner)
+                    source.update(native)
+                    metadata = {**native, 'manifest_present': False}
+                    files = [{**file, 'repo': native['repo'], 'commit': native['commit'], 'stage': index} for file in native['files']]
+                else:
+                    metadata, files = resolve_hf_source(source, repositories, run.owner_id, index)
                 indices = []
                 for file in files:
                     file_key = (file['repo'], file['commit'], file['path'])
@@ -237,7 +255,7 @@ def resolve_inputs(run):
                         file_indices[file_key] = len(selected)
                         selected.append(file)
                     indices.append(file_indices[file_key])
-                resolved[key] = {**metadata, 'commit': info.sha, 'size': sum(file['size'] for file in files), 'file_indices': indices}
+                resolved[key] = {**metadata, 'commit': metadata['commit'], 'size': sum(file['size'] for file in files), 'file_indices': indices}
             pinned.append({**source, **resolved[key]})
         indices = list(dict.fromkeys(index for source in pinned for index in source['file_indices']))
         stages.append({**group, 'sources': pinned, 'file_indices': indices, 'size': sum(selected[i]['size'] for i in indices)} if group.get('sources') else pinned[0])
@@ -266,6 +284,8 @@ def download_access(run, file_index, stage=None):
     from OpenBench.training_datasets import dataset_input
     dataset = dataset_input(run, stage)
     file = dataset['files'][file_index]
+    if file.get('provider'):
+        return {'proxy': True, 'size': file['size']}
     revision = file.get('commit', dataset['commit'])
     metadata = get_hf_file_metadata(hf_hub_url(file.get('repo', dataset['repo']), file['path'], repo_type='dataset', revision=revision), token=hf_token(run.owner_id))
     if metadata.size != file['size'] or metadata.commit_hash != revision:

@@ -27,6 +27,8 @@ from OpenBench.schedule_builder_views import schedule_builder
 from OpenBench import training_checkpoints, training_datasets
 from OpenBench import worker_views, notification_views
 
+from OpenBench import workflow_api
+
 urlpatterns = [
     django.urls.path('profile/notifications/', notification_views.preferences),
     django.urls.path('manage/notifications/', notification_views.configuration),
@@ -61,6 +63,18 @@ urlpatterns = [
     django.urls.path('datagen/<int:pk>/huggingface/', training_views.dataset_upload),
     django.urls.path('api/training/register/', training_api.register),
     django.urls.path('api/training/claim/', training_api.claim),
+    django.urls.path('workflows/tasks/<int:pk>/', workflow_views.task_detail),
+    django.urls.path('workflows/tasks/<int:pk>/artifacts/<int:artifact_id>/', workflow_views.task_detail),
+    django.urls.path('api/training/tasks/<int:pk>/control/', workflow_api.control),
+    django.urls.path('api/training/tasks/<int:pk>/report/', workflow_api.report),
+    django.urls.path('api/training/tasks/<int:pk>/artifacts/', workflow_api.upload),
+    django.urls.path('api/training/tasks/<int:pk>/outputs/', workflow_api.outputs),
+    django.urls.path('api/training/tasks/<int:pk>/dataset/<int:file_index>/', workflow_api.access),
+    django.urls.path('api/training/tasks/<int:pk>/dataset/<int:file_index>/file/', workflow_api.download),
+    django.urls.path('api/training/tasks/<int:pk>/xet-token/', workflow_api.xet_token),
+    django.urls.path('api/training/tasks/<int:pk>/upload/prepare/', workflow_api.prepare_upload),
+    django.urls.path('api/training/tasks/<int:pk>/upload/instruction/', workflow_api.upload_instruction),
+    django.urls.path('api/training/tasks/<int:pk>/upload/publish/', workflow_api.publish),
     django.urls.path('api/training/<int:pk>/recover/', training_api.recover),
     django.urls.path('api/training/<int:pk>/report/', training_api.report),
     django.urls.path('api/training/<int:pk>/control/', training_api.control),

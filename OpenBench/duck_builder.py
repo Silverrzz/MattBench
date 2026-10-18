@@ -11,9 +11,9 @@ def generate(spec, profile):
     from OpenBench.training_profiles import profile_settings
     if len(spec['layers']) != 3 or spec['layers'][0] % 4:
         raise ValidationError('The Wakwak export requires three hidden layers and L1 divisible by four.')
-    if spec['optimizer'] != 'adamw' or not spec['psqt_inputs'] or spec['input_buckets'] != 1:
-        raise ValidationError('This DuckChess profile requires AdamW and one bucket of piece inputs.')
-    if any(spec[key] for key in ('threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'merged_king_planes', 'wdl_outputs', 'uncertainty_outputs', 'skip_connection', 'piece_count_sampling', 'result_filtering', 'wdl_filtered')):
+    if spec['optimizer'] != 'adamw':
+        raise ValidationError('This DuckChess profile requires AdamW.')
+    if any(spec[key] for key in ('wdl_outputs', 'uncertainty_outputs', 'skip_connection', 'piece_count_sampling', 'result_filtering', 'wdl_filtered')):
         raise ValidationError('This feature is not supported by the DuckChess profile.')
     if not spec['score_outputs'] or spec['score_buckets'] != 1 or not spec['pairwise_activation'] or spec['pairwise_layers'] != [1] or not spec['dual_activation'] or spec['dual_layers'] != [2]:
         raise ValidationError('Use the Wakwak graph: pairwise L1, dual L2, and one score output.')
@@ -26,6 +26,8 @@ def generate(spec, profile):
     if spec['export_mode'] != 'legacy' or spec['feature_format'] != 'i16' or spec['split_features']:
         raise ValidationError('The DuckChess profile uses the Wakwak integer export format.')
     text = Template((Path(__file__).parent / 'data/duck_main.rs').read_text()).substitute(
+        base_inputs=('ChessBucketsMirrored::new([' + ', '.join(str(spec['king_layout'][rank * 8 + file]) for rank in range(8) for file in range(4)) + '])') if spec['mirrored'] else ('ChessBuckets::new([' + ', '.join(map(str, spec['king_layout'])) + '])'),
+        threats=str(spec['threat_inputs']).lower(), pairs=str(spec['pawn_pair_inputs']).lower(), clock=str(spec['half_move_clock']).lower(), merged=str(spec['merged_king_planes']).lower(), psqt=str(spec['psqt_inputs']).lower(),
         l1=spec['layers'][0], l2=spec['layers'][1], l3=spec['layers'][2], scale=repr(spec['eval_scale']),
         duck=str(spec['duck_inputs']).lower(), mirrored=str(spec['mirrored']).lower(),
         superbatches=spec['superbatches'], dataset_ranges=', '.join('(%d, %d)' % (row['start'], row['end']) for row in dataset_stages(spec)),
@@ -33,11 +35,11 @@ def generate(spec, profile):
         batch_size=spec['batch_size'], batches=spec['batches_per_superbatch'], save_every=spec['save_every'],
         lr_scheduler=lr_scheduler(spec), wdl_rows=', '.join('(%d, %d, %s, %s, %d)' % (stage['start'], stage['end'], repr(float(stage['initial'])), repr(float(stage['final'])), ('constant', 'linear', 'cosine').index(stage['kind'])) for stage in spec['wdl_stages']),
     )
-    files = {SOURCE: text, 'LICENSE.txt': assets()[3]}
+    files = {SOURCE: text, 'LICENSE.txt': assets()[3], 'examples/feature_inputs.rs': assets()[1], 'examples/mattbench_wak_loader.rs': Template((Path(__file__).parent / 'data/duck_loader.rs').read_text()).substitute(seed=spec['seed'])}
     settings = {**DEFAULT_SETTINGS, **profile_settings(profile), 'backend': spec['backend'], 'threads': spec['threads'], 'resume_supported': True,
                 'build': ['cargo', 'build', '--release', '--manifest-path', 'crates/bullet_lib/Cargo.toml', '--example', 'mattbench', '--features', spec['backend']],
                 'shuffle_seed': spec['seed'], **{key: spec[key] for key in ('shuffle', 'interleave', 'shuffle_memory_mb', 'interleave_fan_in', 'dataset_shard_mb')}}
-    features = 768 + 64 * spec['duck_inputs']
+    features = ((704 if spec['merged_king_planes'] else 768) * spec['psqt_inputs'] + 11 * spec['half_move_clock']) * spec['input_buckets'] + 4560 * spec['pawn_pair_inputs'] + (59808 if spec['pawn_pair_inputs'] else 60144) * spec['threat_inputs'] + 64 * spec['duck_inputs']
     l1, l2, l3 = spec['layers']
     size = (features * l1 + l1) * 2 + l1 * l2 + l2 * 4 + 2 * l2 * l3 * 4 + l3 * 4 + l3 * 4 + 4
     files[MANIFEST] = json.dumps({'version': MANIFEST_VERSION, 'spec': spec, 'training_profile': profile,

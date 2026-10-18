@@ -43,6 +43,9 @@ def games(path, reporter):
 
 
 def build_tool(directory, environment, reporter, command):
+    existing = reporter.job.get('worker_info', {}).get('wakformat_path')
+    if existing:
+        return Path(existing)
     specification = reporter.job['snapshot']['settings']['training_profile']['data_tool']
     root = directory / 'wakformat-tool'
     root.mkdir()

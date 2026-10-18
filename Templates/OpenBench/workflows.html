@@ -3,7 +3,6 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
 {% block page_actions %}<a class="button" href="/training/profiles/">Training profiles</a><a class="button button-primary" href="/workflows/new/">New workflow</a>{% endblock %}
 {% block content %}
-<p>Connect data generation, uploads, training and tests. Each run keeps the configuration and profile revision it started with.</p>
 <h2>Your workflows</h2>
 <table class="stripes wrappable"><thead><tr><th>Name</th><th>Version</th><th>Updated</th></tr></thead><tbody>{% for row in workflows %}<tr><td><a href="/workflows/{{ row.pk }}/">{{ row.name }}</a></td><td>{{ row.version }}</td><td>{{ row.updated }}</td></tr>{% empty %}<tr><td colspan="3">Create a workflow to get started.</td></tr>{% endfor %}</tbody></table>
 <h2>Recent runs</h2>

@@ -12,12 +12,14 @@ BUILTINS = {
     'standard': {'name': 'Standard chess', 'version': 1, 'generator': 'standard', 'variant': 'standard',
                  'bullet_repo': BULLET_REPOSITORY, 'bullet_ref': DEFAULT_BULLET_COMMIT, 'format': 'vf',
                  'features': ['psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'merged_king_planes'],
-                 'optimizers': ['adamw', 'ranger']},
+                 'optimizers': ['adamw', 'ranger'],
+                 'data_tool': {'kind': 'pawnocchio', 'repo': 'https://github.com/JonathanHallstrom/pawnocchio', 'commit': '85df99c903ee6b90dd593a71009354699a81bcc5',
+                               'combiner': {'repo': 'https://github.com/JonathanHallstrom/viriformat_combiner', 'commit': '045a3e399ca971e8153847e5f3f7e55e3e5a8103'}}},
     'duckchess': {'name': 'DuckChess', 'version': 1, 'generator': 'duckchess', 'variant': 'duck',
                   'bullet_repo': 'https://github.com/Silverrzz/bullet', 'bullet_ref': DUCK_COMMIT, 'format': 'wf',
-                  'features': ['psqt_inputs', 'duck_inputs'], 'optimizers': ['adamw'],
+                  'features': ['psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'merged_king_planes', 'duck_inputs'], 'optimizers': ['adamw'],
                   'rust_minimum': '1.95.0',
-                  'data_tool': {'repo': 'https://github.com/Silverrzz/wakformat', 'commit': WAKFORMAT_COMMIT}},
+                  'data_tool': {'kind': 'wakformat', 'repo': 'https://github.com/Silverrzz/wakformat', 'commit': WAKFORMAT_COMMIT}},
 }
 
 
@@ -34,10 +36,16 @@ def validate_profile(settings):
         raise ValidationError('Use an HTTPS GitHub Bullet repository.')
     if not isinstance(source['bullet_ref'], str) or not re.fullmatch(r'[0-9a-f]{40}', source['bullet_ref']):
         raise ValidationError('Pin the profile to a full Bullet commit.')
-    if generator == 'duckchess':
-        tool = source['data_tool']
-        if not isinstance(tool, dict) or set(tool) != {'repo', 'commit'} or not isinstance(tool['repo'], str) or not isinstance(tool['commit'], str) or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', tool['repo']) or not re.fullmatch(r'[0-9a-f]{40}', tool['commit']):
-            raise ValidationError('Pin the Wakformat tool to a GitHub repository and full commit.')
+    tool = source['data_tool']
+    if not isinstance(tool, dict) or set(tool) - {'kind', 'repo', 'commit', 'combiner'}:
+        raise ValidationError('Choose a valid dataset tool provider.')
+    tool = {**copy.deepcopy(BUILTINS[generator]['data_tool']), **tool}
+    if tool['kind'] != ('wakformat' if generator == 'duckchess' else 'pawnocchio') or generator == 'duckchess' and 'combiner' in tool:
+        raise ValidationError('The dataset tools must match the profile’s format.')
+    for item in [tool, *([tool.get('combiner')] if generator == 'standard' else [])]:
+        if not isinstance(item, dict) or not isinstance(item.get('repo'), str) or not isinstance(item.get('commit'), str) or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', item['repo']) or not re.fullmatch(r'[0-9a-f]{40}', item['commit']):
+            raise ValidationError('Pin dataset tools to GitHub repositories and full commits.')
+    source['data_tool'] = tool
     return source
 
 

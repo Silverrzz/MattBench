@@ -6,8 +6,9 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
@@ -27,23 +28,7 @@ def body(request):
 
 
 def example():
-    steps = []
-    previous = None
-    edges = []
-    for key, name, kind, config in (
-        ('generate', 'Generate 10M games', 'datagen', {'games': 10000000, 'template': ''}),
-        ('upload', 'Upload dataset', 'upload', {'repo': '', 'private': True}),
-        ('train', 'Train candidate', 'train', {'schedule': ''}),
-        ('nodes', 'Fixed-node SPRT', 'test', {'template': '', 'control': 'nodes', 'nodes': 25000}),
-        ('stc', 'STC SPRT', 'test', {'template': '', 'control': 'stc', 'time_control': '10.0+0.1'}),
-        ('ltc', 'LTC SPRT', 'test', {'template': '', 'control': 'ltc', 'time_control': '60.0+0.6'}),
-    ):
-        inputs = {'dataset': previous['id']} if kind in ('upload', 'train') else {'network': 'train'} if kind == 'test' else {}
-        steps.append({'id': key, 'name': name, 'kind': kind, 'config': config, 'inputs': inputs, 'worker': {}, 'join': 'all', 'retries': 0, 'timeout_hours': 168})
-        if previous:
-            edges.append({'from': previous['id'], 'to': key, 'on': ['pass' if previous['kind'] == 'test' else 'completed']})
-        previous = steps[-1]
-    return {'profile': 'standard', 'engine': '', 'steps': steps, 'edges': edges}
+    return {'profile': 'standard', 'engine': '', 'steps': [], 'edges': [], 'layout': {'nodes': {}, 'viewport': {'x': 0, 'y': 0, 'zoom': 1}}}
 
 
 @login_required(login_url='/login/')
@@ -55,7 +40,7 @@ def editor(request, identifier=None, create=False):
     if request.method == 'POST':
         try:
             data = body(request)
-            definition = validate_definition(data.get('definition'))
+            definition = validate_definition(data.get('definition'), draft=True)
             name = data.get('name', '').strip()
             if not name or len(name) > 128:
                 raise ValidationError('Enter a workflow name of at most 128 characters.')
@@ -71,13 +56,28 @@ def editor(request, identifier=None, create=False):
     if not row and not create:
         return render(request, 'workflows.html', {'page_title': 'Workflows', 'workflows': Workflow.objects.filter(owner=request.user, archived=False), 'runs': WorkflowRun.objects.filter(owner=request.user).select_related('workflow')[:50]})
     from OpenBench.schedule_builder import builder_state
-    schedules = [{'id': str(schedule.pk), 'name': schedule.name, 'profile': (builder_state(schedule)[0] or {}).get('training_profile', 'standard'), 'engine': str(schedule.engine_id or '')} for schedule in schedules_for(request.user)]
-    templates = [{'id': test.pk, 'name': '#%d · %s · %s' % (test.pk, test.dev_engine, test.dev.name), 'kind': 'datagen' if test.test_mode == 'DATAGEN' else 'test', 'engine': test.dev_engine, 'variant': test.execution.get('fastchess_variant', 'standard')} for test in Test.objects.filter(deleted=False, test_mode__in=('DATAGEN', 'SPRT')).exclude(execution__has_key='demo').select_related('dev').order_by('-id')[:1000]]
+    schedules = [{'id': str(schedule.pk), 'name': schedule.name, 'profile': (builder_state(schedule)[0] or {}).get('training_profile', 'standard'), 'engine': str(schedule.engine_id or ''), 'spec': builder_state(schedule)[0]} for schedule in schedules_for(request.user)]
+    from OpenBench.models import Network, OpeningBook, TrainingArtifact, TrainingCheckpoint, TrainingDataset, WorkflowArtifact
+    engine_rows = list(EngineConfig.objects.filter(enabled=True))
+    from OpenBench.workflow_workloads import defaults
+    engine_defaults = {str(engine.pk): {kind: defaults(engine, kind, 'standard') for kind in ('datagen', 'test', 'tune')} for engine in engine_rows}
     workers = [{'id': 'cpu:%d' % worker.pk, 'name': worker.info.get('machine_name') or 'CPU worker %d' % worker.pk} for worker in Machine.objects.filter(user=request.user).order_by('-updated')[:500]]
-    workers += [{'id': 'gpu:' + str(worker.pk), 'name': worker.name + ' · GPU'} for worker in TrainingWorker.objects.filter(owner=request.user, enabled=True)]
+    workers += [{'id': 'gpu:' + str(worker.pk), 'name': worker.name + (' · CPU' if worker.info.get('backend') == 'cpu' else ' · GPU')} for worker in TrainingWorker.objects.filter(owner=request.user, enabled=True, machine__isnull=True)]
+    from OpenBench.workflow_contracts import PORTS
+    from OpenBench.schedule_builder import DEFAULT_SPEC
+    from OpenBench.workflow_schedule import default_spec
     return render(request, 'workflow_editor.html', {'page_title': row.name if row else 'New workflow', 'workflow_data': {
         'id': str(row.pk) if row else '', 'version': row.version if row else 0, 'name': row.name if row else '', 'definition': row.definition if row else example(),
-        'profiles': profiles(), 'engines': list(EngineConfig.objects.filter(enabled=True).values('id', 'name')), 'schedules': schedules, 'templates': templates, 'workers': workers,
+        'profiles': profiles(), 'engines': [{'id': str(engine.pk), 'name': engine.name} for engine in engine_rows], 'schedules': schedules, 'workers': workers, 'engine_defaults': engine_defaults,
+        'books': [{'id': book.name, 'name': book.name, 'variants': list(book.variants.values_list('name', flat=True))} for book in OpeningBook.objects.filter(enabled=True)],
+        'networks': list(Network.objects.values('sha256', 'name', 'engine')),
+        'ports': PORTS, 'schedule_defaults': {profile['id']: default_spec(profile) for profile in profiles()},
+        'datasets': [{'id': str(row.pk), 'name': row.name} for row in TrainingDataset.objects.filter(owner=request.user, archived=False)],
+        'datagens': [{'id': row.pk, 'name': '#%d - %s' % (row.pk, row.info or row.dev_engine)} for row in Test.objects.filter(author=request.user.username, test_mode='DATAGEN', deleted=False).order_by('-pk')[:500]],
+        'tunes': [{'id': row.pk, 'name': '#%d - %s' % (row.pk, row.info or row.dev_engine)} for row in Test.objects.filter(author=request.user.username, test_mode='SPSA', deleted=False).order_by('-pk')[:500]],
+        'checkpoints': [{'id': row.pk, 'name': '%s - SB %d' % (row.run.name, row.superbatch)} for row in TrainingCheckpoint.objects.filter(run__owner=request.user).select_related('run')[:500]],
+        'workflow_artifacts': [{'id': row.pk, 'name': '%s / %s' % (row.task.snapshot['node']['name'], row.name)} for row in WorkflowArtifact.objects.filter(task__owner=request.user).select_related('task').order_by('-pk')[:500]],
+        'artifacts': [{'id': row.pk, 'name': '%s / %s' % (row.run.name, row.name)} for row in TrainingArtifact.objects.filter(run__owner=request.user).select_related('run').order_by('-pk')[:500]],
     }})
 
 
@@ -105,9 +105,9 @@ def run_data(run):
     steps = []
     for step in run.steps.all():
         node = nodes[step.key]
-        url = '/training/%d/' % step.training_id if step.training_id else '/%s/%d/' % ('datagen' if node['kind'] == 'datagen' else 'test', step.test_id) if step.test_id else ''
+        url = '/training/%d/' % step.training_id if step.training_id else '/%s/%d/' % ('datagen' if node['kind'] == 'datagen' else 'test', step.test_id) if step.test_id else '/workflows/tasks/%d/' % step.task_id if step.task_id else ''
         steps.append({'id': step.key, 'name': node['name'], 'kind': node['kind'], 'state': step.state, 'outcome': step.outcome, 'attempts': step.attempts,
-                      'message': step.message, 'outputs': step.outputs, 'history': step.history, 'url': url, 'worker': node['worker']})
+                      'message': step.message, 'outputs': step.outputs, 'history': step.history, 'url': url, 'worker': node['worker'], 'task': step.task_id})
     return {'id': str(run.pk), 'state': run.state, 'version': run.version, 'profile': run.snapshot['training_profile'], 'steps': steps, 'message': run.message}
 
 
@@ -161,8 +161,9 @@ def training_profiles(request):
                 raise ValidationError('Choose a profile identifier and name.')
             generator = request.POST.get('generator')
             value = {'generator': generator, 'bullet_repo': request.POST.get('bullet_repo', ''), 'bullet_ref': request.POST.get('bullet_ref', '')}
-            if generator == 'duckchess':
-                value['data_tool'] = {'repo': request.POST.get('tool_repo', ''), 'commit': request.POST.get('tool_commit', '')}
+            value['data_tool'] = {'repo': request.POST.get('tool_repo', ''), 'commit': request.POST.get('tool_commit', '')}
+            if generator == 'standard':
+                value['data_tool']['combiner'] = {'repo': request.POST.get('combiner_repo', BUILTINS['standard']['data_tool']['combiner']['repo']), 'commit': request.POST.get('combiner_commit', BUILTINS['standard']['data_tool']['combiner']['commit'])}
             value = validate_profile(value)
             with transaction.atomic():
                 current = TrainingProfile.objects.select_for_update().filter(pk=identifier).first()
@@ -170,8 +171,31 @@ def training_profiles(request):
                 if int(request.POST.get('version', 0)) != version:
                     raise ValidationError('This profile changed. Reload before saving.')
                 TrainingProfile.objects.update_or_create(pk=identifier, defaults={'name': name, 'settings': value, 'version': version + 1, 'enabled': request.POST.get('enabled') == 'on'})
+            return redirect('/training/profiles/')
         except (ValidationError, ValueError, TypeError) as exception:
             error = error_text(exception)
     available = profiles()
-    disabled = TrainingProfile.objects.filter(enabled=False)
-    return render(request, 'training_profiles.html', {'page_title': 'Training profiles', 'profiles': available, 'disabled_profiles': disabled, 'form_error': error})
+    labels = {'psqt_inputs': 'Piece squares', 'threat_inputs': 'Threats', 'pawn_pair_inputs': 'Pawn pairs', 'half_move_clock': 'Half-move clock', 'merged_king_planes': 'Merged kings', 'duck_inputs': 'Duck square'}
+    disabled = [{**validate_profile(row.settings), 'id': row.pk, 'name': row.name, 'version': row.version, 'disabled': True} for row in TrainingProfile.objects.filter(enabled=False)]
+    for profile in [*available, *disabled]:
+        profile['feature_labels'] = [labels.get(key, key) for key in profile['features']]
+        profile['source_label'] = profile['bullet_repo'].removeprefix('https://github.com/').replace('/', ' / ')
+    return render(request, 'training_profiles.html', {'page_title': 'Training profiles', 'profiles': available, 'disabled_profiles': disabled, 'form_error': error,
+        'profile_editor_data': {'profiles': [*available, *disabled], 'error': error, 'submitted': request.POST.dict() if error else {}}})
+
+
+@login_required(login_url='/login/')
+@require_http_methods(['GET'])
+def task_detail(request, pk, artifact_id=None):
+    from OpenBench.models import WorkflowTask
+    from OpenBench.training_storage import artifact_path
+    from OpenBench.views import render
+    enabled(request.user)
+    task = get_object_or_404(WorkflowTask.objects.select_related('worker'), pk=pk, owner=request.user)
+    if artifact_id:
+        artifact = get_object_or_404(task.artifacts, pk=artifact_id)
+        response = FileResponse(artifact_path(artifact.path).open('rb'), as_attachment=True, filename=artifact.name)
+        response['X-Checksum-SHA256'] = artifact.sha256
+        return response
+    return render(request, 'workflow_task.html', {'page_title': task.snapshot['node']['name'], 'task': task,
+        'workflow_run': task.snapshot['workflow']['run'], 'configuration': json.dumps(task.snapshot['node']['config'], indent=2), 'outputs': json.dumps(task.outputs, indent=2)})

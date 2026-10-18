@@ -58,6 +58,7 @@ class WorkflowStep(models.Model):
     test = models.ForeignKey('OpenBench.Test', on_delete=models.PROTECT, null=True, blank=True)
     training = models.ForeignKey('OpenBench.TrainingRun', on_delete=models.PROTECT, null=True, blank=True)
     upload = models.ForeignKey('OpenBench.DatasetUpload', on_delete=models.PROTECT, null=True, blank=True)
+    task = models.ForeignKey('OpenBench.WorkflowTask', on_delete=models.PROTECT, null=True, blank=True)
     started = models.DateTimeField(null=True, blank=True)
     updated = models.DateTimeField(default=timezone.now)
     finished = models.DateTimeField(null=True, blank=True)
@@ -65,3 +66,46 @@ class WorkflowStep(models.Model):
     class Meta:
         ordering = ['id']
         constraints = [models.UniqueConstraint(fields=['run', 'key'], name='unique_workflow_step')]
+
+
+class WorkflowTask(models.Model):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    snapshot = models.JSONField(default=dict)
+    inputs = models.JSONField(default=dict)
+    outputs = models.JSONField(default=dict)
+    state = models.CharField(max_length=16, default='QUEUED', db_index=True)
+    worker = models.ForeignKey('OpenBench.TrainingWorker', on_delete=models.PROTECT, null=True, blank=True)
+    claim_id = models.UUIDField(null=True, blank=True, unique=True)
+    report_sequence = models.PositiveIntegerField(default=0)
+    metrics = models.JSONField(default=dict)
+    log = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+    cancel_requested = models.BooleanField(default=False)
+    created = models.DateTimeField(default=timezone.now)
+    updated = models.DateTimeField(default=timezone.now)
+    finished = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['worker'], condition=models.Q(state='RUNNING'), name='one_workflow_task_per_worker')]
+
+
+class WorkflowArtifact(models.Model):
+    task = models.ForeignKey(WorkflowTask, on_delete=models.PROTECT, related_name='artifacts')
+    name = models.CharField(max_length=256)
+    path = models.CharField(max_length=256)
+    size = models.BigIntegerField()
+    sha256 = models.CharField(max_length=64)
+    metadata = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['task', 'name'], name='unique_workflow_artifact')]
+
+
+class WorkflowAssetPin(models.Model):
+    run = models.ForeignKey(WorkflowRun, on_delete=models.CASCADE, related_name='asset_pins')
+    artifact = models.ForeignKey('OpenBench.TrainingArtifact', on_delete=models.PROTECT, null=True, blank=True)
+    checkpoint = models.ForeignKey('OpenBench.TrainingCheckpoint', on_delete=models.PROTECT, null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['run', 'artifact'], name='workflow_training_artifact_pin'),
+                       models.UniqueConstraint(fields=['run', 'checkpoint'], name='workflow_checkpoint_pin')]

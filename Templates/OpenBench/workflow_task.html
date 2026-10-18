@@ -1,0 +1,10 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'workflows.css' %}?{{ static_version }}">{% endblock %}
+{% block page_actions %}<a class="button" href="/workflows/runs/{{ workflow_run }}/">Workflow run</a>{% endblock %}
+{% block content %}
+<article class="workflow-card"><div class="workflow-actions"><strong>{{ task.state }}</strong>{% if task.worker %}<a href="/workers/{{ task.worker_id }}/">{{ task.worker.name }}</a>{% endif %}</div>{% if task.error %}<p class="training-error">{{ task.error }}</p>{% endif %}</article>
+<article class="workflow-card"><h2>Files</h2><table class="stripes"><thead><tr><th>Name</th><th>Bytes</th></tr></thead><tbody>{% for artifact in task.artifacts.all %}<tr><td><a href="/workflows/tasks/{{ task.pk }}/artifacts/{{ artifact.pk }}/">{{ artifact.name }}</a></td><td>{{ artifact.size }}</td></tr>{% empty %}<tr><td colspan="2">No files saved yet.</td></tr>{% endfor %}</tbody></table></article>
+<article class="workflow-card"><h2>Log</h2><pre class="workflow-task-log">{{ task.log|default:'Waiting for worker output.' }}</pre></article>
+<article class="workflow-card"><details><summary>Configuration</summary><pre>{{ configuration }}</pre></details><details><summary>Outputs</summary><pre>{{ outputs }}</pre></details></article>
+{% endblock %}

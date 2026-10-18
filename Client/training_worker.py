@@ -89,11 +89,11 @@ def preserve_work_directory(path, root):
 
 def cleanup_runs(root):
     for record in root.glob('.process-*.json'):
-        match = re.fullmatch(r'\.process-([0-9]+(?:-[a-f0-9]{32})?)(?:-[a-f0-9]+)?\.json', record.name)
+        match = re.fullmatch(r'\.process-((?:workflow-)?[0-9]+(?:-[a-f0-9]{32})?)(?:-[a-f0-9]+)?\.json', record.name)
         if match:
             stop_previous(root / match[1])
     for directory in root.iterdir():
-        if re.fullmatch(r'[0-9]+(?:-[a-f0-9]{32})?', directory.name):
+        if re.fullmatch(r'(?:workflow-)?[0-9]+(?:-[a-f0-9]{32})?', directory.name):
             stop_previous(directory)
             preserve_work_directory(directory, root)
     remove_work_directory(root / 'transfer-cache', root)
@@ -299,13 +299,14 @@ class Reporter:
 def child_environment(directory, job):
     keep = ('PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'CUDA_PATH', 'CUDA_HOME', 'CUDA_VISIBLE_DEVICES', 'HIP_PATH', 'ROCM_PATH', 'HIP_VISIBLE_DEVICES', 'RUSTUP_HOME', 'INCLUDE', 'LIB', 'LIBPATH', 'VCToolsInstallDir', 'VSINSTALLDIR', 'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion')
     environment = {key: value for key, value in os.environ.items() if key in keep or rocm_environment_variable(key)}
-    environment = windows_build_environment(environment)
+    if not job.get('workflow_task'):
+        environment = windows_build_environment(environment)
     home = directory / 'home'
     home.mkdir(exist_ok=True)
     temporary = directory / 'tmp'
     temporary.mkdir(exist_ok=True)
     environment.setdefault('RUSTUP_HOME', str(Path.home() / '.rustup'))
-    environment.update(HOME=str(home), USERPROFILE=str(home), CARGO_HOME=str(home / '.cargo'), CARGO_TARGET_DIR=str(directory / 'bullet' / 'target'), TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary), GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, CARGO_BUILD_JOBS=str(job['worker_info']['threads']), MATTBENCH_JOB=str(directory / 'job.json'), MATTBENCH_OUTPUT_DIR=str(directory / 'outputs'), MATTBENCH_DATA_DIR=str(directory / 'data'), MATTBENCH_NET_NAME=job['name'])
+    environment.update(HOME=str(home), USERPROFILE=str(home), CARGO_HOME=str(home / '.cargo'), CARGO_TARGET_DIR=str(directory / 'bullet' / 'target'), TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary), GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, CARGO_BUILD_JOBS=str(job['worker_info']['threads']), MATTBENCH_JOB=str(directory / 'job.json'), MATTBENCH_OUTPUT_DIR=str(directory / 'outputs'), MATTBENCH_DATA_DIR=str(directory / 'data'), MATTBENCH_NET_NAME=job['name'], MATTBENCH_PARAMETERS=json.dumps(job.get('parameters', {}), sort_keys=True))
     return environment
 
 
@@ -803,6 +804,11 @@ def execute(connection, job, root, pawnocchio):
             save_outputs(connection, job, directory, reporter)
             reporter.stage('COMPLETED')
             return False
+        try:
+            from .dataset_tools import ensure_tools
+        except ImportError:
+            from dataset_tools import ensure_tools
+        pawnocchio = ensure_tools(job, root, directory, environment, reporter, command)
         stage_data, data = prepare_stage_datasets(connection, job, directory, reporter, pawnocchio, environment, cache_root, dataset_caches)
         reporter.stage('COMPILING')
         repository = directory / 'bullet'
@@ -965,6 +971,17 @@ class WorkerSession:
         if self.pending_test:
             self.registration['claim_id'] = str(uuid.uuid4())
             write_json(self.identity_path, self.registration)
+        if result.get('assignment', {}).get('type') == 'workflow-task':
+            try:
+                from .workflow_runtime import execute as execute_task
+            except ImportError:
+                from workflow_runtime import execute as execute_task
+            interrupted = execute_task(self.connection, result['assignment']['task'], self.args.directory)
+            if interrupted:
+                raise SystemExit()
+            self.registration['claim_id'] = str(uuid.uuid4())
+            write_json(self.identity_path, self.registration)
+            return True
         if not result['run']:
             return False
         job = result['run']
@@ -1024,7 +1041,7 @@ def main(argv=None, worker_config=None, gpu_info=None):
     parser.add_argument('--pawnocchio-ref', default=os.environ.pop('MATTBENCH_PAWNOCCHIO_REF', PAWNOCCHIO_REF), help='Pinned Pawnocchio commit to fetch and build.')
     parser.add_argument('--combiner-repo', default=os.environ.pop('MATTBENCH_COMBINER_REPO', COMBINER_REPO))
     parser.add_argument('--combiner-ref', default=os.environ.pop('MATTBENCH_COMBINER_REF', COMBINER_REF), help='Pinned Pawnocchio Viriformat combiner commit to fetch and build.')
-    parser.add_argument('--backend', choices=('cuda', 'rocm'), default=os.environ.get('MATTBENCH_TRAINING_BACKEND'))
+    parser.add_argument('--backend', choices=('cuda', 'rocm', 'cpu'), default=os.environ.get('MATTBENCH_TRAINING_BACKEND'))
     parser.add_argument('--device', default=os.environ.get('MATTBENCH_TRAINING_DEVICE'), help='GPU index or UUID; defaults to the first visible GPU')
     parser.add_argument('--gpu-name', default=os.environ.get('MATTBENCH_TRAINING_GPU_NAME'))
     parser.add_argument('--vram-gb', type=float, default=os.environ.get('MATTBENCH_TRAINING_VRAM_GB'))
@@ -1036,8 +1053,8 @@ def main(argv=None, worker_config=None, gpu_info=None):
     parser.add_argument('--execution-image', default='', help='Optional Linux execution image pinned as repository@sha256:digest. Omit to run natively. Include Rust, GPU libraries and cached Cargo dependencies.')
     parser.add_argument('--memory-gb', type=int, default=max(1, int(psutil.virtual_memory().total / 1024 ** 3 * 0.8)))
     args = parser.parse_args(argv)
-    if args.backend not in (None, 'cuda', 'rocm'):
-        parser.error('MATTBENCH_TRAINING_BACKEND must be cuda or rocm.')
+    if args.backend not in (None, 'cuda', 'rocm', 'cpu'):
+        parser.error('MATTBENCH_TRAINING_BACKEND must be cuda, rocm or cpu.')
     args.unified = worker_config is not None
     parsed = urlsplit(args.server)
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1')):
@@ -1061,19 +1078,22 @@ def main(argv=None, worker_config=None, gpu_info=None):
         subprocess.run(['docker', 'image', 'inspect', args.execution_image], check=True, stdout=subprocess.DEVNULL, timeout=30)
     if args.memory_gb < 1:
         parser.error('Memory limit must be positive.')
-    for tool in (('git',) if args.execution_image else ('git', 'cargo', 'rustc')):
+    for tool in (('git',) if args.execution_image or args.backend == 'cpu' else ('git', 'cargo', 'rustc')):
         if not shutil.which(tool):
             parser.error('%s is required on this worker.' % tool)
     gpu_name, vram = args.gpu_name, args.vram_gb
     driver_version = 'kernel-' + platform.release()
-    if gpu_info is None:
+    if args.backend == 'cpu':
+        gpu_info = None
+        gpu_name, vram = 'CPU', 0
+    if gpu_info is None and args.backend != 'cpu':
         try:
             gpu_info = detect_gpu(args.backend, args.device)
         except RuntimeError as error:
             if not args.backend or not gpu_name or not vram:
                 parser.error(str(error))
             print('%s Using explicitly supplied GPU details.' % error)
-    if gpu_info:
+    if gpu_info and gpu_info['backend'] != 'cpu':
         args.backend = gpu_info['backend']
         args.device = gpu_info['device']
         gpu_name = gpu_name if gpu_name is not None else gpu_info['gpu']
@@ -1084,27 +1104,22 @@ def main(argv=None, worker_config=None, gpu_info=None):
     args.device = args.device or os.environ.get(visibility, '0').split(',')[0].strip()
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', args.device):
         parser.error('Choose a single GPU index or UUID.')
-    os.environ[visibility] = args.device
-    if not gpu_name or not vram or vram <= 0 or args.threads <= 0:
+    if args.backend != 'cpu':
+        os.environ[visibility] = args.device
+    if args.threads <= 0 or args.backend != 'cpu' and (not gpu_name or not vram or vram <= 0):
         parser.error('GPU name, positive VRAM and positive threads are required.')
     if args.high_performance_downloads:
         os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
     for name in ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'):
         os.environ.pop(name, None)
-    try:
-        dataset_tools, tool_provenance = build_dataset_tools(args.directory, args.pawnocchio_repo, args.pawnocchio_ref, args.combiner_repo, args.combiner_ref, args.execution_image, args.threads, args.memory_gb)
-    except (OSError, RuntimeError, ValueError, requests.RequestException, subprocess.SubprocessError) as error:
-        parser.error('Dataset tool setup failed: %s' % error)
-    args.pawnocchio = dataset_tools['pawnocchio']
+    args.pawnocchio = None
     import getpass
     username = args.username or registration.get('username') or input('MattBench username: ')
     try:
         from .resource_policy import topology
     except ImportError:
         from resource_policy import topology
-    info = {'workflow_protocol': 1, 'workflow_threads': len(topology()['logical']), 'cpu_topology': topology(), 'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments', 'multi-dataset-stages', 'wakformat-v1'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
-    info['combiner_path'] = str(dataset_tools['combiner'])
-    info['runtime']['dataset_tools'] = tool_provenance
+    info = {'workflow_protocol': 1, 'workflow_threads': len(topology()['logical']), 'cpu_topology': topology(), 'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments', 'multi-dataset-stages', 'wakformat-v1', 'profile-dataset-tools-v1', 'workflow-assets-v1'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(None, args.execution_image, compiler=args.backend != 'cpu')}
     info['runtime']['gpu_driver'] = driver_version.strip()
     if not registration['registered'] or worker_config is not None:
         payload = {'username': username, 'name': args.name, 'info': json.dumps(info), 'worker': registration['worker'], 'token': registration['token'], 'mode': args.mode}
@@ -1127,27 +1142,16 @@ def main(argv=None, worker_config=None, gpu_info=None):
         print('Worker credentials saved in %s.' % identity_path)
         return
     print('Connected %s (%s, %.1f GB). Waiting for training assigned to %s.' % (args.name, gpu_name, vram, username))
+    session = WorkerSession(args, connection, registration, identity_path, directory_lock)
     while True:
         try:
-            cleanup_runs(args.directory)
-            result = connection.request('POST', 'claim/', json={'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'claim_id': registration['claim_id']}).json()
-            if result['run']:
-                job = result['run']
-                interrupted = False
-                executed = False
-                if job['state'] == 'DOWNLOADING' and (job.get('workload', {}).get('report_sequence', 0) if job.get('workload') else job['report_sequence']) == 0 and not job['cancel_requested']:
-                    executed = True
-                    interrupted = execute(connection, job, args.directory, args.pawnocchio)
-                elif job['state'] not in ('COMPLETED', 'CANCELLED'):
-                    connection.request('POST', '%d/recover/' % job['id'], json={})
-                if not interrupted and not (executed and job.get('recovery_pending')):
-                    registration['claim_id'] = str(uuid.uuid4())
-                    write_json(identity_path, registration)
-                if args.once or interrupted:
-                    return
+            worked = session.poll()
+            if args.once:
+                return
         except (requests.RequestException, RuntimeError) as error:
             print('Worker connection failed (%s). Retrying in 15 seconds.' % type(error).__name__)
         time.sleep(15)
+
 
 
 if __name__ == '__main__':
