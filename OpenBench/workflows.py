@@ -140,7 +140,7 @@ def validate_definition(value, draft=False):
 
 def workload_snapshot(test):
     values = {name: copy.deepcopy(getattr(test, name)) for name in TEST_FIELDS}
-    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation', 'automatic_bench', 'bench_discoveries')}
+    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation', 'automatic_bench', 'bench_discoveries', 'bench_options')}
     for side in ('dev', 'base'):
         values[side] = {name: getattr(getattr(test, side), name) for name in ('name', 'source', 'sha', 'bench')}
     return values
@@ -241,6 +241,12 @@ def launch(step, node, outputs):
                     from OpenBench.utils import extract_option
                     if any(int(extract_option(values[side + '_options'], option)) < 1 for option in ('Threads', 'Hash')):
                         raise ValidationError('Workflow parameters must keep Threads and Hash positive.')
+                    values[side].bench = 0
+                    values[side].save(update_fields=['bench'])
+                    automatic = values['execution'].setdefault('automatic_bench', [])
+                    if side not in automatic:
+                        automatic.append(side)
+                    values['execution'].setdefault('bench_options', {})[side] = values[side + '_options']
         if node['kind'] == 'datagen' and 'parameters' not in config:
             values.update(max_games=config.get('games', 10000000), upload_pgns='COMPACT')
         elif node['kind'] == 'test':

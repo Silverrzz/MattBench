@@ -19,12 +19,13 @@ def record(data, machine):
         raise ValidationError('This workflow workload assignment is closed.')
     engine = Engine.objects.select_for_update().get(pk=getattr(test, side + '_id'))
     automatic = side in test.execution.get('automatic_bench', []) or side in test.execution.get('bench_discoveries', {}) or not engine.bench
-    if not automatic or engine.pk != engine_id or engine.sha != data.get('sha') or getattr(test, side + '_network') != data.get('network'):
-        raise ValidationError('Bench report differs from the assigned engine and network.')
+    options = test.execution.get('bench_options', {}).get(side)
+    if not automatic or engine.pk != engine_id or engine.sha != data.get('sha') or getattr(test, side + '_network') != data.get('network') or options != data.get('options'):
+        raise ValidationError('Bench report differs from the assigned engine, network or parameters.')
     if not engine.bench:
         engine.bench = nodes
         engine.save(update_fields=['bench'])
         discoveries = test.execution.get('bench_discoveries', {})
-        test.execution = {**test.execution, 'bench_discoveries': {**discoveries, side: {'bench': nodes, 'sha': engine.sha, 'network': data['network'], 'machine': machine.pk, 'recorded': timezone.now().isoformat()}}}
+        test.execution = {**test.execution, 'bench_discoveries': {**discoveries, side: {'bench': nodes, 'sha': engine.sha, 'network': data['network'], 'options': options, 'machine': machine.pk, 'recorded': timezone.now().isoformat()}}}
         test.save(update_fields=['execution', 'updated'])
     return engine.bench
