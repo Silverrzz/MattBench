@@ -52,6 +52,7 @@
                 <details class="worker-engine-list"><summary>Engine names</summary><div class="worker-mode-tags">{% for engine in engine_names %}<span class="workspace-tag">{{ engine }}</span>{% endfor %}</div></details>
             </fieldset>
             {% endif %}
+            {% if worker.workflow_protocol %}<fieldset class="worker-options"><legend>Workflows</legend><p class="field-note">Steps can request physical cores, logical CPUs or a fixed budget, up to this limit. Settings apply to the next assignment.</p><div class="worker-fields"><div class="worker-field"><label for="worker-workflow-threads">Maximum workflow CPU threads</label><input type="number" id="worker-workflow-threads" name="workflow_threads" min="1" max="{{ worker.thread_limit }}" value="{{ worker.workflow_threads }}" required data-preserve-live></div><div class="worker-field"><label for="worker-tags">Worker tags</label><input id="worker-tags" name="tags" value="{{ worker.tags }}" placeholder="Comma-separated tags" data-preserve-live></div></div></fieldset>{% endif %}
             <div class="worker-save"><button class="button button-primary" type="submit" name="action" value="settings">Save changes</button></div>
         </form>
         {% if worker.disconnect %}<form method="post" class="worker-disconnect">{% csrf_token %}<button class="button" type="submit" name="action" value="disconnect">Disconnect worker</button></form>{% endif %}

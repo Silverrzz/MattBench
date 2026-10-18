@@ -331,6 +331,11 @@ def command(args, cwd, environment, reporter, trusted=False, cpu_threads=None):
     process_record = reporter.directory.parent / ('.process-' + reporter.directory.name + '-' + uuid.uuid4().hex + '.json')
     write_json(process_record, {'pid': None, 'created': None, 'container': container})
     process = subprocess.Popen(arguments, cwd=cwd, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
+    if reporter.job['worker_info'].get('cpu_ids') and not container:
+        try:
+            psutil.Process(process.pid).cpu_affinity(reporter.job['worker_info']['cpu_ids'])
+        except psutil.NoSuchProcess:
+            pass
     write_json(process_record, {'pid': process.pid, 'created': psutil.Process(process.pid).create_time(), 'container': container})
     output = queue.Queue(maxsize=256)
     def read_output():
@@ -725,9 +730,16 @@ def prepare_stage_datasets(connection, job, directory, reporter, pawnocchio, env
                     paths = download_dataset(source_connection, source_job, source_directory, reporter)
                     if reporter.state == 'DOWNLOADING':
                         reporter.stage('CONVERTING')
-                    if 'convert' in plan['steps'] or 'extract' in plan['steps']:
-                        paths = convert_dataset(paths, source_directory, pawnocchio, environment, reporter, source_job['dataset']['files'])
-                    prepared = prepare_and_publish(source_connection, source_job, plan, paths, source_directory, pawnocchio, environment, reporter, command)
+                    if job['snapshot']['settings'].get('dataset_format') == 'wf':
+                        try:
+                            from .variant_data import prepare
+                        except ImportError:
+                            from variant_data import prepare
+                        prepared = prepare(source_connection, source_job, plan, paths, source_directory, environment, reporter, command)
+                    else:
+                        if 'convert' in plan['steps'] or 'extract' in plan['steps']:
+                            paths = convert_dataset(paths, source_directory, pawnocchio, environment, reporter, source_job['dataset']['files'])
+                        prepared = prepare_and_publish(source_connection, source_job, plan, paths, source_directory, pawnocchio, environment, reporter, command)
                     statistics = source_job.get('dataset_statistics', {})
                 if not prepared:
                     raise RuntimeError('Dataset stage %d, source %d has no prepared files.' % (index + 1, source_index + 1))
@@ -770,6 +782,8 @@ def execute(connection, job, root, pawnocchio):
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signum] = signal.signal(signum, interrupt)
         environment = child_environment(directory, job)
+        if job['snapshot'].get('workflow'):
+            environment['MATTBENCH_THREADS'] = str(min(255, int(job['worker_info']['threads'])))
         if job['snapshot']['settings']['backend'] == 'cuda' and not job['worker_info'].get('execution_image'):
             environment.update({key: value for key, value in job['snapshot'].get('environment', {}).items() if key in ('CUDA_PATH', 'CUDA_HOME')})
             environment = cuda_build_environment(environment)
@@ -1084,7 +1098,11 @@ def main(argv=None, worker_config=None, gpu_info=None):
     args.pawnocchio = dataset_tools['pawnocchio']
     import getpass
     username = args.username or registration.get('username') or input('MattBench username: ')
-    info = {'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments', 'multi-dataset-stages'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
+    try:
+        from .resource_policy import topology
+    except ImportError:
+        from resource_policy import topology
+    info = {'workflow_protocol': 1, 'workflow_threads': len(topology()['logical']), 'cpu_topology': topology(), 'protocol': 4, 'capabilities': ['training-workloads', 'typed-assignments', 'multi-dataset-stages', 'wakformat-v1'], 'gpu': gpu_name, 'device': args.device, 'backend': args.backend, 'vram_gb': vram, 'threads': args.threads, 'disk_gb': shutil.disk_usage(args.directory).free / 1024 ** 3, 'pawnocchio_sha256': sha256_file(args.pawnocchio), 'pawnocchio_path': str(args.pawnocchio), 'execution_image': args.execution_image, 'memory_gb': args.memory_gb, 'runtime': runtime_info(args.pawnocchio, args.execution_image)}
     info['combiner_path'] = str(dataset_tools['combiner'])
     info['runtime']['dataset_tools'] = tool_provenance
     info['runtime']['gpu_driver'] = driver_version.strip()

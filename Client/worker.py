@@ -62,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 52
+CLIENT_VERSION   = 53
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1052,6 +1052,9 @@ def server_configure_worker(config):
         'machine_name'   : config.identity,       # Optional pseudonym for the machine, otherwise None
         'concurrency'    : config.default_threads,        # Threads to use to play games
         'thread_budgets' : True,
+        'workflow_protocol': 1,
+        'workflow_threads': config.logical_cores,
+        'cpu_topology': __import__('resource_policy').topology(),
         'test_threads'   : config.test_threads,
         'datagen_threads': config.datagen_threads,
         'sockets'        : config.sockets,        # Match runner copies, usually equal to Socket count
@@ -1191,6 +1194,12 @@ def server_request_workload(config):
 
 
 def complete_workload(config):
+    import resource_policy
+    with resource_policy.assignment(config, config.workload["test"].get("worker_policy", {})):
+        return _complete_workload(config)
+
+
+def _complete_workload(config):
     capacity = config.workload['distribution'].get('worker-threads', config.default_threads)
     config.threads = max(1, min(config.logical_cores, int(capacity)))
 
@@ -1457,6 +1466,8 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 def reload_local_imports():
+    import resource_policy
+    importlib.reload(resource_policy)
 
     import bench
     import genfens

@@ -38,11 +38,11 @@ def validate_manifest(manifest):
         seen.add(file['path'])
         if type(file.get('size')) is not int or file['size'] <= 0:
             raise ValidationError('Dataset files require a positive size.')
-        if file.get('format') not in ('pgn', 'vf') or type(file.get('shuffled')) is not bool:
-            raise ValidationError('Each file requires format (pgn or vf) and shuffled (true or false).')
-        if type(file.get('interleaved', False)) is not bool or file.get('interleaved', False) and file['format'] != 'vf':
+        if file.get('format') not in ('pgn', 'vf', 'wf') or type(file.get('shuffled')) is not bool:
+            raise ValidationError('Each file requires format (pgn, vf or wf) and shuffled (true or false).')
+        if type(file.get('interleaved', False)) is not bool or file.get('interleaved', False) and file['format'] not in ('vf', 'wf'):
             raise ValidationError('Only Viriformat files can be marked interleaved, using true or false.')
-        if file['shuffled'] and file['format'] != 'vf':
+        if file['shuffled'] and file['format'] not in ('vf', 'wf'):
             raise ValidationError('Only Viriformat files can be marked shuffled.')
         if file['path'].lower().endswith(('.pgn', '.pgn.gz', '.pgn.bz2', '.pgn.zst')) and file['format'] != 'pgn':
             raise ValidationError('PGN paths must declare format pgn.')
@@ -107,6 +107,8 @@ def read_manifest(repo, info, token):
 
 def inferred_file(file):
     name = file.rfilename.lower()
+    if name.endswith('.wf'):
+        return {'path': file.rfilename, 'size': file.size, 'format': 'wf', 'shuffled': False}
     return {'path': file.rfilename, 'size': file.size, 'format': 'vf' if any(name.endswith(suffix) for suffix in ('.vf', '.viri', '.vf.gz', '.vf.bz2', '.vf.zst', '.viri.zst')) else 'pgn', 'shuffled': False}
 
 
@@ -124,8 +126,15 @@ def verified_files(entries, siblings):
     return files
 
 
+def catalogue_manifest(manifest, info):
+    if manifest:
+        known = {entry['path'] for entry in manifest['files']}
+        return {**manifest, 'files': manifest['files'] + [inferred_file(file) for file in info.siblings if file.rfilename.lower().endswith('.wf') and file.rfilename not in known]}
+    return manifest
+
+
 def resolve_dataset(repo, info, patterns, token):
-    manifest = read_manifest(repo, info, token)
+    manifest = catalogue_manifest(read_manifest(repo, info, token), info)
     siblings = {file.rfilename: file for file in info.siblings}
     entries = manifest['files'] if manifest else [inferred_file(file) for file in info.siblings if file.rfilename.lower().endswith(DATA_SUFFIXES)]
     selected = {}
@@ -176,9 +185,10 @@ def resolve_dataset(repo, info, patterns, token):
 def remaining_steps(dataset, config):
     files = dataset['files']
     steps = []
-    if any(file.get('format') != 'vf' for file in files):
+    target = config.get('dataset_format', 'vf')
+    if any(file.get('format') != target for file in files):
         steps.append('convert')
-    if any(not file['path'].lower().endswith(('.vf', '.viri', '.pgn')) for file in files):
+    if any(not file['path'].lower().endswith(('.vf', '.viri', '.pgn', '.wf')) for file in files):
         steps.append('extract')
     if config.get('shuffle', True) and not all(file.get('shuffled', False) for file in files):
         steps.append('shuffle')

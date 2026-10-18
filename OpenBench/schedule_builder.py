@@ -15,9 +15,10 @@ from OpenBench.builder_export import export_recipe, split_inputs, upgrade_export
 
 BULLET_COMMIT = DEFAULT_BULLET_COMMIT
 MANIFEST = 'mattbench-builder.json'
-MANIFEST_VERSION = 7
+MANIFEST_VERSION = 8
 SOURCE = 'examples/mattbench.rs'
 DEFAULT_SPEC = {
+    'training_profile': 'standard', 'duck_inputs': False,
     'layers': [768], 'activation': 'screlu', 'psqt_inputs': True, 'threat_inputs': False, 'pawn_pair_inputs': False,
     'input_buckets': 1, 'mirrored': True, 'king_layout': [0] * 64,
     'score_outputs': True, 'score_buckets': 8, 'wdl_outputs': False, 'wdl_buckets': 1,
@@ -50,6 +51,7 @@ DEFAULT_SPEC = {
 
 def validate_spec(value):
     if isinstance(value, dict):
+        value = {'training_profile': 'standard', 'duck_inputs': False, **value}
         value = {'optimizer': 'adamw', 'ranger_alpha': 0.5, 'ranger_k': 6, **value}
         value = upgrade_export(value)
         # Saved schedules predate dense-stack output bucketing. Preserve their graph.
@@ -80,6 +82,8 @@ def validate_spec(value):
     if not isinstance(value, dict) or set(value) != set(DEFAULT_SPEC):
         raise ValidationError('The builder configuration is incomplete. Reload the builder.')
     spec = json.loads(json.dumps(value))
+    if not isinstance(spec['training_profile'], str) or not 1 <= len(spec['training_profile']) <= 64:
+        raise ValidationError('Choose a valid training profile.')
     for key, minimum, maximum in (
         ('input_buckets', 1, 64), ('score_buckets', 1, 32), ('wdl_buckets', 1, 32), ('uncertainty_buckets', 1, 32), ('batch_size', 1, 1048576),
         ('batches_per_superbatch', 1, 1000000), ('superbatches', 1, 1000000), ('save_every', 1, 1000000),
@@ -94,7 +98,7 @@ def validate_spec(value):
     ):
         if type(spec[key]) is not int or not minimum <= spec[key] <= maximum:
             raise ValidationError('%s must be between %d and %d.' % (key.replace('_', ' ').capitalize(), minimum, maximum))
-    for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave', 'loader_interleave',
+    for key in ('mirrored', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'shuffle', 'interleave', 'loader_interleave', 'duck_inputs',
                 'score_outputs', 'wdl_outputs', 'uncertainty_outputs', 'half_move_clock', 'merged_king_planes', 'skip_connection', 'pairwise_activation', 'hidden_layers_bucketed', 'dual_activation',
                 'position_filtering', 'filter_tactical', 'filter_check', 'filter_castling', 'piece_count_sampling', 'result_filtering', 'wdl_filtered'):
         if type(spec[key]) is not bool:
@@ -261,8 +265,20 @@ def builder_state(schedule):
         return None, False
 
 
-def generate_schedule(value, bullet_commit=BULLET_COMMIT):
+def generate_schedule(value, bullet_commit=BULLET_COMMIT, profile=None):
     spec = validate_spec(value)
+    if profile is not None and profile.get('id') != spec['training_profile']:
+        raise ValidationError('The schedule must match its training profile.')
+    if profile is None:
+        from OpenBench.training_profiles import BUILTINS
+        if spec['training_profile'] != 'standard':
+            from OpenBench.training_profiles import resolve_profile
+            profile = resolve_profile(spec['training_profile'])
+    if profile and profile['generator'] == 'duckchess':
+        from OpenBench.duck_builder import generate
+        return generate(spec, profile)
+    if spec['duck_inputs']:
+        raise ValidationError('Duck inputs require a DuckChess training profile.')
     template, auxiliary, adapter, licence = assets()
     bucket_type = 'ChessBucketsMirrored' if spec['mirrored'] else 'ChessBuckets'
     king_width = 4 if spec['mirrored'] else 8
@@ -433,7 +449,11 @@ if count < max_active {
         **{key: spec[key] for key in ('shuffle', 'interleave', 'shuffle_memory_mb', 'interleave_fan_in', 'dataset_shard_mb')},
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
+    if profile:
+        from OpenBench.training_profiles import profile_settings
+        settings.update(profile_settings(profile))
     files[MANIFEST] = json.dumps({
+        **({'training_profile': profile} if profile else {}),
         'version': MANIFEST_VERSION, 'spec': spec, 'fingerprint': fingerprint(files, settings),
         'workload_bounds': True,
         'optimizer': {'name': spec['optimizer'], 'decay': 0.01, 'beta1': 0.99 if ranger else 0.9, 'beta2': 0.999,

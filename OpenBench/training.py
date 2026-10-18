@@ -15,6 +15,7 @@ from OpenBench.training_sources import has_multiple_sources, stage_sources
 
 
 DEFAULT_SETTINGS = {
+    'training_profile': {}, 'dataset_format': 'vf',
     'bullet_repo': 'https://github.com/jw1912/bullet',
     'bullet_ref': DEFAULT_BULLET_COMMIT,
     'build': ['cargo', 'build', '--release', '--manifest-path', 'crates/bullet_lib/Cargo.toml', '--example', 'mattbench', '--features', 'cuda'],
@@ -44,7 +45,7 @@ DEFAULT_SETTINGS = {
     'disk_reserve_gb': 10,
     'execution_image': '',
 }
-DATA_SUFFIXES = ('.pgn.tar', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst', '.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst', '.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst')
+DATA_SUFFIXES = ('.pgn.tar', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.zst', '.pgn', '.pgn.bz2', '.pgn.gz', '.pgn.zst', '.vf', '.viri', '.vf.bz2', '.vf.gz', '.vf.zst', '.viri.zst', '.wf')
 
 
 def default_settings():
@@ -53,6 +54,12 @@ def default_settings():
 
 def worker_requirement_errors(info, config, disk_required=None, dataset=None):
     errors = []
+    if config.get('dataset_format') == 'wf' and 'wakformat-v1' not in info.get('capabilities', []):
+        errors.append('Update this worker to support DuckChess Wakformat training.')
+    minimum = config.get('training_profile', {}).get('rust_minimum')
+    reported = re.search(r'rustc (\d+)\.(\d+)\.(\d+)', info.get('runtime', {}).get('rust', ''))
+    if minimum and reported and tuple(map(int, reported.groups())) < tuple(map(int, minimum.split('.'))):
+        errors.append('This training profile requires Rust %s or newer.' % minimum)
     if dataset and has_multiple_sources(dataset) and 'multi-dataset-stages' not in info.get('capabilities', []):
         errors.append('Update this worker to support multiple datasets per stage.')
     if info.get('backend') != config['backend']:
@@ -144,6 +151,15 @@ def validate_schedule(files, config):
     if not isinstance(config, dict) or set(config) - set(DEFAULT_SETTINGS):
         raise ValidationError('Unknown schedule settings.')
     config = {**DEFAULT_SETTINGS, **config}
+    if config['dataset_format'] not in ('vf', 'wf'):
+        raise ValidationError('Choose a supported dataset format.')
+    if not isinstance(config['training_profile'], dict):
+        raise ValidationError('Choose a valid training profile.')
+    if config['training_profile']:
+        from OpenBench.training_profiles import resolve_profile
+        profile = resolve_profile(config['training_profile'].get('id'), config['training_profile'])
+        if any(config[key] != profile[key] for key in ('bullet_repo', 'bullet_ref')) or config['dataset_format'] != profile['format']:
+            raise ValidationError('Training source and dataset format must match the selected profile.')
     if not isinstance(config['example_name'], str) or config['example_name'] and not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', config['example_name']):
         raise ValidationError('Use a simple Cargo example name, or leave it empty for a custom build.')
     if config['example_name']:
@@ -227,6 +243,9 @@ def resolve_inputs(run):
         stages.append({**group, 'sources': pinned, 'file_indices': indices, 'size': sum(selected[i]['size'] for i in indices)} if group.get('sources') else pinned[0])
     if len(selected) > 4096:
         raise ValidationError('Select at most 4096 dataset files per run.')
+    target = config.get('dataset_format', 'vf')
+    if any(file['format'] not in ('pgn', target) for file in selected):
+        raise ValidationError('The selected dataset format does not match the training profile.')
     repository = config['bullet_repo'].removeprefix('https://github.com/')
     bullet_ref = run.snapshot.get('bullet_commit') if run.snapshot.get('resume') else config['bullet_ref']
     response = requests.get('https://api.github.com/repos/%s/commits/%s' % (repository, quote(bullet_ref or config['bullet_ref'], safe='')), timeout=30)

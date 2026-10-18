@@ -154,7 +154,7 @@ def identity(directory, server):
 def runtime_info(pawnocchio, image):
     root = Path(__file__).parent
     digest = hashlib.sha256()
-    for name in ('training_worker.py', 'training_data.py', 'training_tools.py', 'training_checkpoints.py', 'training_cache.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
+    for name in ('training_worker.py', 'training_data.py', 'variant_data.py', 'resource_policy.py', 'training_tools.py', 'training_checkpoints.py', 'training_cache.py', 'training_runtime.py', 'training-requirements.txt', 'training-lock.txt'):
         digest.update(name.encode())
         digest.update((root / name).read_bytes())
     def version(command):
@@ -222,6 +222,8 @@ def isolated_command(args, cwd, environment, reporter, cpu_threads=None):
     directory = reporter.directory
     name = 'mattbench-%s-%s' % (reporter.job['id'], uuid.uuid4().hex[:12])
     command = ['docker', 'run', '--rm', '--name', name, '--init', '--read-only', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '1024', '--user', '%d:%d' % (os.getuid(), os.getgid()), '--cpus', str(cpu_threads or info['threads']), '--memory', '%sg' % info['memory_gb'], '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '--mount', 'type=bind,src=%s,dst=%s' % (directory, directory), '--workdir', str(cwd)]
+    if info.get('cpu_ids'):
+        command += ['--cpuset-cpus', ','.join(map(str, info['cpu_ids']))]
     for key in ('pawnocchio_path', 'combiner_path'):
         executable = info[key]
         command.extend(['--mount', 'type=bind,src=%s,dst=%s,readonly' % (executable, executable)])

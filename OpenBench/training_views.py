@@ -255,7 +255,7 @@ class TrainingForm(forms.Form):
                         if stage['end'] > checkpoint.superbatch:
                             stage.update(kind='constant', initial=data['wdl'], final=data['wdl'])
             if current:
-                _, files, _ = generate_schedule(spec, config['bullet_ref'])
+                _, files, _ = generate_schedule(spec, config['bullet_ref'], config.get('training_profile') or None)
             data['priority'] = data.get('priority') or 0
             if data.get('workload_size') is None:
                 data['workload_size'] = 0

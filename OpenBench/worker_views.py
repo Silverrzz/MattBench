@@ -70,6 +70,8 @@ def worker_rows(user, identifier=None):
             'thread_budgets': info.get('thread_budgets', False), 'thread_limit': info.get('logical_cores', info.get('concurrency', 1)),
             'test_threads': info.get('worker_settings', {}).get('test_threads', info.get('test_threads', info.get('concurrency', 1))),
             'datagen_threads': info.get('worker_settings', {}).get('datagen_threads', info.get('datagen_threads', info.get('concurrency', 1))),
+            'workflow_protocol': info.get('workflow_protocol', 0), 'workflow_threads': info.get('worker_settings', {}).get('workflow_threads', info.get('workflow_threads', info.get('concurrency', 1))),
+            'tags': ', '.join(info.get('worker_settings', {}).get('tags', [])),
             'preferences': [
                 {'key': key, 'label': label, 'help': help_text, 'value': ', '.join(machine_info_list(info, key))}
                 for key, label, help_text in (
@@ -128,6 +130,8 @@ def worker_rows(user, identifier=None):
             'owner': worker.owner, 'hardware': info.get('gpu', 'GPU'),
             'platform': info.get('backend', '').upper(), 'capabilities': ['Training', 'Data preparation'],
             'threads': info.get('threads', 0), 'memory': info.get('ram_gb'),
+            'workflow_protocol': info.get('workflow_protocol', 0), 'workflow_threads': info.get('worker_settings', {}).get('workflow_threads', info.get('workflow_threads', info.get('threads', 1))),
+            'thread_limit': len(info.get('cpu_topology', {}).get('logical', [])), 'tags': ', '.join(info.get('worker_settings', {}).get('tags', [])),
             'gpu_memory': info.get('vram_gb'), 'updated': worker.updated, 'demo': bool(info.get('demo')),
             'state': 'Disconnected' if not worker.enabled else 'Busy' if online and job else 'Available' if online else 'Offline',
             'job': job.name if online and job else '', 'job_url': '/training/%s/' % job.pk if job else '',
@@ -195,10 +199,25 @@ def detail(request, pk):
                 training_scope = request.POST.get('training_scope', 'any' if capability and capability.accept_any_owner else 'own')
                 if training_scope not in ('own', 'any'):
                     return redirect(request, worker['url'], error='Choose whose training workloads this worker accepts.')
+                resource_info = machine.info if machine else capability.info
+                workflow_settings = dict(resource_info.get('worker_settings', {}))
+                if 'workflow_threads' in request.POST:
+                    try:
+                        limit = int(request.POST['workflow_threads'])
+                        if not resource_info.get('workflow_protocol') or not 1 <= limit <= len(resource_info.get('cpu_topology', {}).get('logical', [])):
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        return redirect(request, worker['url'], error='Choose a workflow CPU limit within this worker’s available logical CPUs.')
+                    workflow_settings['workflow_threads'] = limit
+                if 'tags' in request.POST:
+                    tags = list(dict.fromkeys(tag.strip() for tag in request.POST['tags'].split(',') if tag.strip()))
+                    if len(tags) > 32 or any(len(tag) > 32 for tag in tags):
+                        return redirect(request, worker['url'], error='Use at most 32 worker tags, each up to 32 characters.')
+                    workflow_settings['tags'] = tags
                 # Validate all settings before recording a mode transition.
                 if machine:
                     info = {**machine.info, 'machine_name': name, 'custom_name': name}
-                    settings = dict(info.get('worker_settings', {}))
+                    settings = workflow_settings
                     for key in ('focus', 'force', 'only'):
                         if key not in request.POST:
                             continue
@@ -229,7 +248,7 @@ def detail(request, pk):
                 if capability:
                     if not machine:
                         worker_mode_event(capability, mode, request.user.pk)
-                    info = {**capability.info, 'custom_name': name}
+                    info = {**capability.info, 'custom_name': name, 'worker_settings': workflow_settings}
                     TrainingWorker.objects.filter(pk=capability.pk).update(name=name, info=info, mode=mode, accept_any_owner=training_scope == 'any')
                 return redirect(request, worker['url'], status='Worker settings saved.')
             if action in ('mode', 'stop'):

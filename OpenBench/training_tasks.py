@@ -115,7 +115,7 @@ class TrainingTasks:
         elif lane == 'bullet':
             from OpenBench.models import TrainingConfiguration
             TrainingConfiguration.objects.filter(bullet_validation='CHECKING').update(bullet_validation='QUEUED')
-        operation = {'validation': self.validate, 'uploads': self.upload, 'maintenance': self.maintain, 'bullet': self.validate_bullet}[lane]
+        operation = {'validation': self.validate, 'uploads': self.upload, 'maintenance': self.maintain, 'bullet': self.validate_bullet, 'workflows': self.workflows}[lane]
         while not self.stop_event.is_set():
             close_old_connections()
             try:
@@ -178,6 +178,10 @@ class TrainingTasks:
     def validate_bullet(self):
         from OpenBench.bullet_validation import validate_pending_revision
         validate_pending_revision(self.stop_event)
+
+    def workflows(self):
+        from OpenBench.workflows import tick
+        tick()
 
     def upload(self):
         task = DatasetUpload.objects.filter(state='QUEUED').filter(Q(next_attempt_at=None) | Q(next_attempt_at__lte=timezone.now())).exclude(workload__execution__has_key='demo').order_by('created').first()

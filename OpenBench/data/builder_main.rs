@@ -52,6 +52,7 @@ fn stage_value(stages: &[(usize, usize, f32, f32, u8)], superbatch: usize) -> f3
 
 fn main() {
     let job = mattbench::Run::load();
+    let threads = std::env::var("MATTBENCH_THREADS").map(|value| value.parse::<usize>().expect("Invalid CPU allocation")).unwrap_or(THREADS).clamp(1, 255);
     let workload_end = std::env::var("MATTBENCH_END_SUPERBATCH").map(|s| s.parse::<usize>().expect("Invalid workload end")).unwrap_or(SUPERBATCHES);
     assert!(job.start <= workload_end && workload_end <= SUPERBATCHES, "Invalid workload bounds");
     let lr_schedule = $lr_scheduler;
@@ -95,7 +96,7 @@ $bucket_mapping
             let score = 1.0 / (1.0 + (-f32::from(pos.score) / EVAL_SCALE).exp());
 $targets
         });
-        let reader = ViriBinpackLoader::$loader_method(&paths, $buffer_mb, THREADS, $filter_expression);
+        let reader = ViriBinpackLoader::$loader_method(&paths, $buffer_mb, threads, $filter_expression);
         let mut loss_sum = 0.0;
         train(
             &mut optimiser,
@@ -104,7 +105,7 @@ $targets
                 lr_schedule: lr_schedule.clone().boxed(),
                 log_rate: 128,
             },
-            ReadMapLoader::new(reader, mapper, THREADS as u8),
+            ReadMapLoader::new(reader, mapper, threads as u8),
             |_, step, loss| {
                 loss_sum += loss;
                 if step.batch() + 1 == BATCHES_PER_SUPERBATCH {

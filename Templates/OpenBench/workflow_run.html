@@ -1,0 +1,8 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'workflows.css' %}?{{ static_version }}"><script src="{% static 'workflows.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block page_actions %}<a class="button" href="/workflows/{{ run.workflow_id }}/">Edit template</a><a class="button" href="/workflows/">Workflows</a>{% endblock %}
+{% block content %}
+<form id="workflow-run">{% csrf_token %}<div class="workflow-actions"><strong id="workflow-state">{{ run.state }}</strong><button type="button" class="button" data-run-action="pause">Pause future steps</button><button type="button" class="button" data-run-action="resume">Resume</button><button type="button" class="button" data-run-action="cancel">Cancel</button></div><p>Run uses template version {{ run.version }}. Pausing lets active jobs finish; cancellation stops jobs and waits for active uploads to settle.</p><p id="workflow-feedback" role="status"></p><div id="workflow-steps" class="workflow-steps"></div></form>
+{{ run_data|json_script:'workflow-run-data' }}
+{% endblock %}

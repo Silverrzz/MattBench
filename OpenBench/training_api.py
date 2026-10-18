@@ -82,7 +82,7 @@ def register(request):
         info = json.loads(request.POST.get('info', '{}'))
         if machine and isinstance(info, dict):
             info['threads'] = machine.info['concurrency']
-        if not isinstance(info, dict) or len(json.dumps(info)) > 8192:
+        if not isinstance(info, dict) or len(json.dumps(info)) > 131072:
             raise ValueError
         if info.get('protocol') not in (3, 4) or info.get('backend') not in ('cuda', 'rocm'):
             raise ValueError
@@ -121,16 +121,20 @@ def register(request):
                 return JsonResponse({'error': 'Finish or cancel the active training run before changing this worker runtime.'}, status=409)
             if worker.info.get('custom_name'):
                 info['custom_name'] = worker.info['custom_name']
+            if worker.info.get('worker_settings'):
+                info['worker_settings'] = worker.info['worker_settings']
             worker.info = info
             worker.name = info.get('custom_name', name)
             worker.updated = timezone.now()
             worker.save(update_fields=['info', 'name', 'updated'])
         if machine:
+            if machine.info.get('worker_settings'):
+                worker.info = {**worker.info, 'worker_settings': machine.info['worker_settings']}
             if not created:
                 machine.mode = worker.mode
                 machine.save(update_fields=['mode'])
             worker.machine = machine
-            worker.save(update_fields=['machine'])
+            worker.save(update_fields=['machine', 'info'])
         record_event('worker.connected', worker, user.pk, {'backend': info['backend'], 'gpu': info.get('gpu', ''), 'registered': created})
     response = JsonResponse({'worker': str(worker.pk), 'token': secret, 'protocol': info['protocol'], 'capabilities': ['training-workloads', 'typed-assignments'] if info['protocol'] == 4 else []})
     response['Cache-Control'] = 'no-store'
@@ -184,6 +188,9 @@ def claim(request):
         candidates = candidates.filter(engine__name__in=only)
     eligible = []
     for run in candidates:
+        from OpenBench.worker_policy import eligible as workflow_eligible
+        if not workflow_eligible(run, machine=machine, worker=worker):
+            continue
         config = run.snapshot['settings']
         from OpenBench.dataset_manifest import required_disk_bytes
         disk_required = required_disk_bytes(run.dataset, config) / 1024 ** 3 + config.get('disk_reserve_gb', 10)
@@ -243,6 +250,12 @@ def assignment(run, info):
     from OpenBench.training_datasets import effective_dataset
     from OpenBench.dataset_manifest import required_disk_bytes
     snapshot = run.snapshot
+    if snapshot.get('workflow'):
+        from OpenBench.worker_policy import allocation
+        selected = allocation(info, snapshot.get('worker_policy', {}), info['threads'])
+        if selected is None:
+            raise ValidationError('This worker cannot satisfy the workflow CPU allocation.')
+        info = {**info, 'threads': selected['threads'], 'cpu_ids': selected['cpu_ids']}
     workload_data = None
     if run.workload_size:
         workload = run.workloads.get(state='ACTIVE')

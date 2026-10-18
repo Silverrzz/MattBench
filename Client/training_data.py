@@ -334,12 +334,18 @@ def prepare_and_publish(connection, job, plan, paths, directory, pawnocchio, env
     job['dataset_statistics'] = statistics
     if plan['mode'] != 'prepare':
         return selected
+    return publish_prepared(connection, job, plan, selected, directory, statistics, reporter)
+
+
+def publish_prepared(connection, job, plan, selected, directory, statistics, reporter):
+    config = job["snapshot"]["settings"]
+    steps = plan["steps"]
     changed = any(step in steps for step in ('convert', 'extract', 'shuffle', 'interleave'))
     shuffled = 'shuffle' in steps or all(file.get('shuffled', False) for file in job['dataset']['files'])
     interleaved = 'shuffle' in steps or 'interleave' in steps or all(file.get('interleaved', False) for file in job['dataset']['files'])
     if changed:
         reporter.update(preparation_step='Hashing dataset')
-        descriptors = [{'path': plan['prefix'] + ('%05d.vf' % index), 'size': path.stat().st_size, 'sha256': file_digest(path, reporter), 'format': 'vf', 'shuffled': shuffled, 'interleaved': interleaved} for index, path in enumerate(selected)]
+        descriptors = [{'path': plan['prefix'] + ('%05d.%s' % (index, config.get('dataset_format', 'vf'))), 'size': path.stat().st_size, 'sha256': file_digest(path, reporter), 'format': config.get('dataset_format', 'vf'), 'shuffled': shuffled, 'interleaved': interleaved} for index, path in enumerate(selected)]
         (directory / 'prepared-upload.json').write_text(json.dumps({'files': descriptors, 'statistics': statistics,
             'paths': [path.relative_to(directory).as_posix() for path in selected]}, indent=2))
         upload_prepared_files(connection, job, selected, descriptors, reporter)

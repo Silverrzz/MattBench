@@ -3,7 +3,7 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'schedule_builder.css' %}?{{ static_version }}"><script src="{% static 'builder_values.js' %}?{{ static_version }}" defer></script><script src="{% static 'schedule_builder.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block content %}
 {% include 'OpenBench/Blocks/training_nav.html' %}
-<p>Bullet revision: <a href="https://github.com/jw1912/bullet/commit/{{ bullet_commit }}">{{ bullet_commit|slice:':12' }}</a>{% if user.is_superuser %} · <a href="/manage/training/">Manage default revision</a>{% endif %}</p>
+<p>Bullet revision: <a id="builder-bullet-link" href="{{ bullet_repo }}/commit/{{ bullet_commit }}">{{ bullet_commit|slice:':12' }}</a> · <a href="/training/profiles/">Training profiles</a></p>
 <form class="form schedule-builder" id="schedule-builder" data-editor-url="{% static 'training_editor.js' %}?{{ static_version }}">
     {% csrf_token %}
     {% if builder_data.notice %}<p class="builder-notice">{{ builder_data.notice }}</p>{% endif %}
@@ -21,6 +21,8 @@
                     <button type="button" id="tab-training" role="tab" aria-controls="panel-training" aria-selected="false" tabindex="-1" data-tab="training">Training</button>
                 </div>
                 <section class="builder-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
+                    <div class="field"><label for="builder-training-profile">Training profile</label><select id="builder-training-profile" name="training_profile"></select><p class="builder-note" id="builder-profile-note"></p></div>
+                    <label class="choice" id="builder-duck-inputs" hidden><input type="checkbox" name="duck_inputs">Duck-square inputs</label>
                     <div class="builder-group">
                         <h2>Input features</h2>
                         <div class="builder-output-row">

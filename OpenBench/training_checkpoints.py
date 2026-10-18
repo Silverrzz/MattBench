@@ -250,7 +250,7 @@ def validate_checkpoint_schedule(checkpoint, engine, files, config):
                 raise ValidationError('The checkpoint requires the same threat features. Changing pawn-to-pawn TI requires a new training run.')
         except (KeyError, TypeError, ValueError):
             raise ValidationError('The checkpoint’s network configuration could not be verified.') from None
-        architecture = ('layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
+        architecture = ('training_profile', 'duck_inputs', 'layers', 'activation', 'psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'input_buckets', 'mirrored', 'king_layout',
                         'half_move_clock', 'merged_king_planes', 'score_outputs', 'score_buckets', 'wdl_outputs', 'wdl_buckets',
                         'uncertainty_outputs', 'uncertainty_buckets', 'skip_connection', 'pairwise_activation', 'dual_activation')
         if before['optimizer'] != after['optimizer'] or (before['optimizer'] == 'ranger' and any(before[key] != after[key] for key in ('ranger_alpha', 'ranger_k'))):

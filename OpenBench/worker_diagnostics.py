@@ -12,6 +12,9 @@ def training_reasons(capability, preferences, run):
     from OpenBench.training import worker_requirement_errors
     reasons = []
     info = capability.info
+    from OpenBench.worker_policy import eligible
+    if not eligible(run, worker=capability):
+        reasons.append('This worker does not match the workflow’s ownership, worker selection, tags or CPU allocation.')
     if not capability.enabled:
         reasons.append('Training capability is disabled. Register the client again.')
     if info.get('protocol') not in (3, 4):

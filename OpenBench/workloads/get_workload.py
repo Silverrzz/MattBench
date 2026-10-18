@@ -48,6 +48,9 @@ def get_workload(request, machine, candidates=None, has_engine_preference=False)
     test = Test.objects.select_for_update().get(pk=test.pk)
     if test.finished or test.deleted or not test.approved:
         return {}
+    from OpenBench.worker_policy import eligible
+    if not eligible(test, machine=machine):
+        return {}
     starting = test.execution_number > 0 or not Result.objects.filter(test=test).exists()
 
     # Avoid creating duplicate Result objects
@@ -169,6 +172,9 @@ def machine_info_list(info, key):
     return [value] if isinstance(value, str) else value
 
 def valid_hardware_assignment(workload, machine):
+    from OpenBench.worker_policy import eligible
+    if not eligible(workload, machine=machine):
+        return False
 
     # Extract thread requirements from the workload itself
     dev_threads  = int(OpenBench.utils.extract_option(workload.dev_options,  'Threads'))
@@ -242,6 +248,7 @@ def workload_to_dictionary(test, result, machine):
     }
 
     workload['test'] = {
+        'worker_policy': test.execution.get('worker_policy', {}),
         'id'            : test.id,
         'type'          : test.test_mode,
         'capture_logs'  : test.execution.get('capture_logs', True),

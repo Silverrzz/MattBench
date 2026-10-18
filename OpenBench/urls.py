@@ -19,6 +19,7 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import django.urls, OpenBench.views
+from OpenBench import workflow_views
 import OpenBench.configuration_views
 import OpenBench.presets
 from OpenBench import training_api, training_views, dataset_library
@@ -33,6 +34,12 @@ urlpatterns = [
     django.urls.path('profile/huggingface/', training_views.connection),
     django.urls.path('training/', training_views.training_index),
     django.urls.path('training/page/<int:page>/', training_views.training_index),
+    django.urls.path('workflows/', workflow_views.editor),
+    django.urls.path('workflows/new/', workflow_views.editor, {'create': True}),
+    django.urls.path('workflows/runs/<uuid:identifier>/', workflow_views.detail),
+    django.urls.path('workflows/<uuid:identifier>/', workflow_views.editor),
+    django.urls.path('workflows/<uuid:identifier>/run/', workflow_views.launch),
+    django.urls.path('training/profiles/', workflow_views.training_profiles),
     django.urls.path('training/new/', training_views.new_training),
     django.urls.path('training/datasets/', dataset_library.library),
     django.urls.path('training/datasets/new/', dataset_library.library, {'create': True}),

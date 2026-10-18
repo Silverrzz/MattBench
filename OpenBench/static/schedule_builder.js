@@ -5,6 +5,7 @@
     form.noValidate = true;
     const data = JSON.parse(document.getElementById('schedule-builder-data').textContent);
     const field = name => form.elements.namedItem(name);
+    for (const profile of data.profiles || []) field('training_profile').add(new Option(profile.name, profile.id));
     const byId = id => document.getElementById('builder-' + id);
     const tabs = [...form.querySelectorAll('[data-tab]')];
     const board = byId('board');
@@ -100,10 +101,12 @@
         });
     }
     const syncFilters = () => {
-        for (const [id, enabled] of [['position-filters', field('position_filtering').checked], ['piece-count-keep', field('piece_count_sampling').checked], ['wdl-filter-options', field('wdl_filtered').checked]]) {
+        const duck = data.profiles.find(item => item.id === field('training_profile').value)?.generator === 'duckchess';
+        for (const [id, enabled] of [['position-filters', duck || field('position_filtering').checked], ['piece-count-keep', field('piece_count_sampling').checked], ['wdl-filter-options', field('wdl_filtered').checked]]) {
             byId(id).hidden = !enabled;
             byId(id).querySelectorAll('input').forEach(input => { input.disabled = !enabled; });
         }
+        byId('position-filters').querySelectorAll('label').forEach(label => { label.hidden = duck && !label.querySelector('[name=max_eval], [name=filter_tactical]'); });
         field('max_eval_incorrectness').disabled = !field('result_filtering').checked;
     };
     ['position_filtering', 'piece_count_sampling', 'wdl_filtered', 'result_filtering'].forEach(name => field(name).addEventListener('input', syncFilters));
@@ -273,6 +276,17 @@
         byId('activations').textContent = 'Activation: ' + field('activation').value.toUpperCase() + (pairwise ? ' · Pairwise: ' + field('pairwise_left_activation').value.toUpperCase() + ' × ' + field('pairwise_right_activation').value.toUpperCase() + ' (halves each selected layer’s width)' : '') + (layers.length < 2 ? ' · No dense hidden layers.' : bucketHidden ? ' · Hidden layers use ' + hiddenBuckets + ' ' + hiddenBucketHead.toUpperCase() + ' output buckets.' : ' · Hidden layers are shared; output heads are bucketed.');
         if (dualLayers.length) byId('activations').textContent += ' · Dual: concatenate CReLU(x) and CReLU(x²) at ' + dualLayers.map(layer => 'L' + layer).join(', ') + ' (doubles width).';
         syncExport();
+        const duck = data.profiles.find(item => item.id === field('training_profile').value)?.generator === 'duckchess';
+        for (const name of ['psqt_inputs', 'input_buckets', 'score_outputs', 'score_buckets', 'activation', 'pairwise_activation', 'dual_activation', 'pairwise_left_activation', 'pairwise_right_activation']) field(name).disabled = duck;
+        if (duck) {
+            byId('assign-buckets').hidden = true;
+            byId('pairwise-layers').disabled = true;
+            byId('dual-layers').disabled = true;
+            byId('add-layer').disabled = true;
+            byId('layers').querySelectorAll('button').forEach(button => { button.disabled = true; });
+            byId('export-note').textContent = 'Wakwak integer export: feature i16 ×255, packed L1 i8 ×128, remaining tensors i32; padded to 64 bytes.';
+            if (field('duck_inputs').checked) byId('architecture').textContent = '832 DuckChess inputs · ' + byId('architecture').textContent;
+        }
     };
     const syncSkipConnection = () => {
         const pairwiseLayers = selectedPairwiseLayers();
@@ -320,6 +334,43 @@
         return input;
     };
     data.spec.layers.forEach(addLayer);
+    function syncProfile(reset = false) {
+        const profile = data.profiles.find(item => item.id === field('training_profile').value);
+        const duck = profile?.generator === 'duckchess';
+        const bulletLink = byId('bullet-link');
+        if (profile && bulletLink) {
+            bulletLink.href = `${profile.bullet_repo}/commit/${profile.bullet_ref}`;
+            bulletLink.textContent = profile.bullet_ref.slice(0, 12);
+        }
+        byId('duck-inputs').hidden = !duck;
+        byId('profile-note').textContent = profile ? `${profile.name} · ${profile.format.toUpperCase()} · Bullet ${profile.bullet_ref.slice(0, 12)}${duck ? ' · Wakwak integer export; network dimensions must match your engine.' : ''}` : '';
+        if (reset) {
+            const values = duck ? {psqt_inputs: true, duck_inputs: false, threat_inputs: false, pawn_pair_inputs: false, half_move_clock: false, merged_king_planes: false, input_buckets: 1, optimizer: 'adamw', score_outputs: true, score_buckets: 1, wdl_outputs: false, uncertainty_outputs: false, skip_connection: false, hidden_layers_bucketed: false, pairwise_activation: true, dual_activation: true, pairwise_left_activation: 'crelu', pairwise_right_activation: 'crelu', activation: 'crelu', position_filtering: false, filter_check: false, piece_count_sampling: false, result_filtering: false, wdl_filtered: false, export_mode: 'legacy', feature_format: 'i16', split_features: false, loader_interleave: false, random_fen_skip: 0} : {duck_inputs: false};
+            for (const [name, value] of Object.entries(values)) {
+                const input = field(name);
+                if (input.type === 'checkbox') input.checked = value;
+                else input.value = value;
+            }
+            if (duck) {
+                byId('layers').replaceChildren();
+                [1024, 16, 32].forEach(addLayer);
+                byId('pairwise-layers').value = '1';
+                byId('dual-layers').value = '2';
+                layout = Array(64).fill(0);
+            }
+        }
+        const restricted = ['threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'merged_king_planes', 'wdl_outputs', 'uncertainty_outputs', 'skip_connection', 'position_filtering', 'piece_count_sampling', 'result_filtering', 'wdl_filtered', 'hidden_layers_bucketed', 'export_mode', 'split_features', 'feature_format', 'filter_check', 'filter_castling', 'loader_interleave', 'random_fen_skip'];
+        for (const name of restricted) {
+            const input = field(name);
+            const label = input?.closest('label') || input?.closest('.field');
+            if (label) label.hidden = duck;
+        }
+        for (const option of field('optimizer').options) option.disabled = duck && option.value !== 'adamw';
+        if (reset && !duck) renumberLayers();
+        syncFilters();
+    }
+    field('training_profile').addEventListener('change', () => { syncProfile(true); changed(); });
+    syncProfile();
     byId('add-layer').addEventListener('click', () => {
         if (byId('layers').children.length >= 8) return;
         addLayer(32).focus();

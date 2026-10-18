@@ -1,0 +1,14 @@
+{% extends 'OpenBench/base.html' %}
+{% load static %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'workflows.css' %}?{{ static_version }}"><script src="{% static 'workflows.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block page_actions %}<a class="button" href="/workflows/">Workflows</a>{% endblock %}
+{% block content %}
+<form class="form" id="workflow-editor">{% csrf_token %}
+<div class="field-grid"><label class="field">Workflow name<input id="workflow-name" required maxlength="128"></label><label class="field">Training profile<select id="workflow-profile" required></select></label><label class="field">Engine<select id="workflow-engine" required></select></label></div>
+<p>Choose existing workloads as engine-test and datagen templates. Their engine revisions, settings and reference nets are captured when you start a run. Tests consume the candidate produced by the selected training step.</p>
+<div id="workflow-steps" class="workflow-steps"></div>
+<div class="workflow-actions"><select id="workflow-new-kind" aria-label="New step type"><option value="datagen">Generate data</option><option value="upload">Upload dataset</option><option value="train">Train net</option><option value="test">SPRT</option><option value="decision">Metric decision</option><option value="approval">Manual decision</option></select><button type="button" class="button" id="workflow-add">Add step</button><button type="submit" class="button" id="workflow-save">Save workflow</button><button type="button" class="button button-primary" id="workflow-start">Save and run</button></div>
+<p id="workflow-feedback" role="status"></p>
+</form>
+{{ workflow_data|json_script:'workflow-data' }}
+{% endblock %}

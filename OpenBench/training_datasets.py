@@ -137,7 +137,7 @@ def dataset_upload(request, pk):
     run, stage, source, plan = publication_context(request, pk)
     data = json_body(request, limit=4096)
     path, size, oid = data.get('path'), data.get('size'), data.get('sha256')
-    if not isinstance(path, str) or not re.fullmatch(re.escape(plan['prefix']) + r'[0-9]{5}\.vf', path):
+    if not isinstance(path, str) or not re.fullmatch(re.escape(plan['prefix']) + r'[0-9]{5}\.' + getattr(run, 'snapshot', {}).get('settings', {}).get('dataset_format', 'vf'), path):
         raise ValidationError('Invalid prepared dataset path.')
     if type(size) is not int or size <= 0 or not isinstance(oid, str) or not re.fullmatch(r'[a-f0-9]{64}', oid):
         raise ValidationError('Invalid prepared dataset size or checksum.')
@@ -209,16 +209,16 @@ def publish_dataset(request, pk):
             raise ValidationError('Invalid published file metadata.')
         expected_shuffle = shuffled if changed else original.get(file['path'], {}).get('shuffled', False)
         expected_interleave = interleaved if changed else original.get(file['path'], {}).get('interleaved', False)
-        if file['format'] != 'vf' or file['shuffled'] != expected_shuffle or file.get('interleaved', False) != expected_interleave:
+        if file['format'] != getattr(run, 'snapshot', {}).get('settings', {}).get('dataset_format', 'vf') or file['shuffled'] != expected_shuffle or file.get('interleaved', False) != expected_interleave:
             raise ValidationError('Published file readiness does not match the preparation plan.')
         if changed:
-            if not re.fullmatch(re.escape(plan['prefix']) + r'[0-9]{5}\.vf', file['path']) or not re.fullmatch(r'[a-f0-9]{64}', file.get('sha256', '')):
+            if not re.fullmatch(re.escape(plan['prefix']) + r'[0-9]{5}\.' + getattr(run, 'snapshot', {}).get('settings', {}).get('dataset_format', 'vf'), file['path']) or not re.fullmatch(r'[a-f0-9]{64}', file.get('sha256', '')):
                 raise ValidationError('New files must use the assigned paths and SHA256 checksums.')
         elif file['path'] not in original or any(file.get(key) != original[file['path']].get(key) for key in ('size', 'sha256')):
             raise ValidationError('Analysis must preserve the dataset files.')
     if not changed and set(original) != {file['path'] for file in files}:
         raise ValidationError('Analysis must preserve every selected file.')
-    if any(step in plan['steps'] for step in ('shuffle', 'interleave')) and not any(step in plan['steps'] for step in ('convert', 'extract')) and sum(file['size'] for file in files) != source['size']:
+    if any(step in plan['steps'] for step in ('shuffle', 'interleave')) and not any(step in plan['steps'] for step in ('convert', 'extract')) and sum(file['size'] for file in files) != source['size'] and getattr(run, 'snapshot', {}).get('settings', {}).get('dataset_format', 'vf') == 'vf':
         raise ValidationError('Game ordering must preserve dataset size.')
     if 'analyse' in plan['steps'] and not isinstance(statistics.get('analysis'), str):
         raise ValidationError('Dataset analysis is missing.')
@@ -226,7 +226,8 @@ def publish_dataset(request, pk):
     token = hf_token(run.owner_id)
     api = HfApi(token=token)
     info = api.dataset_info(source['repo'], revision=plan['branch'], files_metadata=True)
-    current = read_manifest(source['repo'], info, token)
+    from OpenBench.dataset_manifest import catalogue_manifest
+    current = catalogue_manifest(read_manifest(source['repo'], info, token), info)
     if current is None:
         if source.get('manifest_present'):
             raise ValidationError('dataset.json was removed during preparation.')

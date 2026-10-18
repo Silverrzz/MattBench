@@ -32,6 +32,11 @@ def effective_throughput(workload):
 
 def worker_threads(machine, workload):
     fallback = machine.info.get('concurrency', 1)
+    if workload.execution.get('workflow'):
+        from OpenBench.worker_policy import allocation
+        selected = allocation(machine.info, workload.execution.get('worker_policy', {}), fallback)
+        if selected:
+            return selected['threads']
     if not machine.info.get('thread_budgets'):
         return fallback
     key = 'datagen_threads' if workload.test_mode == 'DATAGEN' else 'test_threads'
