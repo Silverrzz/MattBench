@@ -27,7 +27,7 @@ body:has(.wf-editor) { overflow: hidden; }
 .wf-button-primary i { font-size: 10px; }
 .wf-save-status { color: var(--wf-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .wf-save-status[data-error=true] { color: #ff9a9f; white-space: normal; }
-.wf-canvas { position: absolute; inset: 66px 0 0; overflow: hidden; touch-action: none; cursor: grab; outline: none; background-image: radial-gradient(circle, #3c3c46 .8px, transparent .9px); background-size: 24px 24px; overscroll-behavior: none; }
+.wf-canvas { position: absolute; inset: 66px 0 0; overflow: clip; touch-action: none; cursor: grab; outline: none; background-image: radial-gradient(circle, #3c3c46 .8px, transparent .9px); background-size: 24px 24px; overscroll-behavior: none; }
 .wf-canvas.is-dragging { cursor: grabbing; }
 .wf-canvas.is-connecting { cursor: crosshair; }
 .wf-world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }

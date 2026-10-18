@@ -110,7 +110,8 @@
     function portPoint(id, key, input = false) {
         const node = nodeElements.get(id), port = [...node.querySelectorAll(input ? '[data-input]' : '[data-output]')].find(item => (input ? item.dataset.input : item.dataset.output) === key);
         if (!port) return definition.layout.nodes[id];
-        const rect = port.getBoundingClientRect(); return point(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        const rect = port.getBoundingClientRect(), origin = world.getBoundingClientRect(), scale = camera().zoom;
+        return {x: (rect.left + rect.width / 2 - origin.left) / scale, y: (rect.top + rect.height / 2 - origin.top) / scale};
     }
     const curve = (a, b, horizontal) => { const bend = Math.max(65, Math.abs((horizontal ? b.x - a.x : b.y - a.y)) * .45); return horizontal ? `M${a.x},${a.y} C${a.x + bend},${a.y} ${b.x - bend},${b.y} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x},${a.y + bend} ${b.x},${b.y - bend} ${b.x},${b.y}`; };
     function svg(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, value); return item; }
