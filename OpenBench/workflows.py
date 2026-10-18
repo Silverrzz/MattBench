@@ -243,6 +243,9 @@ def launch(step, node, outputs):
         step.upload = DatasetUpload.objects.create(owner=run.owner, workload=workload, repo=config['repo'], private=config.get('private', True), filename='workflow-%s-%s-%d.pgn.tar' % (str(run.pk)[:8], step.key, step.attempts + 1))
     elif node['kind'] == 'train':
         dataset = outputs[node['inputs']['dataset']]['dataset']
+        from OpenBench.schedule_builder import MANIFEST, dataset_stages
+        ranges = dataset_stages(json.loads(config['schedule_snapshot']['files'][MANIFEST])['spec'])
+        dataset = {**dataset, 'stages': [{**dataset, **bounds} for bounds in ranges]}
         step.training = TrainingRun.objects.create(owner=run.owner, engine_id=run.snapshot['engine'], name='wf-%s-%s' % (str(run.pk)[:8], step.key),
             snapshot={**config['schedule_snapshot'], 'workflow': reference(step), 'worker_policy': node['worker']},
             dataset=dataset, priority=config.get('priority', 0))
