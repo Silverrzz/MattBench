@@ -873,9 +873,14 @@ def client_submit_error(request, machine):
     test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
     test.error = True
     test.errors_acknowledged = False
-    test.save(update_fields=['error', 'errors_acknowledged'])
+    fatal_configuration = request.POST.get('fatal') == 'configuration'
+    if fatal_configuration and (machine.workload != test.pk or not test.test.filter(machine=machine).exists()):
+        return JsonResponse({'error': 'This workload assignment is closed.'}, status=400)
+    if fatal_configuration:
+        test.finished = True
+    test.save(update_fields=['error', 'errors_acknowledged', 'finished'])
 
-    if request.POST['error'].endswith(' build failed'):
+    if fatal_configuration or request.POST['error'].endswith(' build failed'):
         from OpenBench.lifecycle import test_event
         test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
         test_event('execution_error', test)

@@ -241,12 +241,6 @@ def launch(step, node, outputs):
                     from OpenBench.utils import extract_option
                     if any(int(extract_option(values[side + '_options'], option)) < 1 for option in ('Threads', 'Hash')):
                         raise ValidationError('Workflow parameters must keep Threads and Hash positive.')
-                    values[side].bench = 0
-                    values[side].save(update_fields=['bench'])
-                    automatic = values['execution'].setdefault('automatic_bench', [])
-                    if side not in automatic:
-                        automatic.append(side)
-                    values['execution'].setdefault('bench_options', {})[side] = values[side + '_options']
         if node['kind'] == 'datagen' and 'parameters' not in config:
             values.update(max_games=config.get('games', 10000000), upload_pgns='COMPACT')
         elif node['kind'] == 'test':

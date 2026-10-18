@@ -46,9 +46,9 @@ def prepare(node, engine, profile, user):
     values.update({key: str(value) for key, value in parameters.items()})
     values['dev_engine'] = engine.name
     dynamic = set()
-    if node['inputs'].get('network') or node['inputs'].get('parameters'):
+    if node['inputs'].get('network'):
         dynamic.update(('dev', 'base') if kind == 'tune' else ('dev',))
-    if node['inputs'].get('base_network') or node['inputs'].get('base_parameters'):
+    if node['inputs'].get('base_network'):
         dynamic.add('base')
     for side in dynamic:
         values[side + '_bench'] = '1'

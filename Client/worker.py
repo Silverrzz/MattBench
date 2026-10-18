@@ -62,7 +62,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 57
+CLIENT_VERSION   = 58
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -519,7 +519,8 @@ class MatchRunner:
         # Add any of the custom SPSA settings
         if config.workload['test']['type'] == 'SPSA':
             for param, data in config.workload['spsa'].items():
-                options += ' %s=%s' % (param, str(data[branch][runner_idx]))
+                value = '%s=%s' % (param, str(data[branch][runner_idx]))
+                options += ' ' + ('"' + value + '"' if ' ' in param else value)
 
         # Join options together in format expected by match runner
         options = ' option.'.join([''] + re.findall(r'"[^"]*"|\S+', options))
@@ -1220,6 +1221,9 @@ def _complete_workload(config):
     dev_name  = safe_download_engine(config, 'dev' , dev_network )
     base_name = safe_download_engine(config, 'base', base_network)
 
+    import engine_configuration
+    engine_configuration.validate(config, {'dev': dev_name, 'base': base_name}, MatchRunner, ServerReporter.report)
+
     # Datagen creates a book on-the-fly
     if config.workload['test']['type'] == 'DATAGEN':
         safe_create_genfens_opening_book(config, dev_name)
@@ -1385,10 +1389,16 @@ def build_runner_command(config, dev_cmd, base_cmd, scale_factor, timestamp, run
 def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag, timestamp=None):
 
     print('\n[#%d] Launching match runner...\n%s\n' % (runner_idx, command))
+    if abort_flag.is_set():
+        return ''
     runner = Popen(shlex.split(command), stdout=PIPE, stderr=STDOUT)
+    import engine_configuration
+    if not engine_configuration.track_runner(config, runner, abort_flag):
+        return ''
     from collections import deque
     output_tail = deque(maxlen=256)
     failure_traces = deque(maxlen=4)
+    configuration_failure = None
 
     results = {
 
@@ -1413,6 +1423,15 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
             continue
 
         if abort_flag.is_set():
+            break
+
+        if engine_configuration.runner_warning(line):
+            abort_flag.set()
+            engine_configuration.stop_runners(config)
+            try:
+                engine_configuration.fail(config, ServerReporter.report, line, '\n'.join(output_tail))
+            except Exception as error:
+                configuration_failure = error
             break
 
         if 'Started game' not in line and 'Score of' not in line:
@@ -1454,6 +1473,8 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
     except subprocess.TimeoutExpired:
         runner.kill()
         returncode = runner.wait()
+    if configuration_failure is not None:
+        raise configuration_failure
     if returncode and not abort_flag.is_set():
         import runner_diagnostics
         trace = runner_diagnostics.collect(config, timestamp, runner_idx) if timestamp is not None else ''
@@ -1467,6 +1488,8 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 def reload_local_imports():
+    import engine_configuration
+    importlib.reload(engine_configuration)
     import resource_policy
     importlib.reload(resource_policy)
 
