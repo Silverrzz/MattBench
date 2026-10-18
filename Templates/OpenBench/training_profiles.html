@@ -3,6 +3,7 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'training_profiles.css' %}?{{ static_version }}"><script src="{% static 'training_profiles.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block page_actions %}<a class="button" href="/training/schedules/builder/">Build schedule</a>{% if user.is_superuser %}<button class="button button-primary" type="button" id="profile-create"><i class="fa-solid fa-plus" aria-hidden="true"></i> New profile</button>{% endif %}{% endblock %}
 {% block content %}
+{% include 'OpenBench/Blocks/training_nav.html' with training_tab='profiles' %}
 <section class="profile-grid" aria-label="Training profiles">
 {% for profile in profiles %}
     <article class="profile-card">

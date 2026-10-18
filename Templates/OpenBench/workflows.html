@@ -1,7 +1,7 @@
 {% extends 'OpenBench/base.html' %}
 {% load static %}
 {% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'workflow_index.css' %}?{{ static_version }}"><script src="{% static 'workspace.js' %}?{{ static_version }}" defer></script>{% endblock %}
-{% block page_actions %}<a class="button" href="/training/profiles/">Training profiles</a><a class="button button-primary" href="/workflows/new/"><i class="fa-solid fa-plus" aria-hidden="true"></i> New workflow</a>{% endblock %}
+{% block page_actions %}<a class="button button-primary" href="/workflows/new/"><i class="fa-solid fa-plus" aria-hidden="true"></i> New workflow</a>{% endblock %}
 {% block content %}
 <div class="tests-page workflow-index">
     <section class="tests-section" aria-labelledby="workflow-library-heading" data-filter-scope>
