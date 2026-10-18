@@ -7,6 +7,7 @@
     {% csrf_token %}{{ form.non_field_errors }}
     <section class="training-form-section" aria-labelledby="training-setup-heading">
     <h3 id="training-setup-heading">Training setup</h3>
+    <div class="field">{{ form.training_profile.label_tag }}{{ form.training_profile }}{{ form.training_profile.errors }}</div>
     <div class="field">{{ form.checkpoint.label_tag }}{{ form.checkpoint }}{{ form.checkpoint.errors }}<p class="field-note" id="training-checkpoint-help">Start fresh or choose a saved checkpoint. Starting training always creates a new task.</p></div>
     <div class="field-grid training-identity">
         <div class="field">{{ form.engine.label_tag }}{{ form.engine }}{{ form.engine.errors }}</div>

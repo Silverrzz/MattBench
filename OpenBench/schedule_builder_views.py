@@ -4,8 +4,8 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError
 from django.db.models import F
-from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
+from django.http import Http404, JsonResponse
+from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
@@ -13,7 +13,7 @@ from OpenBench.models import EngineConfig, TrainingSchedule
 from OpenBench.bullet import pinned_bullet_commit
 from OpenBench.schedule_builder import DEFAULT_SPEC, SOURCE, builder_state, generate_schedule
 from OpenBench.training_views import enabled, error_text, schedules_for
-from OpenBench.training_profiles import profiles, resolve_profile
+from OpenBench.training_profiles import default_spec, profile_data, profiles, resolve_profile
 
 
 @login_required(login_url='/login/')
@@ -22,7 +22,7 @@ def schedule_builder(request, schedule_id=None):
     from OpenBench.views import render
     enabled(request.user)
     selected = get_object_or_404(schedules_for(request.user), pk=schedule_id) if schedule_id else None
-    spec, unchanged = builder_state(selected) if selected else (DEFAULT_SPEC, True)
+    spec, unchanged = builder_state(selected) if selected else (None, True)
     available_profiles = profiles()
     saved_profile = selected.settings.get('training_profile') if selected else None
     if saved_profile:
@@ -89,10 +89,16 @@ def schedule_builder(request, schedule_id=None):
         notice = 'The Rust source or build settings have been edited. Saving here creates a copy from the last builder settings.'
     elif selected and not editable:
         notice = 'Saving creates a personal copy of this shared schedule.'
-    profile = resolve_profile((spec or DEFAULT_SPEC).get('training_profile', 'standard'), saved_profile)
-    spec, files, config = generate_schedule(spec or DEFAULT_SPEC, profile['bullet_ref'], profile)
+    if not available_profiles:
+        return redirect('/training/profiles/')
+    default_profile = 'standard' if any(item['id'] == 'standard' for item in available_profiles) else available_profiles[0]['id']
+    initial = (spec or {}).get('training_profile') or (saved_profile or {}).get('id') or request.GET.get('profile', default_profile)
+    if not saved_profile and initial not in {item['id'] for item in available_profiles}:
+        raise Http404('This training profile is unavailable.')
+    profile = resolve_profile(initial, saved_profile)
+    spec, files, config = generate_schedule(spec or default_spec(profile), profile['bullet_ref'], profile)
     payload = {
-        'profiles': available_profiles,
+        'profiles': [profile_data(item) for item in available_profiles],
         'id': str(selected.pk) if selected and not copy else '', 'version': selected.version if selected and not copy else 0,
         'spec': spec, 'source': files[SOURCE], 'notice': notice,
         'wdl_model_defaults': {key: DEFAULT_SPEC[key] for key in ('wdl_model_params_a', 'wdl_model_params_b', 'material_min', 'material_max', 'mom_target', 'wdl_heuristic_scale')},
@@ -101,7 +107,9 @@ def schedule_builder(request, schedule_id=None):
         'scope': selected.scope if selected and not copy else 'personal',
         'post_url': '/training/schedules/%s/builder/' % selected.pk if selected and not copy else '/training/schedules/builder/',
     }
+    from OpenBench.training_adapters import INPUT_FEATURES
     return render(request, 'schedule_builder.html', {
         'page_title': 'Schedule builder', 'training_tab': 'schedules', 'builder_data': payload,
         'engines': EngineConfig.objects.filter(enabled=True).order_by('name'), 'bullet_commit': profile['bullet_ref'], 'bullet_repo': profile['bullet_repo'],
+        'input_features': [{'key': key, **value} for key, value in INPUT_FEATURES.items()],
     })

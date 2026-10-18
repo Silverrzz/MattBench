@@ -137,6 +137,12 @@ def schedules(request, schedule_id=None, create=False):
         'settings': {**DEFAULT_SETTINGS, **selected.settings} if selected else default_settings(),
         'editable': not selected or selected.owner_id == request.user.pk or request.user.is_superuser,
     }
+    from OpenBench.training_profiles import profile_runtime, profiles
+    available_profiles = profiles()
+    captured = payload['settings'].get('training_profile')
+    if captured:
+        available_profiles = [profile for profile in available_profiles if profile['id'] != captured['id']] + [captured]
+    payload['profiles'] = [{'id': profile['id'], 'name': profile['name'], 'settings': profile_runtime(profile)} for profile in available_profiles]
     if request.GET.get('copy') and selected:
         payload.update(id='', version=0, name=selected.name + ' copy', scope='personal', editable=True)
     return render(request, 'training_schedules.html', {
@@ -149,6 +155,7 @@ from OpenBench.schedule_builder import schedule_dataset_stages, builder_state
 
 
 class TrainingForm(forms.Form):
+    training_profile = forms.ChoiceField(label='Training profile', required=False)
     priority = forms.IntegerField(min_value=-2147483648, max_value=2147483647, initial=0, required=False)
     workload_size = forms.IntegerField(label='Workload size (SB; 0 is uninterrupted)', min_value=0, max_value=1000000, initial=0, required=False)
     checkpoint = forms.ModelChoiceField(label='Starting point', queryset=TrainingCheckpoint.objects.none(), required=False, empty_label='Start from scratch')
@@ -170,6 +177,13 @@ class TrainingForm(forms.Form):
         self.fields['checkpoint'].label_from_instance = lambda row: '%s · Run #%d · SB %d → %d' % (row.run.name, row.run_id, row.superbatch, row.superbatch + 1)
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
         self.fields['schedule'].label_from_instance = lambda row: '%s (%s)' % (row.name, row.scope_label)
+        from OpenBench.training_profiles import profiles
+        choices = {profile['id']: profile['name'] for profile in profiles()}
+        for config in self.fields['schedule'].queryset.values_list('settings', flat=True):
+            captured = config.get('training_profile') or {}
+            if captured.get('id'):
+                choices.setdefault(captured['id'], captured.get('name', captured['id']))
+        self.fields['training_profile'].choices = [('', 'All profiles'), *choices.items()]
         for name, field in self.fields.items():
             field.widget.attrs.update({'id': 'train-' + name})
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
@@ -195,6 +209,8 @@ class TrainingForm(forms.Form):
     def clean(self):
         data = super().clean()
         schedule = data.get('schedule')
+        if schedule and data.get('training_profile') and (schedule.settings.get('training_profile') or {}).get('id', 'standard') != data['training_profile']:
+            self.add_error('schedule', 'Choose a schedule for the selected training profile.')
         ranges = schedule_dataset_stages(schedule) if schedule else []
         overrides = data.get('stage_datasets') or []
         stage_count = max(1, len(ranges)) if schedule else 0
@@ -321,7 +337,7 @@ def new_training(request):
             return redirect(request, '/training/%d/' % run.pk)
         except ValidationError as error:
             form.add_error(None, error)
-    options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'scope': row.scope_label, 'stages': schedule_dataset_stages(row), 'workloads': builder_state(row)[1]} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
+    options = [{'id': str(row.pk), 'engine': str(row.engine_id) if row.scope == 'engine' else '', 'name': row.name, 'profile': (row.settings.get('training_profile') or {}).get('id', 'standard'), 'scope': row.scope_label, 'stages': schedule_dataset_stages(row), 'workloads': builder_state(row)[1]} for row in schedules_for(request.user).filter(Q(owner=request.user) | Q(engine__enabled=True) | Q(engine=None))]
     dataset_options = [{'id': str(row.pk), 'name': row.name, 'repo': row.repo, 'revision': row.revision, 'owner': row.owner.username, 'is_owner': row.owner_id == request.user.pk} for row in form.fields['dataset'].queryset.select_related('owner')]
     dataset_options.sort(key=lambda row: (not row['is_owner'], row['name'].casefold(), row['owner'].casefold(), row['id']))
     checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': registry_selections(row.run.dataset)} for row in form.fields['checkpoint'].queryset]

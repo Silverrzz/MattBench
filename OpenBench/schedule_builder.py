@@ -105,7 +105,7 @@ def validate_spec(value):
             raise ValidationError('Invalid %s selection.' % key.replace('_', ' '))
     if not spec['score_outputs'] and not spec['wdl_outputs']:
         raise ValidationError('Enable a score or WDL output. The uncertainty head needs a prediction error to learn from.')
-    if not any(spec[key] for key in ('psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'half_move_clock')):
+    if not any(spec[key] for key in ('psqt_inputs', 'threat_inputs', 'pawn_pair_inputs', 'half_move_clock', 'duck_inputs')):
         raise ValidationError('Enable at least one input feature.')
     if not spec['psqt_inputs'] and not spec['half_move_clock']:
         spec['input_buckets'] = 1
@@ -270,15 +270,18 @@ def generate_schedule(value, bullet_commit=BULLET_COMMIT, profile=None):
     if profile is not None and profile.get('id') != spec['training_profile']:
         raise ValidationError('The schedule must match its training profile.')
     if profile is None:
-        from OpenBench.training_profiles import BUILTINS
         if spec['training_profile'] != 'standard':
             from OpenBench.training_profiles import resolve_profile
             profile = resolve_profile(spec['training_profile'])
-    if profile and profile['generator'] == 'duckchess':
-        from OpenBench.duck_builder import generate
-        return generate(spec, profile)
-    if spec['duck_inputs']:
-        raise ValidationError('Duck inputs require a DuckChess training profile.')
+    from OpenBench.training_adapters import ADAPTERS
+    from OpenBench.training_profiles import BUILTINS, validate_profile, validate_profile_spec
+    contract = validate_profile({key: value for key, value in profile.items() if key != 'id'}) if profile else BUILTINS['standard']
+    validate_profile_spec(spec, contract)
+    entrypoint = ADAPTERS[contract['generator']]['generate']
+    if entrypoint:
+        from importlib import import_module
+        module, function = entrypoint.rsplit('.', 1)
+        return getattr(import_module(module), function)(spec, profile)
     template, auxiliary, adapter, licence = assets()
     bucket_type = 'ChessBucketsMirrored' if spec['mirrored'] else 'ChessBuckets'
     king_width = 4 if spec['mirrored'] else 8
@@ -450,8 +453,9 @@ if count < max_active {
         'build': [*DEFAULT_SETTINGS['build'][:-1], spec['backend']],
     }
     if profile:
-        from OpenBench.training_profiles import profile_settings
-        settings.update(profile_settings(profile))
+        from OpenBench.training_profiles import profile_runtime, profile_sources
+        settings = profile_runtime(profile, spec, resume_supported=True)
+        profile_sources(files, settings)
     files[MANIFEST] = json.dumps({
         **({'training_profile': profile} if profile else {}),
         'version': MANIFEST_VERSION, 'spec': spec, 'fingerprint': fingerprint(files, settings),
@@ -459,7 +463,7 @@ if count < max_active {
         'optimizer': {'name': spec['optimizer'], 'decay': 0.01, 'beta1': 0.99 if ranger else 0.9, 'beta2': 0.999,
                       'alpha': spec['ranger_alpha'] if ranger else None, 'k': spec['ranger_k'] if ranger else None,
                       'lookahead_checkpoint_version': 1 if ranger else None},
-        'bullet_source': 'https://github.com/jw1912/bullet/tree/' + bullet_commit,
+        'bullet_source': settings['bullet_repo'] + '/tree/' + settings['bullet_ref'],
         'export': {'mode': spec['export_mode'], 'tensors': export_tensors, 'byte_order': 'little', 'padding': 'bullet_to_64_bytes',
                    'feature_weights': 'per_tensor' if spec['export_mode'] == 'custom' and spec['feature_export'] else spec['feature_format'],
                    'feature_scale': None if spec['export_mode'] == 'custom' and spec['feature_export'] else 255 if spec['feature_format'] == 'i16' else 1,

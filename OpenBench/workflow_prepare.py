@@ -39,6 +39,16 @@ def prepare(node, definition, user):
                 raise ValidationError('Choose a valid SPRT game cap.')
     elif kind == 'train':
         from OpenBench.schedule_builder import builder_state, generate_schedule
+        from OpenBench.training import validate_schedule
+        from OpenBench.training_profiles import profile_runtime
+        if 'files' in config:
+            if not isinstance(config.get('settings', {}), dict):
+                raise ValidationError('Use an object for the training runtime settings.')
+            options = {**profile_runtime(profile), **config.get('settings', {}), 'training_profile': profile,
+                       'bullet_repo': profile['bullet_repo'], 'bullet_ref': profile['bullet_ref'], 'dataset_format': profile['format']}
+            options = validate_schedule(config['files'], options)
+            config['schedule_snapshot'] = {'name': node['name'], 'version': 1, 'files': config['files'], 'settings': options, 'environment': {}}
+            return
         if config.get('spec'):
             spec, name, version = config['spec'], node['name'], 1
         else:
@@ -46,9 +56,19 @@ def prepare(node, definition, user):
             schedule = schedules_for(user).filter(pk=config.get('schedule')).first()
             if not schedule or 'mattbench-demo.json' in schedule.files or schedule.engine_id and schedule.engine_id != engine.pk:
                 raise ValidationError('Choose a compatible runnable schedule, or configure this node’s schedule.')
+            captured = schedule.settings.get('training_profile') or None
+            if captured:
+                profile = resolve_profile(profile['id'], captured)
+                config['training_profile'] = profile
             spec, managed = builder_state(schedule)
             if not managed:
-                raise ValidationError('Use a builder schedule for this node.')
+                options = validate_schedule(schedule.files, schedule.settings)
+                if not captured:
+                    if any(options[key] != profile[key] for key in ('bullet_repo', 'bullet_ref')) or options['dataset_format'] != profile['format']:
+                        raise ValidationError('The source schedule must match the selected profile’s trainer and data format.')
+                    options['training_profile'] = profile
+                config['schedule_snapshot'] = {'name': schedule.name, 'version': schedule.version, 'files': schedule.files, 'settings': options, 'environment': {}}
+                return
             name, version = schedule.name, schedule.version
         if spec.get('training_profile', 'standard') != profile['id']:
             raise ValidationError('The schedule and node profiles must match.')

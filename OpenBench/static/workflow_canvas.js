@@ -95,7 +95,7 @@
     function summary(step) {
         if (step.kind === 'datagen') return `${Number(step.config.games || 10000000).toLocaleString()} games`;
         if (step.kind === 'upload') return step.config.repo || 'Choose a destination';
-        if (step.kind === 'train') return step.config.spec ? step.config.spec.layers.join(' → ') + ' · ' + step.config.spec.superbatches + ' SB' : data.schedules.find(row => row.id === step.config.schedule)?.name || 'Configure training';
+        if (step.kind === 'train') return 'files' in step.config ? 'Source files · ' + Object.keys(step.config.files || {}).length : step.config.spec ? step.config.spec.layers.join(' → ') + ' · ' + step.config.spec.superbatches + ' SB' : data.schedules.find(row => row.id === step.config.schedule)?.name || 'Configure training';
         if (step.kind === 'test') return ({nodes: `${Number(step.config.nodes || 25000).toLocaleString()} nodes`, stc: 'Short time control', ltc: 'Long time control'})[step.config.control] || 'Choose a workload';
         if (step.kind === 'decision') return `${step.config.field || 'loss'} ${({lt: '<', lte: '≤', gt: '>', gte: '≥', eq: '='})[step.config.operator] || '<'} ${step.config.value ?? 0}`;
         if (step.kind === 'load_data') return ({huggingface: step.config.repo || 'Choose data', registry: data.datasets.find(row => row.id === step.config.dataset)?.name, datagen: step.config.workload ? 'Workload #' + step.config.workload : ''})[step.config.provider || 'huggingface'] || 'Choose data';
@@ -188,7 +188,7 @@
         if (selection === 'settings') {
             byId('inspector-title').textContent = 'Workflow defaults';
             field(body, 'Engine', definition.engine, value => { definition.engine = value; }, choices(data.engines, 'Choose when needed'));
-            field(body, 'Training profile', definition.profile, value => { definition.profile = value; }, data.profiles); return;
+            field(body, 'Training profile', definition.profile, value => { definition.profile = value; for (const step of definition.steps) if (step.kind === 'train' && !step.config.profile && !('files' in step.config) && !step.config.schedule && step.config.schedule_mode !== 'saved') step.config.spec = structuredClone(data.schedule_defaults[value]); }, data.profiles); return;
         }
         if (typeof selection === 'object' && selection) {
             byId('inspector-title').textContent = 'Connection';
@@ -261,23 +261,49 @@
             } else field(body, 'Artifact', config.artifact, value => { config.artifact = Number(value); }, choices(config.provider === 'workflow' ? data.workflow_artifacts : data.artifacts, 'Choose artifact'));
         }
         if (step.kind === 'select') field(body, 'Matching file patterns', (config.patterns || ['*']).join('\n'), value => { config.patterns = value.split('\n').filter(Boolean); }, null, 'textarea');
-        if (['train', 'convert', 'split'].includes(step.kind)) field(body, 'Training profile', config.profile || '', value => { config.profile = value; if (step.kind === 'train') config.spec = structuredClone(data.schedule_defaults[value || definition.profile]); renderInspector(); }, choices(data.profiles, 'Default · ' + (profile?.name || 'Standard chess')));
+        if (['train', 'convert', 'split'].includes(step.kind)) field(body, 'Training profile', config.profile || '', value => { config.profile = value; if (step.kind === 'train') { if (config.schedule_mode === 'saved') delete config.schedule; else if (!('files' in config)) config.spec = structuredClone(data.schedule_defaults[value || definition.profile]); } renderInspector(); }, choices(data.profiles, profile ? 'Default · ' + profile.name : 'Workflow default'));
+        if (step.kind === 'train' && !profile) { body.append(make('p', 'Choose an available training profile.', 'wf-inline-note')); return; }
         if (step.kind === 'split') {
             field(body, 'Validation fraction', config.validation_fraction ?? .1, value => { config.validation_fraction = value; }, null, 'number');
             field(body, 'Seed', config.seed ?? 42, value => { config.seed = value; }, null, 'number');
         }
         if (step.kind === 'convert') field(body, 'Shuffle games', config.shuffle ?? false, value => { config.shuffle = value; }, null, 'checkbox');
         if (step.kind === 'train') {
-            const spec = config.spec ||= structuredClone(data.schedule_defaults[profileId]);
-            const training = section('Training configuration');
-            field(training, 'Hidden layers', spec.layers.join(', '), value => { spec.layers = value.split(',').map(Number); });
-            for (const [label, key] of [['Superbatches', 'superbatches'], ['Batch size', 'batch_size'], ['Batches per superbatch', 'batches_per_superbatch'], ['Save every', 'save_every']]) field(training, label, spec[key], value => { const old = spec.superbatches; spec[key] = value; if (key === 'superbatches') for (const stages of [spec.lr_stages, spec.wdl_stages]) stages[stages.length - 1].end = value; }, null, 'number');
-            field(training, 'Backend', spec.backend, value => { spec.backend = value; }, [{id: 'cuda', name: 'CUDA'}, {id: 'rocm', name: 'ROCm'}]);
-            const features = section('Input features');
-            for (const key of profile?.features || []) field(features, ({psqt_inputs: 'Piece squares', threat_inputs: 'Threats', pawn_pair_inputs: 'Pawn pairs', half_move_clock: 'Half-move clock', merged_king_planes: 'Merged kings', duck_inputs: 'Duck square'})[key] || key, spec[key], value => { spec[key] = value; }, null, 'checkbox');
-            const schedule = section('Schedule');
-            field(schedule, 'Copy saved schedule', '', value => { const row = data.schedules.find(row => row.id === value); if (row?.spec) { config.spec = structuredClone(row.spec); renderInspector(); } }, choices(data.schedules.filter(row => row.profile === profileId), 'Choose schedule'));
-            jsonField(schedule, 'Schedule configuration', spec, value => { config.spec = value; });
+            const selectedSchedule = data.schedules.find(row => row.id === config.schedule);
+            const sourceMode = config.schedule_mode || ('files' in config ? 'source' : config.schedule && !config.spec ? 'saved' : 'builder');
+            field(body, 'Schedule', sourceMode, value => {
+                delete config.files; delete config.schedule; delete config.spec;
+                if (value === 'builder') config.spec = structuredClone(data.schedule_defaults[profileId]);
+                else if (value === 'source') config.files = {[profile.runtime_settings.example_source]: ''};
+                else config.schedule = '';
+                config.schedule_mode = value;
+                renderInspector();
+            }, [{id: 'builder', name: 'Visual builder'}, {id: 'source', name: 'Source files'}, {id: 'saved', name: 'Saved schedule'}]);
+            if (sourceMode !== 'builder') {
+                if (sourceMode === 'source') {
+                    const entry = profile.runtime_settings.example_source;
+                    field(body, entry, config.files[entry] || '', value => { config.files[entry] = value; }, null, 'textarea');
+                    const files = section('Source bundle');
+                    jsonField(files, 'Files', config.files, value => { if (!value || Array.isArray(value) || typeof value !== 'object') throw Error('Use an object mapping file paths to source text.'); config.files = value; });
+                    jsonField(files, 'Runtime settings', config.settings || {}, value => { if (!value || Array.isArray(value) || typeof value !== 'object') throw Error('Use a settings object.'); config.settings = value; });
+                } else field(body, 'Saved schedule', config.schedule || '', value => { config.schedule = value; renderInspector(); }, choices(data.schedules.filter(row => row.profile === profileId), 'Choose schedule'));
+                if (selectedSchedule) { const link = make('a', 'Edit schedule source', 'wf-inline-note'); link.href = '/training/schedules/' + selectedSchedule.id + '/'; body.append(link); }
+            } else {
+                const spec = config.spec ||= structuredClone(data.schedule_defaults[profileId]);
+                const training = section('Training configuration');
+                const limits = profile.builder.layers;
+                const layerError = () => spec.layers.length < limits.minimum || spec.layers.length > limits.maximum || Object.entries(limits.multiples).some(([index, multiple]) => spec.layers[index] % multiple) ? 'Use the hidden-layer count and dimensions supported by ' + profile.builder.label + '.' : '';
+                const layers = field(training, 'Hidden layers', spec.layers.join(', '), value => { spec.layers = value.split(',').map(Number); layers.setCustomValidity(layerError()); });
+                layers.setCustomValidity(layerError());
+                for (const [label, key] of [['Superbatches', 'superbatches'], ['Batch size', 'batch_size'], ['Batches per superbatch', 'batches_per_superbatch'], ['Save every', 'save_every']]) field(training, label, spec[key], value => { const old = spec.superbatches; spec[key] = value; if (key === 'superbatches') for (const stages of [spec.lr_stages, spec.wdl_stages]) stages[stages.length - 1].end = value; }, null, 'number');
+                field(training, 'Backend', spec.backend, value => { spec.backend = value; }, [{id: 'cuda', name: 'CUDA'}, {id: 'rocm', name: 'ROCm'}]);
+                field(training, 'Optimizer', spec.optimizer, value => { spec.optimizer = value; }, profile.optimizers.map(id => ({id, name: id === 'adamw' ? 'AdamW' : 'Ranger'})));
+                const features = section('Input features');
+                for (const feature of profile.input_features) field(features, feature.label, spec[feature.key], value => { spec[feature.key] = value; }, null, 'checkbox');
+                const schedule = section('Schedule');
+                field(schedule, 'Copy saved schedule', '', value => { const row = data.schedules.find(row => row.id === value); if (row?.spec) { config.spec = structuredClone(row.spec); renderInspector(); } }, choices(data.schedules.filter(row => row.profile === profileId && row.spec), 'Choose schedule'));
+                jsonField(schedule, 'Schedule configuration', spec, value => { config.spec = value; });
+            }
         }
         if (step.kind === 'test') {
             field(body, 'Time control', config.control || 'stc', value => { config.control = value; if (value === 'nodes') config.nodes ||= 25000; renderInspector(); }, [{id: 'nodes', name: 'Fixed nodes'}, {id: 'stc', name: 'STC'}, {id: 'ltc', name: 'LTC'}]);

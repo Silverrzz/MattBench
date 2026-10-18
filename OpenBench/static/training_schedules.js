@@ -24,6 +24,18 @@
         revision++;
         setFeedback('Unsaved changes');
     }
+    const trainingProfile = element('schedule-training-profile');
+    trainingProfile.append(new Option('Custom source', ''), ...data.profiles.map(profile => new Option(profile.name, profile.id)));
+    trainingProfile.value = data.settings.training_profile?.id || '';
+    trainingProfile.addEventListener('change', () => {
+        try {
+            const config = {...JSON.parse(settings.value), bullet_repo: element('bullet-repo').value.trim(), bullet_ref: element('bullet-ref').value.trim()}, profile = data.profiles.find(item => item.id === trainingProfile.value);
+            const updated = profile ? {...config, ...structuredClone(profile.settings)} : {...config, training_profile: {}};
+            settings.value = JSON.stringify(updated, null, 2);
+            element('bullet-repo').value = updated.bullet_repo; element('bullet-ref').value = updated.bullet_ref;
+            changed();
+        } catch { setFeedback('Correct the build settings before selecting a training profile.', true); }
+    });
     function storeActive() {
         data.files[active] = editor ? editor.getText() : source.value;
         if (editor) fileStates.set(active, editor.getState());

@@ -56,8 +56,13 @@ def worker_requirement_errors(info, config, disk_required=None, dataset=None):
     errors = []
     if config.get('training_profile', {}).get('data_tool') and 'profile-dataset-tools-v1' not in info.get('capabilities', []):
         errors.append('Update this worker to install the profile’s dataset tools when claiming a workload.')
-    if config.get('dataset_format') == 'wf' and 'wakformat-v1' not in info.get('capabilities', []):
-        errors.append('Update this worker to support DuckChess Wakformat training.')
+    from OpenBench.training_adapters import DATA_TOOLS
+    provider = DATA_TOOLS.get(config.get('training_profile', {}).get('data_tool', {}).get('kind'))
+    if provider is None:
+        provider = next((tool for tool in DATA_TOOLS.values() if config.get('dataset_format', 'vf') in tool['formats']), {})
+    for capability in provider.get('capabilities', []):
+        if capability not in info.get('capabilities', []):
+            errors.append('Update this worker to support %s (%s).' % (provider['label'], capability))
     minimum = config.get('training_profile', {}).get('rust_minimum')
     reported = re.search(r'rustc (\d+)\.(\d+)\.(\d+)', info.get('runtime', {}).get('rust', ''))
     if minimum and reported and tuple(map(int, reported.groups())) < tuple(map(int, minimum.split('.'))):
@@ -153,7 +158,8 @@ def validate_schedule(files, config):
     if not isinstance(config, dict) or set(config) - set(DEFAULT_SETTINGS):
         raise ValidationError('Unknown schedule settings.')
     config = {**DEFAULT_SETTINGS, **config}
-    if config['dataset_format'] not in ('vf', 'wf'):
+    from OpenBench.training_adapters import ADAPTERS
+    if config['dataset_format'] not in {adapter['format'] for adapter in ADAPTERS.values()}:
         raise ValidationError('Choose a supported dataset format.')
     if not isinstance(config['training_profile'], dict):
         raise ValidationError('Choose a valid training profile.')

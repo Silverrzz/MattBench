@@ -158,6 +158,7 @@
         const checkpointHelp = document.getElementById('training-checkpoint-help');
         const wdlOverride = document.getElementById('training-wdl-override');
         const schedule = document.getElementById('train-schedule');
+        const trainingProfile = document.getElementById('train-training_profile');
         const scheduleLink = document.getElementById('training-schedule-link');
         const datasetInput = document.getElementById('train-dataset');
         const overridesInput = document.getElementById('train-stage_datasets');
@@ -443,6 +444,7 @@
             const selected = checkpointOptions.find(option => option.id === checkpoint.value);
             if (selected) {
                 engine.value = selected.engine;
+                trainingProfile.value = options.find(option => option.id === selected.schedule)?.profile || '';
                 updateSchedules();
                 if (Array.from(schedule.options).some(option => option.value === selected.schedule)) schedule.value = selected.schedule;
                 overrides = selected.datasets.map((datasets, stage) => ({datasets: Array.isArray(datasets) ? datasets : datasets ? [datasets] : [], stage}));
@@ -456,7 +458,7 @@
         });
         function updateSchedules() {
             const previous = schedule.value;
-            const available = options.filter(option => !option.engine || option.engine === engine.value);
+            const available = options.filter(option => (!option.engine || option.engine === engine.value) && (!trainingProfile.value || option.profile === trainingProfile.value));
             schedule.replaceChildren(new Option('Choose a schedule', ''), ...available.map(option => new Option(option.name + ' (' + option.scope + ')', option.id)));
             schedule.disabled = false;
             if (available.some(option => option.id === previous)) schedule.value = previous;
@@ -464,6 +466,7 @@
         }
         schedule.addEventListener('change', scheduleChanged);
         engine.addEventListener('change', updateSchedules);
+        trainingProfile.addEventListener('change', updateSchedules);
         if (!engine.value && schedule.value) engine.value = options.find(option => option.id === schedule.value)?.engine || '';
         updateSchedules();
         const retention = document.getElementById('train-checkpoint_retention');

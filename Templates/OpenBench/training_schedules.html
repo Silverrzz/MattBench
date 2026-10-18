@@ -13,6 +13,7 @@
     <form class="form schedule-form workspace-stack" id="schedule-form">
         {% csrf_token %}
         <section class="workspace-panel workspace-stack">
+            <div class="field"><label for="schedule-training-profile">Training profile</label><select id="schedule-training-profile"></select></div>
             <div class="field-grid">
                 <div class="field"><label for="schedule-name">Name</label><input id="schedule-name" maxlength="128" required value="{{ schedule_data.name }}"></div>
                 <div class="field" id="schedule-engine-field"><label for="schedule-engine">Engine</label><select id="schedule-engine" required><option value="">Choose engine</option>{% for engine in engines %}<option value="{{ engine.pk }}">{{ engine.name }}</option>{% endfor %}</select></div>

@@ -7,9 +7,9 @@
 <section class="profile-grid" aria-label="Training profiles">
 {% for profile in profiles %}
     <article class="profile-card">
-        <header class="profile-card-header"><span class="profile-icon {% if profile.generator == 'duckchess' %}profile-icon-duck{% endif %}"><i class="fa-solid {% if profile.generator == 'duckchess' %}fa-feather{% else %}fa-chess-knight{% endif %}" aria-hidden="true"></i></span><div><h2>{{ profile.name }}</h2><span class="profile-subtitle">{% if profile.generator == 'duckchess' %}DuckChess{% else %}Standard chess{% endif %}</span></div><span class="profile-format">{{ profile.format|upper }}</span></header>
+        <header class="profile-card-header"><span class="profile-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span><div><h2>{{ profile.name }}</h2><span class="profile-subtitle">{{ profile.variant }} · {{ profile.builder.label }}</span></div><span class="profile-format">{{ profile.format|upper }}</span></header>
         <div class="profile-features">{% for label in profile.feature_labels %}<span>{{ label }}</span>{% endfor %}</div>
-        <dl class="profile-source"><div><dt>Trainer</dt><dd><a href="{{ profile.bullet_repo }}">{{ profile.source_label }}</a></dd></div><div><dt>Revision</dt><dd><a href="{{ profile.bullet_repo }}/commit/{{ profile.bullet_ref }}" title="{{ profile.bullet_ref }}">{{ profile.bullet_ref|slice:':10' }} <span aria-hidden="true">↗</span></a></dd></div><div><dt>Dataset tools</dt><dd>{% if profile.generator == 'duckchess' %}Wakformat{% else %}Pawnocchio{% endif %}</dd></div></dl>
+        <dl class="profile-source"><div><dt>Trainer</dt><dd><a href="{{ profile.bullet_repo }}">{{ profile.source_label }}</a></dd></div><div><dt>Revision</dt><dd><a href="{{ profile.bullet_repo }}/commit/{{ profile.bullet_ref }}" title="{{ profile.bullet_ref }}">{{ profile.bullet_ref|slice:':10' }} <span aria-hidden="true">↗</span></a></dd></div><div><dt>Dataset tools</dt><dd>{{ profile.tool_label }}</dd></div></dl>
         <footer class="profile-card-footer"><span class="profile-active"><span aria-hidden="true"></span>Available<span class="profile-version">v{{ profile.version }}</span></span>{% if user.is_superuser %}<button type="button" class="profile-edit-button" data-profile-edit="{{ profile.id }}">Edit profile <span aria-hidden="true">↗</span></button>{% endif %}</footer>
     </article>
 {% endfor %}
@@ -21,11 +21,19 @@
         <div class="profile-dialog-body">
             <p id="profile-error" class="profile-error" role="alert" hidden></p>
             <input type="hidden" name="version" value="0">
+            <input type="hidden" name="schema" value="2">
             <div class="profile-form-pair"><label>Name<input name="name" maxlength="128" required></label><label id="profile-id-field">Identifier<input name="id" pattern="[a-z][a-z0-9_-]{0,63}" maxlength="64" required></label></div>
-            <label id="profile-generator-field">Game<select name="generator"><option value="standard">Standard chess</option><option value="duckchess">DuckChess</option></select></label>
+            <div class="profile-form-pair"><label>Schedule adapter<select name="generator">{% for adapter in profile_adapters %}<option value="{{ adapter.id }}">{{ adapter.label }}</option>{% endfor %}</select></label><label>Variant<input name="variant" pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64" required></label></div>
             <fieldset><legend>Trainer</legend><label>Bullet repository<input name="bullet_repo" type="url" required placeholder="https://github.com/owner/bullet"></label><label>Commit<input name="bullet_ref" pattern="[0-9a-f]{40}" required spellcheck="false"></label></fieldset>
-            <fieldset id="profile-data-tool"><legend>Dataset tools</legend><label id="profile-tool-repo-label">Repository<input name="tool_repo" type="url"></label><label>Commit<input name="tool_commit" spellcheck="false" pattern="[0-9a-f]{40}"></label></fieldset>
+            <fieldset id="profile-data-tool"><legend>Dataset tools</legend><label>Provider<select name="tool_kind">{% for tool in profile_tools %}<option value="{{ tool.id }}">{{ tool.label }}</option>{% endfor %}</select></label><label>Repository<input name="tool_repo" type="url"></label><label>Commit<input name="tool_commit" spellcheck="false" pattern="[0-9a-f]{40}"></label></fieldset>
             <fieldset id="profile-combiner"><legend>Interleave tool</legend><label>Repository<input name="combiner_repo" type="url"></label><label>Commit<input name="combiner_commit" spellcheck="false" pattern="[0-9a-f]{40}"></label></fieldset>
+            <details class="profile-capabilities"><summary>Capabilities &amp; defaults</summary><div class="profile-capabilities-body">
+                <fieldset><legend>Available input features</legend><div class="profile-feature-options">{% for feature in profile_features %}<label class="profile-enabled" data-feature="{{ feature.key }}"><input type="checkbox" name="features" value="{{ feature.key }}">{{ feature.label }}</label>{% endfor %}</div></fieldset>
+                <fieldset><legend>Available optimizers</legend><div class="profile-feature-options"><label class="profile-enabled"><input type="checkbox" name="optimizers" value="adamw">AdamW</label><label class="profile-enabled"><input type="checkbox" name="optimizers" value="ranger">Ranger</label></div></fieldset>
+                <label>Rust minimum<input name="rust_minimum" placeholder="Adapter default" pattern="[0-9]+\.[0-9]+\.[0-9]+"></label>
+                <label>Schedule defaults<textarea name="defaults" rows="5" spellcheck="false" aria-label="Profile schedule defaults"></textarea></label>
+                <label>Runtime settings<textarea name="training_settings" rows="5" spellcheck="false" aria-label="Profile runtime settings"></textarea></label>
+            </div></details>
             <label class="profile-enabled"><input type="checkbox" name="enabled" checked>Available for new schedules</label>
         </div>
         <footer class="profile-dialog-footer"><button type="button" class="button" data-profile-close>Cancel</button><button type="submit" class="button button-primary">Save changes</button></footer>

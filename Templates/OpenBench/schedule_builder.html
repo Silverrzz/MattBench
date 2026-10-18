@@ -22,21 +22,16 @@
                 </div>
                 <section class="builder-panel" id="panel-network" role="tabpanel" aria-labelledby="tab-network">
                     <div class="field"><label for="builder-training-profile">Training profile</label><select id="builder-training-profile" name="training_profile"></select><p class="builder-note" id="builder-profile-note"></p></div>
-                    <label class="choice" id="builder-duck-inputs" hidden><input type="checkbox" name="duck_inputs">Duck-square inputs</label>
                     <div class="builder-group">
-                        <h2>Input features</h2>
-                        <div class="builder-output-row">
-                            <label class="choice"><input type="checkbox" name="psqt_inputs">Piece-square inputs (PSQ)</label>
+                        <div class="builder-group-heading"><h2>Input features</h2>
                             <div class="builder-input-buckets">
                                 <label class="builder-head-buckets">Buckets <input name="input_buckets" type="number" min="1" max="32" required aria-label="Input buckets"></label>
                                 <button type="button" class="button" id="builder-assign-buckets" hidden>Assign buckets</button>
                             </div>
                         </div>
-                        <label class="choice"><input type="checkbox" name="mirrored">Horizontal mirroring</label>
-                        <label class="choice"><input type="checkbox" name="threat_inputs">Threat inputs (TI)</label>
-                        <label class="choice"><input type="checkbox" name="pawn_pair_inputs">Pawn-pair inputs (PP)</label>
-                        <label class="choice"><input type="checkbox" name="half_move_clock">Half-Move-Clock input</label>
-                        <label class="choice"><input type="checkbox" name="merged_king_planes">Merged king planes</label>
+                        {% for feature in input_features %}
+                        <label class="choice" data-profile-feature="{{ feature.key }}"><input type="checkbox" name="{{ feature.key }}">{{ feature.label }}</label>
+                        {% endfor %}
                     </div>
                     <div class="builder-group">
                         <h2>Outputs</h2>

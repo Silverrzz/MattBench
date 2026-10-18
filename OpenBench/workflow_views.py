@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from OpenBench.models import EngineConfig, Machine, TrainingProfile, TrainingWorker, Test, Workflow, WorkflowRun
-from OpenBench.training_profiles import BUILTINS, profiles, validate_profile
+from OpenBench.training_profiles import BUILTINS, default_spec, profile_data, profiles, validate_profile
 from OpenBench.training_views import enabled, error_text, schedules_for
 from OpenBench.workflows import KINDS, finish, start, validate_definition
 
@@ -27,8 +27,8 @@ def body(request):
     return value
 
 
-def example():
-    return {'profile': 'standard', 'engine': '', 'steps': [], 'edges': [], 'layout': {'nodes': {}, 'viewport': {'x': 0, 'y': 0, 'zoom': 1}}}
+def example(profile='standard'):
+    return {'profile': profile, 'engine': '', 'steps': [], 'edges': [], 'layout': {'nodes': {}, 'viewport': {'x': 0, 'y': 0, 'zoom': 1}}}
 
 
 @login_required(login_url='/login/')
@@ -56,7 +56,11 @@ def editor(request, identifier=None, create=False):
     if not row and not create:
         return render(request, 'workflows.html', {'page_title': 'Workflows', 'workflows': Workflow.objects.filter(owner=request.user, archived=False), 'runs': WorkflowRun.objects.filter(owner=request.user).select_related('workflow')[:50]})
     from OpenBench.schedule_builder import builder_state
-    schedules = [{'id': str(schedule.pk), 'name': schedule.name, 'profile': (builder_state(schedule)[0] or {}).get('training_profile', 'standard'), 'engine': str(schedule.engine_id or ''), 'spec': builder_state(schedule)[0]} for schedule in schedules_for(request.user)]
+    schedules = []
+    for schedule in schedules_for(request.user):
+        spec = builder_state(schedule)[0]
+        schedules.append({'id': str(schedule.pk), 'name': schedule.name, 'profile': (schedule.settings.get('training_profile') or {}).get('id', (spec or {}).get('training_profile', 'standard')),
+                          'engine': str(schedule.engine_id or ''), 'spec': spec})
     from OpenBench.models import Network, OpeningBook, TrainingArtifact, TrainingCheckpoint, TrainingDataset, WorkflowArtifact
     engine_rows = list(EngineConfig.objects.filter(enabled=True))
     from OpenBench.workflow_workloads import defaults
@@ -64,14 +68,16 @@ def editor(request, identifier=None, create=False):
     workers = [{'id': 'cpu:%d' % worker.pk, 'name': worker.info.get('machine_name') or 'CPU worker %d' % worker.pk} for worker in Machine.objects.filter(user=request.user).order_by('-updated')[:500]]
     workers += [{'id': 'gpu:' + str(worker.pk), 'name': worker.name + (' · CPU' if worker.info.get('backend') == 'cpu' else ' · GPU')} for worker in TrainingWorker.objects.filter(owner=request.user, enabled=True, machine__isnull=True)]
     from OpenBench.workflow_contracts import PORTS
-    from OpenBench.schedule_builder import DEFAULT_SPEC
-    from OpenBench.workflow_schedule import default_spec
+    profile_rows = profiles()
+    if not profile_rows:
+        return redirect('/training/profiles/')
+    default_profile = next((profile['id'] for profile in profile_rows if profile['id'] == 'standard'), profile_rows[0]['id'])
     return render(request, 'workflow_editor.html', {'page_title': row.name if row else 'New workflow', 'workflow_data': {
-        'id': str(row.pk) if row else '', 'version': row.version if row else 0, 'name': row.name if row else '', 'definition': row.definition if row else example(),
-        'profiles': profiles(), 'engines': [{'id': str(engine.pk), 'name': engine.name} for engine in engine_rows], 'schedules': schedules, 'workers': workers, 'engine_defaults': engine_defaults,
+        'id': str(row.pk) if row else '', 'version': row.version if row else 0, 'name': row.name if row else '', 'definition': row.definition if row else example(default_profile),
+        'profiles': [profile_data(profile) for profile in profile_rows], 'engines': [{'id': str(engine.pk), 'name': engine.name} for engine in engine_rows], 'schedules': schedules, 'workers': workers, 'engine_defaults': engine_defaults,
         'books': [{'id': book.name, 'name': book.name, 'variants': list(book.variants.values_list('name', flat=True))} for book in OpeningBook.objects.filter(enabled=True)],
         'networks': list(Network.objects.values('sha256', 'name', 'engine')),
-        'ports': PORTS, 'schedule_defaults': {profile['id']: default_spec(profile) for profile in profiles()},
+        'ports': PORTS, 'schedule_defaults': {profile['id']: default_spec(profile) for profile in profile_rows},
         'datasets': [{'id': str(row.pk), 'name': row.name} for row in TrainingDataset.objects.filter(owner=request.user, archived=False)],
         'datagens': [{'id': row.pk, 'name': '#%d - %s' % (row.pk, row.info or row.dev_engine)} for row in Test.objects.filter(author=request.user.username, test_mode='DATAGEN', deleted=False).order_by('-pk')[:500]],
         'tunes': [{'id': row.pk, 'name': '#%d - %s' % (row.pk, row.info or row.dev_engine)} for row in Test.objects.filter(author=request.user.username, test_mode='SPSA', deleted=False).order_by('-pk')[:500]],
@@ -160,11 +166,28 @@ def training_profiles(request):
             if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', identifier) or not name or len(name) > 128:
                 raise ValidationError('Choose a profile identifier and name.')
             generator = request.POST.get('generator')
-            value = {'generator': generator, 'bullet_repo': request.POST.get('bullet_repo', ''), 'bullet_ref': request.POST.get('bullet_ref', '')}
-            value['data_tool'] = {'repo': request.POST.get('tool_repo', ''), 'commit': request.POST.get('tool_commit', '')}
-            if generator == 'standard':
+            from OpenBench.training_adapters import ADAPTERS, DATA_TOOLS
+            if generator not in ADAPTERS:
+                raise ValidationError('Choose a registered schedule adapter.')
+            adapter = ADAPTERS[generator]
+            value = {'schema': 2, 'generator': generator, 'variant': request.POST.get('variant', BUILTINS[generator]['variant']),
+                     'bullet_repo': request.POST.get('bullet_repo', ''), 'bullet_ref': request.POST.get('bullet_ref', ''),
+                     'features': request.POST.getlist('features') if 'schema' in request.POST else adapter['features'],
+                     'optimizers': request.POST.getlist('optimizers') if 'schema' in request.POST else adapter['optimizers'],
+                     'defaults': json.loads(request.POST.get('defaults', '{}')),
+                     'training_settings': json.loads(request.POST.get('training_settings', '{}'))}
+            if request.POST.get('rust_minimum'):
+                value['rust_minimum'] = request.POST['rust_minimum']
+            provider = request.POST.get('tool_kind', BUILTINS[generator]['data_tool']['kind'])
+            value['data_tool'] = {'kind': provider, 'repo': request.POST.get('tool_repo', ''), 'commit': request.POST.get('tool_commit', '')}
+            if DATA_TOOLS.get(provider, {}).get('combiner'):
                 value['data_tool']['combiner'] = {'repo': request.POST.get('combiner_repo', BUILTINS['standard']['data_tool']['combiner']['repo']), 'commit': request.POST.get('combiner_commit', BUILTINS['standard']['data_tool']['combiner']['commit'])}
             value = validate_profile(value)
+            from OpenBench.training import validate_schedule
+            from OpenBench.training_profiles import profile_runtime
+            candidate = {**value, 'id': identifier, 'name': name, 'version': int(request.POST.get('version', 0)) + 1}
+            runtime = profile_runtime(candidate)
+            validate_schedule({runtime['example_source']: 'fn main() {}'}, runtime)
             with transaction.atomic():
                 current = TrainingProfile.objects.select_for_update().filter(pk=identifier).first()
                 version = current.version if current else 1 if identifier in BUILTINS else 0
@@ -175,13 +198,19 @@ def training_profiles(request):
         except (ValidationError, ValueError, TypeError) as exception:
             error = error_text(exception)
     available = profiles()
-    labels = {'psqt_inputs': 'Piece squares', 'threat_inputs': 'Threats', 'pawn_pair_inputs': 'Pawn pairs', 'half_move_clock': 'Half-move clock', 'merged_king_planes': 'Merged kings', 'duck_inputs': 'Duck square'}
     disabled = [{**validate_profile(row.settings), 'id': row.pk, 'name': row.name, 'version': row.version, 'disabled': True} for row in TrainingProfile.objects.filter(enabled=False)]
+    available = [profile_data(profile) for profile in available]
+    disabled = [profile_data(profile) for profile in disabled]
     for profile in [*available, *disabled]:
-        profile['feature_labels'] = [labels.get(key, key) for key in profile['features']]
+        profile['feature_labels'] = [feature['short'] for feature in profile['input_features']]
         profile['source_label'] = profile['bullet_repo'].removeprefix('https://github.com/').replace('/', ' / ')
+    from OpenBench.training_adapters import ADAPTERS, DATA_TOOLS, INPUT_FEATURES
     return render(request, 'training_profiles.html', {'page_title': 'Training profiles', 'profiles': available, 'disabled_profiles': disabled, 'form_error': error,
-        'profile_editor_data': {'profiles': [*available, *disabled], 'error': error, 'submitted': request.POST.dict() if error else {}}})
+        'profile_adapters': [{'id': key, 'label': value['label']} for key, value in ADAPTERS.items()],
+        'profile_features': [{'key': key, **value} for key, value in INPUT_FEATURES.items()],
+        'profile_tools': [{'id': key, **value} for key, value in DATA_TOOLS.items()],
+        'profile_editor_data': {'profiles': [*available, *disabled], 'templates': {key: profile_data({**value, 'id': key}) for key, value in BUILTINS.items()},
+                                'tools': DATA_TOOLS, 'error': error, 'submitted': {**request.POST.dict(), 'features': request.POST.getlist('features'), 'optimizers': request.POST.getlist('optimizers')} if error else {}}})
 
 
 @login_required(login_url='/login/')

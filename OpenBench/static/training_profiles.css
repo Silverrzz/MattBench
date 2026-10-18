@@ -35,6 +35,12 @@
 .profile-dialog-body label { display: grid; gap: 9px; color: #a8a8b6; font-size: 12px; min-width: 0; }
 .profile-dialog-body input:not([type=checkbox]), .profile-dialog-body select { width: 100%; min-width: 0; height: 40px; border: 1px solid #4b4b57; border-radius: 7px; padding: 0 11px; background: #17171c; color: #eeeef5; font: 13px system-ui, sans-serif; }
 .profile-dialog-body input:focus, .profile-dialog-body select:focus { outline: 1px solid #dc999e; border-color: #dc999e; }
+.profile-capabilities { border-top: 1px solid #393942; padding-top: 20px; }
+.profile-capabilities summary { color: #ceced9; font-size: 12px; cursor: pointer; }
+.profile-capabilities-body { display: grid; gap: 24px; padding-top: 24px; }
+.profile-feature-options { display: grid; gap: 14px; }
+.profile-dialog-body textarea { width: 100%; min-width: 0; resize: vertical; padding: 12px; border: 1px solid #4b4b57; border-radius: 7px; background: #17171c; color: #eeeef5; font: 12px/1.7 var(--mono); }
+.profile-dialog-body textarea:focus { outline: 1px solid #dc999e; border-color: #dc999e; }
 .profile-form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .profile-dialog-body fieldset { display: grid; gap: 18px; margin: 0; padding: 22px 0 0; border: 0; border-top: 1px solid #393942; }
 .profile-dialog-body legend { padding: 0 12px 0 0; font-size: 12px; color: #ceced9; }
