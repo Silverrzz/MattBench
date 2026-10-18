@@ -497,7 +497,7 @@ def advance(run_id):
                     active = not gates or (all(selected) if node['join'] == 'all' else any(selected))
                     bound = copy.deepcopy(node)
                     bound['inputs'] = {}
-                    waiting, missing = False, False
+                    waiting, missing, unavailable = False, False, []
                     from OpenBench.workflow_contracts import read
                     all_outputs = {name: row.outputs for name, row in steps.items()}
                     for name, source in node['inputs'].items():
@@ -514,11 +514,13 @@ def advance(run_id):
                                 read(item, all_outputs)
                                 available.append(item)
                             except ValidationError:
-                                pass
+                                unavailable.append(parent)
                         if available:
                             bound['inputs'][name] = available if isinstance(source, list) else available[0]
                         else:
                             missing = True
+                    if active and not waiting and unavailable:
+                        raise ValidationError('A selected upstream step did not produce its connected output: ' + ', '.join(sorted(set(unavailable))))
                     can_launch = active and not waiting and not missing
                     if can_launch:
                         if step.started is None:
