@@ -214,9 +214,9 @@ def launch(step, node, outputs):
     if node['kind'] in ('datagen', 'test', 'tune'):
         values = copy.deepcopy(config['workload'])
         for side in ('dev', 'base'):
-            values[side] = Engine.objects.create(**values[side])
+            values[side] = Engine.objects.create(**{**values[side], 'bench': 0})
         values.update(author=run.owner.username, info=values.get('info') or 'Workflow %s · %s' % (run.workflow.name, node['name']),
-                      execution={**values['execution'], 'workflow': reference(step), 'worker_policy': node['worker'], 'bench_method': 'command-line'})
+                      execution={**values['execution'], 'workflow': reference(step), 'worker_policy': node['worker']})
         approval = Profile.objects.get(user=run.owner)
         from OpenBench.config import OPENBENCH_CONFIG
         values['approved'] = approval.approver and not OPENBENCH_CONFIG['use_cross_approval']
@@ -230,9 +230,6 @@ def launch(step, node, outputs):
                 raise ValidationError('The network output belongs to a different engine.')
             for side in sides:
                 values.update({side + '_network': network.sha256, side + '_netname': network.name})
-                values[side].bench = 0
-                values[side].save(update_fields=['bench'])
-                values['execution'].setdefault('automatic_bench', []).append(side)
         from OpenBench.workflow_contracts import apply_parameters
         for name, sides in (('parameters', shared), ('base_parameters', ('base',))):
             if name in inputs:

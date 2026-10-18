@@ -240,8 +240,6 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
 
 def workload_to_dictionary(test, result, machine):
 
-    from OpenBench.workflow_bench import prepare
-    prepare(test)
     workload = {}
     execution = test.execution or workload_execution(test.book_name, [test.dev_engine, test.base_engine])
 
@@ -251,6 +249,7 @@ def workload_to_dictionary(test, result, machine):
 
     workload['test'] = {
         'worker_policy': test.execution.get('worker_policy', {}),
+        'workflow'     : bool(execution.get('workflow')),
         'id'            : test.id,
         'type'          : test.test_mode,
         'capture_logs'  : test.execution.get('capture_logs', True),
@@ -283,9 +282,7 @@ def workload_to_dictionary(test, result, machine):
         'name'         : test.dev.name,
         'source'       : test.dev.source,
         'sha'          : test.dev.sha,
-        'bench'        : test.dev.bench,
-        'automatic_bench': 'dev' in execution.get('automatic_bench', []) or 'dev' in execution.get('bench_discoveries', {}) or bool(execution.get('workflow') and not test.dev.bench),
-        'bench_options': execution.get('bench_options', {}).get('dev'),
+        'bench'        : 0 if execution.get('workflow') else test.dev.bench,
         'engine'       : test.dev_engine,
         'options'      : test.dev_options,
         'network'      : test.dev_network,
@@ -300,9 +297,7 @@ def workload_to_dictionary(test, result, machine):
         'name'         : test.base.name,
         'source'       : test.base.source,
         'sha'          : test.base.sha,
-        'bench'        : test.base.bench,
-        'automatic_bench': 'base' in execution.get('automatic_bench', []) or 'base' in execution.get('bench_discoveries', {}) or bool(execution.get('workflow') and not test.base.bench),
-        'bench_options': execution.get('bench_options', {}).get('base'),
+        'bench'        : 0 if execution.get('workflow') else test.base.bench,
         'engine'       : test.base_engine,
         'options'      : test.base_options,
         'network'      : test.base_network,

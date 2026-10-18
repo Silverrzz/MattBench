@@ -45,13 +45,6 @@ def prepare(node, engine, profile, user):
         raise ValidationError('Invalid workload configuration value.')
     values.update({key: str(value) for key, value in parameters.items()})
     values['dev_engine'] = engine.name
-    dynamic = set()
-    if node['inputs'].get('network'):
-        dynamic.update(('dev', 'base') if kind == 'tune' else ('dev',))
-    if node['inputs'].get('base_network'):
-        dynamic.add('base')
-    for side in dynamic:
-        values[side + '_bench'] = '1'
     if kind == 'datagen':
         if 'datagen_max_games' not in parameters:
             values['datagen_max_games'] = str(config.get('games', 10000000))
@@ -61,7 +54,7 @@ def prepare(node, engine, profile, user):
             values['dev_time_control'] = values['base_time_control'] = 'N=%s' % config.get('nodes', 25000) if control == 'nodes' else config.get('time_control') or ('60.0+0.6' if control == 'ltc' else '10.0+0.1')
     if kind == 'tune':
         values['spsa_inputs'] = '\n'.join(line.strip() for line in values['spsa_inputs'].splitlines() if line.strip())
-    request = SimpleNamespace(POST=values, user=user)
+    request = SimpleNamespace(POST=values, user=user, workflow=True)
     errors, branches = verify_workload(request, {'datagen': 'DATAGEN', 'test': 'TEST', 'tune': 'TUNE'}[kind])
     if errors:
         raise ValidationError(node['name'] + ': ' + '; '.join(errors))
@@ -76,8 +69,6 @@ def prepare(node, engine, profile, user):
     test = Test(author=user.username, info=branches[0][4] if kind == 'test' else values['info'], test_mode={'datagen': 'DATAGEN', 'test': values['test_mode'], 'tune': 'SPSA'}[kind])
     for side, info in zip(('dev', 'base'), branches):
         setattr(test, side, Engine(source=info[0], name=info[1], sha=info[2], bench=info[3]))
-        if side in dynamic:
-            getattr(test, side).bench = 0
         for suffix in ('repo', 'engine', 'options', 'network'):
             setattr(test, side + '_' + suffix, values[side + '_' + suffix])
         setattr(test, side + '_time_control', TimeControl.parse(values[side + '_time_control']))

@@ -440,7 +440,8 @@ def collect_github_info(errors, request, field):
         return
 
     # Extract the bench from the web form, or from the commit message
-    if not (bench := determine_bench(request, field, data['commit']['message'])):
+    bench = 0 if getattr(request, 'workflow', False) else determine_bench(request, field, data['commit']['message'])
+    if not bench and not getattr(request, 'workflow', False):
         errors.append('Unable to parse a Bench for %s' % (branch))
         return
 

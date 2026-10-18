@@ -854,15 +854,6 @@ def client_submit_nps(request, machine):
 
 @csrf_exempt
 @verify_worker
-def client_workflow_bench(request, machine):
-    from OpenBench.workflow_bench import record
-    try:
-        return JsonResponse({'bench': record(request.POST, machine)})
-    except django.core.exceptions.ValidationError as error:
-        return JsonResponse({'error': '; '.join(error.messages)}, status=400)
-
-@csrf_exempt
-@verify_worker
 @transaction.atomic
 def client_submit_error(request, machine):
 
@@ -873,14 +864,9 @@ def client_submit_error(request, machine):
     test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
     test.error = True
     test.errors_acknowledged = False
-    fatal_configuration = request.POST.get('fatal') == 'configuration'
-    if fatal_configuration and (machine.workload != test.pk or not test.test.filter(machine=machine).exists()):
-        return JsonResponse({'error': 'This workload assignment is closed.'}, status=400)
-    if fatal_configuration:
-        test.finished = True
-    test.save(update_fields=['error', 'errors_acknowledged', 'finished'])
+    test.save(update_fields=['error', 'errors_acknowledged'])
 
-    if fatal_configuration or request.POST['error'].endswith(' build failed'):
+    if request.POST['error'].endswith(' build failed'):
         from OpenBench.lifecycle import test_event
         test = Test.objects.select_for_update().get(pk=int(request.POST['test_id']))
         test_event('execution_error', test)
