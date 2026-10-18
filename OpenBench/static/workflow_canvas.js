@@ -117,9 +117,9 @@
     function svg(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, value); return item; }
     function drawWires(pointer) {
         wires.replaceChildren();
-        const route = MattBenchRouting.create([...nodeElements].map(([id, element]) => {
-            const position = definition.layout.nodes[id];
-            return {id, left: position.x, top: position.y, right: position.x + element.offsetWidth, bottom: position.y + element.offsetHeight};
+        const route = MattBenchRouting.create(definition.steps.flatMap(step => {
+            const id = step.id, element = nodeElements.get(id), position = definition.layout.nodes[id];
+            return element && position ? [{id, left: position.x, top: position.y, right: position.x + element.offsetWidth, bottom: position.y + element.offsetHeight}] : [];
         }));
         for (const edge of definition.edges) for (const output of edge.output ? [edge.output] : edge.on.map(value => '@' + value)) {
             if (!nodeElements.has(edge.from) || !nodeElements.has(edge.to)) continue;
@@ -379,10 +379,15 @@
         inferInputs(); armed = null; canvas.classList.remove('is-connecting'); renderNodes(); select(to);
     }
     function removeEdge(target) { definition.edges = definition.edges.filter(edge => !(edge.from === target.from && edge.to === target.to && (edge.output || '@' + edge.on[0]) === target.output && (edge.input || '@control') === target.input)); inferInputs(); }
+    function resetInteraction() {
+        armed = null; gesture = null;
+        canvas.classList.remove('is-dragging', 'is-connecting');
+        for (const item of nodeElements.values()) item.classList.remove('is-connect-target');
+    }
     function deleteSelection() {
         if (!selection || selection === 'settings') return; remember();
         if (typeof selection === 'string') { definition.steps = definition.steps.filter(step => step.id !== selection); definition.edges = definition.edges.filter(edge => edge.from !== selection && edge.to !== selection); delete definition.layout.nodes[selection]; inferInputs(); } else removeEdge(selection);
-        select(null); renderNodes();
+        resetInteraction(); renderNodes(); select(null);
     }
     function openPalette(position = null) { insertion = position; palette.hidden = false; byId('add').setAttribute('aria-expanded', 'true'); byId('search').value = ''; renderPalette(''); byId('search').focus(); }
     function closePalette() { palette.hidden = true; byId('add').setAttribute('aria-expanded', 'false'); }
@@ -406,7 +411,7 @@
     }
     function restore(direction) {
         const source = direction === 'undo' ? past : future, destination = direction === 'undo' ? future : past;
-        if (!source.length) return; destination.push(snapshot()); const value = JSON.parse(source.pop()); definition = value.definition; name.value = value.name; normalize(); select(null); renderNodes();
+        if (!source.length) return; destination.push(snapshot()); const value = JSON.parse(source.pop()); definition = value.definition; name.value = value.name; normalize(); resetInteraction(); renderNodes(); select(null);
     }
     canvas.addEventListener('pointerdown', event => {
         if (event.button !== 0 && event.button !== 1) return;
@@ -445,7 +450,7 @@
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); changed();
     }
     canvas.addEventListener('pointerup', endGesture);
-    canvas.addEventListener('pointercancel', () => { gesture = null; armed = null; canvas.classList.remove('is-dragging', 'is-connecting'); drawWires(); });
+    canvas.addEventListener('pointercancel', () => { resetInteraction(); drawWires(); });
     canvas.addEventListener('wheel', event => {
         event.preventDefault();
         if (event.ctrlKey || !event.deltaX && Math.abs(event.deltaY) >= 35) zoom(camera().zoom * Math.exp(-event.deltaY * .0025), event.clientX, event.clientY);
