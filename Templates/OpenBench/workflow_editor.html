@@ -1,6 +1,6 @@
 {% extends 'OpenBench/base.html' %}
 {% load static %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'workflows.css' %}?{{ static_version }}"><script src="{% static 'workflow_canvas.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workflows.css' %}?{{ static_version }}"><script src="{% static 'workflow_routing.js' %}?{{ static_version }}" defer></script><script src="{% static 'workflow_canvas.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block page_heading %}{% endblock %}
 {% block content %}
 <form id="workflow-editor" class="wf-editor" autocomplete="off">

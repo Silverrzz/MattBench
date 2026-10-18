@@ -80,9 +80,9 @@
     }
     function fit() {
         if (!definition.steps.length) { Object.assign(camera(), {x: 0, y: 0, zoom: 1}); updateCamera(); return; }
-        const positions = Object.values(definition.layout.nodes), rect = canvas.getBoundingClientRect();
-        const left = Math.min(...positions.map(p => p.x)), top = Math.min(...positions.map(p => p.y));
-        const width = Math.max(...positions.map(p => p.x + 236)) - left, height = Math.max(...positions.map(p => p.y + 150)) - top;
+        const bounds = [...nodeElements].map(([id, element]) => ({...definition.layout.nodes[id], width: element.offsetWidth, height: element.offsetHeight})), rect = canvas.getBoundingClientRect();
+        const left = Math.min(...bounds.map(p => p.x)), top = Math.min(...bounds.map(p => p.y));
+        const width = Math.max(...bounds.map(p => p.x + p.width)) - left, height = Math.max(...bounds.map(p => p.y + p.height)) - top;
         const available = rect.width - (inspector.hidden ? 0 : 320), scale = Math.min(1, Math.max(.15, Math.min((available - 130) / width, (rect.height - 180) / height)));
         Object.assign(camera(), {zoom: scale, x: (available - width * scale) / 2 - left * scale, y: (rect.height - height * scale) / 2 - top * scale}); updateCamera(); changed();
     }
@@ -117,10 +117,14 @@
     function svg(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, value); return item; }
     function drawWires(pointer) {
         wires.replaceChildren();
+        const route = MattBenchRouting.create([...nodeElements].map(([id, element]) => {
+            const position = definition.layout.nodes[id];
+            return {id, left: position.x, top: position.y, right: position.x + element.offsetWidth, bottom: position.y + element.offsetHeight};
+        }));
         for (const edge of definition.edges) for (const output of edge.output ? [edge.output] : edge.on.map(value => '@' + value)) {
             if (!nodeElements.has(edge.from) || !nodeElements.has(edge.to)) continue;
             const selected = selection?.from === edge.from && selection?.to === edge.to && selection?.output === output && selection?.input === (edge.input || '@control');
-            const group = svg('g', {class: 'wf-wire-group' + (selected ? ' is-selected' : '')}), path = curve(portPoint(edge.from, output), portPoint(edge.to, edge.input || '@control', true), Boolean(edge.output));
+            const group = svg('g', {class: 'wf-wire-group' + (selected ? ' is-selected' : '')}), path = route(portPoint(edge.from, output), portPoint(edge.to, edge.input || '@control', true), Boolean(edge.output), edge.from, edge.to).path;
             if (edge.output) group.style.setProperty('--wire-color', assetColors[ports(find(edge.from), 1)[edge.output]] || '#adb2be');
             group.append(svg('path', {d: path, class: 'wf-wire'}), svg('path', {d: path, class: 'wf-wire-hit'}));
             group.addEventListener('pointerdown', event => { event.stopPropagation(); select({from: edge.from, to: edge.to, output, input: edge.input || '@control'}); }); wires.append(group);
