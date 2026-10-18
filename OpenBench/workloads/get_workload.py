@@ -240,6 +240,8 @@ def compute_resource_distribution(workloads, machine, has_engine_preference):
 
 def workload_to_dictionary(test, result, machine):
 
+    from OpenBench.workflow_bench import prepare
+    prepare(test)
     workload = {}
     execution = test.execution or workload_execution(test.book_name, [test.dev_engine, test.base_engine])
 

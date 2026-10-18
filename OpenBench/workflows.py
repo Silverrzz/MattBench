@@ -140,7 +140,7 @@ def validate_definition(value, draft=False):
 
 def workload_snapshot(test):
     values = {name: copy.deepcopy(getattr(test, name)) for name in TEST_FIELDS}
-    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation', 'automatic_bench', 'bench_discoveries', 'bench_options')}
+    values['execution'] = {key: copy.deepcopy(value) for key, value in test.execution.items() if key not in ('demo', 'workflow', 'worker_policy', 'progress', 'pending_progress', 'llr_allocation', 'automatic_bench', 'bench_discoveries', 'bench_options', 'bench_method')}
     for side in ('dev', 'base'):
         values[side] = {name: getattr(getattr(test, side), name) for name in ('name', 'source', 'sha', 'bench')}
     return values
@@ -216,7 +216,7 @@ def launch(step, node, outputs):
         for side in ('dev', 'base'):
             values[side] = Engine.objects.create(**values[side])
         values.update(author=run.owner.username, info=values.get('info') or 'Workflow %s · %s' % (run.workflow.name, node['name']),
-                      execution={**values['execution'], 'workflow': reference(step), 'worker_policy': node['worker']})
+                      execution={**values['execution'], 'workflow': reference(step), 'worker_policy': node['worker'], 'bench_method': 'command-line'})
         approval = Profile.objects.get(user=run.owner)
         from OpenBench.config import OPENBENCH_CONFIG
         values['approved'] = approval.approver and not OPENBENCH_CONFIG['use_cross_approval']

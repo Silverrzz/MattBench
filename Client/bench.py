@@ -32,7 +32,6 @@ import multiprocessing
 import os
 import queue
 import re
-import shlex
 import subprocess
 import sys
 
@@ -67,49 +66,26 @@ def parse_stream_output(stream):
     bench = int(re.search(r'\d+', bench).group()) if bench else None
     return (bench, nps)
 
-def configured_input(options):
-    lexer = shlex.shlex(options, posix=True)
-    lexer.whitespace_split = True
-    lexer.commenters = ''
-    lexer.escape = ''
-    commands = ['uci']
-    for option in lexer:
-        name, separator, value = option.partition('=')
-        if not separator or not name or any(character in option for character in ('\r', '\n', '\0')):
-            raise ValueError('Invalid benchmark engine option.')
-        commands.append('setoption name %s value %s' % (name, '1' if name.lower() == 'threads' else value))
-    return ('\n'.join([*commands, 'isready', 'bench', 'quit']) + '\n').encode('utf-8')
+def single_core_bench(binary, outqueue):
 
-
-def single_core_bench(binary, outqueue, options=None):
-
-    cmd = ['./%s' % (binary)] + ([] if options is not None else ['bench'])
-    process = None
+    cmd = ['./%s' % (binary), 'bench']
 
     try: # Launch the bench and wait for results
-        payload = configured_input(options) if options is not None else None
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE if options is not None else None, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout, stderr = process.communicate(payload, timeout=MAX_BENCH_TIME_SECONDS if options is not None else None)
-        if options is not None:
-            text = stdout.decode('utf-8', errors='replace')
-            if process.returncode or not re.search(r'^uciok\s*$', text, re.MULTILINE) or not re.search(r'^readyok\s*$', text, re.MULTILINE) or re.search(r'unknown\s+(?:option|command)|no such option|invalid\s+(?:option|value)|invalidinteger|invalidboolean|unable to (?:set|update)', text, re.IGNORECASE):
-                outqueue.put((None, None))
-                return
+        stdout, stderr = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        ).communicate()
         outqueue.put(parse_stream_output(stdout))
 
     except: # Signal an error with (None, None)
-        if process is not None and process.poll() is None:
-            process.kill()
-            process.communicate()
         outqueue.put((None, None))
 
-def multi_core_bench(binary, threads, options=None):
+def multi_core_bench(binary, threads):
 
     outqueue = multiprocessing.Queue()
 
     processes = [
         multiprocessing.Process(
-            target=single_core_bench, args=(binary, outqueue, options))
+            target=single_core_bench, args=(binary, outqueue))
         for ii in range(threads)
     ]
 
@@ -127,18 +103,17 @@ def multi_core_bench(binary, threads, options=None):
         for process in processes:
             process.join()
 
-def run_benchmark(binary, threads, sets, expected=None, options=None):
+def run_benchmark(binary, threads, sets, expected=None):
 
     engine = os.path.basename(binary)
 
     benches, speeds = [], []
     for ii in range(sets):
-        for bench, speed in multi_core_bench(binary, threads, options):
+        for bench, speed in multi_core_bench(binary, threads):
             benches.append(bench); speeds.append(speed)
 
     if None in benches or None in speeds:
-        detail = ' Engine must support UCI bench and every configured option.' if options is not None else ''
-        raise utils.OpenBenchBadBenchException('[%s] Failed to Execute Benchmark.%s' % (engine, detail))
+        raise utils.OpenBenchBadBenchException('[%s] Failed to Execute Benchmark' % (engine))
 
     if len(set(benches)) != 1:
         raise utils.OpenBenchBadBenchException('[%s] Non-Deterministic Benches' % (engine))

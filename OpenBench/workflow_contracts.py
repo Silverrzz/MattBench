@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 import re
 
@@ -121,17 +122,45 @@ def parameter_values(value):
     if not isinstance(value, dict) or not value or len(value) > 4096:
         raise ValidationError('Supply a nonempty parameter object.')
     for key, number in value.items():
-        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,127}', key) or type(number) not in (int, float) or not math.isfinite(number):
+        if not isinstance(key, str) or key != key.strip() or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_. -]{0,127}', key) or type(number) not in (int, float) or not math.isfinite(number):
             raise ValidationError('Parameters require simple names and finite numeric values.')
     return value
 
 
+def parse_parameters(value):
+    if not isinstance(value, str):
+        return parameter_values(value)
+    if value.lstrip().startswith('{'):
+        try:
+            return parameter_values(json.loads(value))
+        except ValueError:
+            raise ValidationError('Enter SPSA outputs as one Name, value pair per line.') from None
+    result, names = {}, set()
+    for index, line in enumerate(value.splitlines(), 1):
+        if not line.strip():
+            continue
+        cells = [cell.strip() for cell in line.split(',')]
+        if len(cells) != 2 or not all(cells):
+            raise ValidationError('Line %d: use Name, value copied from SPSA outputs.' % index)
+        name, number = cells
+        if name.casefold() in names:
+            raise ValidationError('Line %d: duplicate parameter %s.' % (index, name))
+        try:
+            if len(number) > 128:
+                raise ValueError
+            result[name] = int(number) if re.fullmatch(r'[+-]?\d+', number) else float(number)
+        except ValueError:
+            raise ValidationError('Line %d: the parameter value must be numeric.' % index) from None
+        names.add(name.casefold())
+    return parameter_values(result)
+
+
 def apply_parameters(options, asset):
     values = parameter_values(asset['values'])
-    remaining = options
-    for key in values:
-        remaining = re.sub(r'(?<!\S)' + re.escape(key) + r'''=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$)''', '', remaining, flags=re.IGNORECASE)
-    return ' '.join([remaining.strip(), *('%s=%s' % (key, value) for key, value in values.items())]).strip()
+    names = {name.casefold() for name in values}
+    tokens = re.findall(r'''(?:"[^"]*"|'[^']*'|[^\s"'])+''', options)
+    remaining = [token for token in tokens if token.strip('"\'').split('=', 1)[0].casefold() not in names]
+    return ' '.join([*remaining, *(('"%s=%s"' if ' ' in key else '%s=%s') % (key, value) for key, value in values.items())])
 
 
 def metric_values(value, depth=0):

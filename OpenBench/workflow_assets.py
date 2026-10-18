@@ -1,14 +1,13 @@
 import copy
 import fnmatch
 import hashlib
-import json
 from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from OpenBench.models import Network, Test, TrainingArtifact, TrainingCheckpoint, TrainingDataset
-from OpenBench.workflow_contracts import parameter_values
+from OpenBench.workflow_contracts import parameter_values, parse_parameters
 
 
 def owned(query, user):
@@ -44,13 +43,7 @@ def dataset_source(config, user):
 
 def parameters_source(config, user):
     if config.get('provider', 'inline') == 'inline':
-        values = config.get('values', {})
-        if isinstance(values, str):
-            try:
-                values = json.loads(values)
-            except ValueError:
-                raise ValidationError('Enter parameters as a JSON object.') from None
-        return {'type': 'parameters', 'values': parameter_values(values), 'provenance': {'source': 'inline'}}
+        return {'type': 'parameters', 'values': parse_parameters(config.get('values', '')), 'provenance': {'source': 'inline'}}
     row = Test.objects.filter(pk=config.get('workload'), test_mode='SPSA', deleted=False).first()
     if not row or not user.is_superuser and row.author != user.username:
         raise ValidationError('Choose one of your SPSA workloads.')

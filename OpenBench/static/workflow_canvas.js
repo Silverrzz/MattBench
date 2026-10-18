@@ -184,6 +184,12 @@
         input.addEventListener('input', () => input.setCustomValidity(''));
         input.addEventListener('change', () => { try { const parsed = JSON.parse(input.value); validate(parsed); remember(); update(parsed); input.setCustomValidity(''); renderNodes(); } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); } }); wrapper.append(input); root.append(wrapper); return input;
     }
+    function parameterText(value) {
+        if (typeof value === 'string') {
+            try { return parameterText(JSON.parse(value)); } catch { return value; }
+        }
+        return Object.entries(value || {}).map(([name, number]) => `${name}, ${number}`).join('\n');
+    }
     const configDialog = byId('config-dialog'), configFrame = byId('config-frame');
     let nodeEditor = null;
     byId('config-close').addEventListener('click', () => configDialog.close());
@@ -258,9 +264,12 @@
             else field(body, 'Datagen workload', config.workload, value => { config.workload = Number(value); }, choices(data.datagens, 'Choose workload'));
         }
         if (step.kind === 'load_parameters') {
-            field(body, 'Source', config.provider || 'inline', value => { config.provider = value; renderInspector(); }, [{id: 'inline', name: 'Parameter values'}, {id: 'spsa', name: 'SPSA workload'}]);
+            field(body, 'Source', config.provider || 'inline', value => { config.provider = value; renderInspector(); }, [{id: 'inline', name: 'Paste SPSA outputs'}, {id: 'spsa', name: 'SPSA workload'}]);
             if (config.provider === 'spsa') field(body, 'Tune', config.workload, value => { config.workload = Number(value); }, choices(data.tunes, 'Choose tune'));
-            else jsonField(body, 'Parameters', config.values || {}, value => { config.values = value; });
+            else {
+                const input = field(body, 'Parameters', parameterText(config.values), value => { config.values = value; }, null, 'textarea');
+                input.placeholder = 'Parameter, 123\nOtherParameter, 0.5'; input.rows = 8; input.spellcheck = false;
+            }
         }
         if (step.kind === 'load_network') field(body, 'Network', config.network, value => { config.network = value; }, choices(data.networks.map(row => ({id: row.sha256, name: row.engine + ' / ' + row.name})), 'Choose network'));
         if (step.kind === 'load_checkpoint') field(body, 'Checkpoint', config.checkpoint, value => { config.checkpoint = Number(value); }, choices(data.checkpoints, 'Choose checkpoint'));
