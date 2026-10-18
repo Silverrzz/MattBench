@@ -21,6 +21,7 @@
         <link rel="stylesheet" href="{% static 'error_alerts.css' %}?{{ static_version }}">
         <script src="{% static 'error_alerts.js' %}?{{ static_version }}" defer></script>
         <link rel="stylesheet" href="{% static 'responsive.css' %}?{{ static_version }}">
+        {% if workflow_mode %}<link rel="stylesheet" href="{% static 'workflow_embed.css' %}?{{ static_version }}"><script src="{% static 'workflow_node_editor.js' %}?{{ static_version }}"></script>{% endif %}
         {% block scripts %}{% endblock %}
     </head>
     <body>

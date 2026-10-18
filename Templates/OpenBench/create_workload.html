@@ -15,11 +15,19 @@
 
     <script>
         document.addEventListener(
-            'DOMContentLoaded', function () {
-                change_engine('{{ profile.engine|escapejs }}', 'dev', '{{workload}}');
+            'DOMContentLoaded', async function () {
+                const initial = window.WorkflowNodeEditor ? await window.WorkflowNodeEditor.receive() : null;
+                change_engine(initial?.values?.dev_engine || '{{ profile.engine|escapejs }}', 'dev', '{{workload}}');
                 enforce_default_text('dev_repo', 'https://github.com/');
                 enforce_default_text('base_repo', 'https://github.com/');
                 initialize_presets('{{workload}}');
+                if (initial) {
+                    if (initial.values.base_engine && '{{workload}}' !== 'TUNE') set_engine(initial.values.base_engine, 'base');
+                    window.WorkflowNodeEditor.apply(document.getElementById('workload-form'), initial.values);
+                    selectedPreset = presetState.presets.find(row => row.id === initial.preset) || null;
+                    for (const key of initial.edited || []) editedFields.add(key);
+                    render_presets();
+                }
             }, false
         );
     </script>
@@ -27,7 +35,7 @@
 
 {% block content %}
 
-    <form class="form" id="workload-form" method="POST" action="{{submit_endpoint}}">
+    <form class="form" id="workload-form" method="POST" action="{% if workflow_mode %}?workflow=1{% else %}{{submit_endpoint}}{% endif %}">
         {% csrf_token %}
 
         <div class="preset-bar">
@@ -330,7 +338,7 @@
         </div>
 
         <div class="form-actions">
-            <input type="submit" class="anchorbutton btn-start" name="submit" value="{{submit_text}}">
+            <input type="submit" class="anchorbutton btn-start" name="submit" value="{% if workflow_mode %}Use configuration{% else %}{{submit_text}}{% endif %}">
         </div>
     </form>
 

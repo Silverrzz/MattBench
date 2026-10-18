@@ -22,7 +22,7 @@
         task: {name: 'Custom task', icon: 'terminal', color: '#a7aec6', detail: 'Commands with typed inputs and outputs'},
         upload: {name: 'Upload dataset', icon: 'cloud-arrow-up', color: '#b7a5d7', detail: 'Hugging Face'},
         train: {name: 'Train network', icon: 'bolt', color: '#d6b57e', detail: 'Run a training schedule'},
-        test: {name: 'SPRT', icon: 'chess-knight', color: '#9db4df', detail: 'Fixed nodes, STC or LTC'},
+        test: {name: 'Engine test', icon: 'chess-knight', color: '#9db4df', detail: 'SPRT or fixed games'},
         decision: {name: 'Condition', icon: 'code-branch', color: '#d9a1b0', detail: 'Branch on a metric'},
         approval: {name: 'Approval', icon: 'hand', color: '#adb2be', detail: 'Wait for your decision'},
     };
@@ -93,10 +93,10 @@
     const baseType = kind => kind.replace('?', '').replace('[]', '');
     function outcomes(step) { return [...new Set([...(['test', 'decision', 'approval'].includes(step.kind) ? ['pass', 'fail'] : ['completed']), ...definition.edges.filter(edge => edge.from === step.id && !edge.output).flatMap(edge => edge.on), ...(extraPorts.get(step.id) || [])])]; }
     function summary(step) {
-        if (step.kind === 'datagen') return `${Number(step.config.games || 10000000).toLocaleString()} games`;
+        if (step.kind === 'datagen') return `${Number(step.config.parameters?.datagen_max_games || step.config.games || 10000000).toLocaleString()} games`;
         if (step.kind === 'upload') return step.config.repo || 'Choose a destination';
         if (step.kind === 'train') return 'files' in step.config ? 'Source files · ' + Object.keys(step.config.files || {}).length : step.config.spec ? step.config.spec.layers.join(' → ') + ' · ' + step.config.spec.superbatches + ' SB' : data.schedules.find(row => row.id === step.config.schedule)?.name || 'Configure training';
-        if (step.kind === 'test') return ({nodes: `${Number(step.config.nodes || 25000).toLocaleString()} nodes`, stc: 'Short time control', ltc: 'Long time control'})[step.config.control] || 'Choose a workload';
+        if (step.kind === 'test') return step.config.parameters ? [step.config.parameters.test_mode === 'GAMES' ? Number(step.config.parameters.test_max_games).toLocaleString() + ' games' : 'SPRT', step.config.parameters.dev_time_control].filter(Boolean).join(' · ') : ({nodes: `${Number(step.config.nodes || 25000).toLocaleString()} nodes`, stc: 'Short time control', ltc: 'Long time control'})[step.config.control] || 'Configure test';
         if (step.kind === 'decision') return `${step.config.field || 'loss'} ${({lt: '<', lte: '≤', gt: '>', gte: '≥', eq: '='})[step.config.operator] || '<'} ${step.config.value ?? 0}`;
         if (step.kind === 'load_data') return ({huggingface: step.config.repo || 'Choose data', registry: data.datasets.find(row => row.id === step.config.dataset)?.name, datagen: step.config.workload ? 'Workload #' + step.config.workload : ''})[step.config.provider || 'huggingface'] || 'Choose data';
         if (step.kind === 'load_parameters') return step.config.provider === 'spsa' ? 'Tune #' + (step.config.workload || '…') : 'Parameter values';
@@ -182,6 +182,29 @@
         input.addEventListener('input', () => input.setCustomValidity(''));
         input.addEventListener('change', () => { try { const parsed = JSON.parse(input.value); remember(); update(parsed); input.setCustomValidity(''); renderNodes(); } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); } }); wrapper.append(input); root.append(wrapper); return input;
     }
+    const configDialog = byId('config-dialog'), configFrame = byId('config-frame');
+    let nodeEditor = null;
+    byId('config-close').addEventListener('click', () => configDialog.close());
+    configDialog.addEventListener('close', () => { nodeEditor = null; configFrame.src = 'about:blank'; });
+    window.addEventListener('message', event => {
+        if (event.origin !== location.origin || event.source !== configFrame.contentWindow || !nodeEditor) return;
+        if (event.data?.type === 'mattbench-node-ready') configFrame.contentWindow.postMessage({type: 'mattbench-node-init', payload: nodeEditor.payload}, location.origin);
+        if (event.data?.type === 'mattbench-node-config') {
+            remember(); nodeEditor.apply(event.data.value); configDialog.close(); renderNodes(); renderInspector();
+        }
+    });
+    function configure(label, url, payload, apply) {
+        const button = make('button', label, 'wf-button wf-configure'); button.type = 'button';
+        button.addEventListener('click', () => {
+            nodeEditor = {payload, apply}; byId('config-title').textContent = label;
+            configFrame.title = label; configFrame.src = url + (url.includes('?') ? '&' : '?') + 'workflow=1'; configDialog.showModal();
+        }); body.append(button);
+    }
+    function scheduleStages(spec) {
+        if (!spec) return [];
+        const boundaries = [...new Set([...spec.lr_stages, ...spec.wdl_stages].map(stage => stage.start).concat(spec.superbatches + 1))].sort((a, b) => a - b);
+        return boundaries.slice(0, -1).map((start, index) => ({start, end: boundaries[index + 1] - 1}));
+    }
     function renderInspector() {
         const expanded = [...body.querySelectorAll('details[open]')].map(item => item.querySelector('summary').textContent);
         body.replaceChildren();
@@ -205,31 +228,18 @@
         field(body, 'Name', step.name, value => { step.name = value; });
         const config = step.config, engine = config.engine || definition.engine, profileId = config.profile || definition.profile;
         const profile = data.profiles.find(row => row.id === profileId), engineName = data.engines.find(row => String(row.id) === engine)?.name;
-        if (['datagen', 'test', 'tune', 'train'].includes(step.kind)) field(body, 'Engine', config.engine || '', value => { config.engine = value; renderInspector(); }, choices(data.engines, engineName ? 'Default · ' + engineName : 'Choose engine'));
-        if (step.kind === 'datagen') field(body, 'Games', config.games ?? 10000000, value => { config.games = value; }, null, 'number');
+        if (step.kind === 'train') field(body, 'Engine', config.engine || '', value => { config.engine = value; renderInspector(); }, choices(data.engines, engineName ? 'Default · ' + engineName : 'Choose engine'));
         if (['datagen', 'test', 'tune'].includes(step.kind)) {
-            const defaults = data.engine_defaults[engine]?.[step.kind] || {}, parameters = config.parameters ||= {};
-            const parameter = (root, label, key, options) => field(root, label, parameters[key] ?? defaults[key] ?? '', value => { parameters[key] = value; }, options);
-            parameter(body, step.kind === 'test' ? 'Candidate revision' : 'Engine revision', 'dev_branch');
-            if (step.kind === 'test') parameter(body, 'Baseline revision', 'base_branch');
-            const source = section('Engine configuration');
-            field(source, 'Training profile', config.profile || '', value => { config.profile = value; renderInspector(); }, choices(data.profiles, 'Workflow default'));
-            const books = data.books.filter(row => !profile || row.variants.includes(profile.variant));
-            parameter(source, 'Opening book', 'book_name', choices(books, 'Choose book'));
-            for (const side of step.kind === 'tune' ? ['dev'] : ['dev', 'base']) {
-                const title = side === 'dev' ? 'Candidate' : 'Baseline';
-                parameter(source, title + ' repository', side + '_repo');
-                if (step.kind === 'datagen' && side === 'base') parameter(source, 'Baseline revision', 'base_branch');
-                parameter(source, title + ' bench', side + '_bench');
-                parameter(source, title + ' UCI options', side + '_options');
-                parameter(source, title + ' network', side + '_network', choices(data.networks.filter(row => row.engine === engineName).map(row => ({id: row.sha256, name: row.name})), 'Engine default / input port'));
-            }
-            if (step.kind === 'tune') {
-                field(body, 'Parameters to tune', parameters.spsa_inputs || '', value => { parameters.spsa_inputs = value; }, null, 'textarea').placeholder = 'Name, int, start, min, max, c, r';
-                const tune = section('Tuning settings');
-                for (const [label, key] of [['Iterations', 'spsa_iterations'], ['Pairs per workload', 'spsa_pairs_per'], ['Alpha', 'spsa_alpha'], ['Gamma', 'spsa_gamma'], ['A ratio', 'spsa_A_ratio']]) parameter(tune, label, key);
-            }
-            const full = section('Full workload configuration'); jsonField(full, 'Parameters', parameters, value => { config.parameters = value; });
+            const parameters = config.parameters || {}, selectedEngine = engineName || data.engines[0]?.name || '';
+            const values = {dev_engine: selectedEngine, base_engine: selectedEngine, variant: profile?.variant || '', ...parameters};
+            if (config.games && !('datagen_max_games' in values)) values.datagen_max_games = String(config.games);
+            if (config.control && config.control !== 'template' && !('dev_time_control' in values)) values.dev_time_control = values.base_time_control = config.control === 'nodes' ? 'N=' + (config.nodes || 25000) : config.time_control || (config.control === 'ltc' ? '60.0+0.6' : '10.0+0.1');
+            configure('Configure ' + ({test: 'test', tune: 'tune', datagen: 'datagen'}[step.kind]), '/' + step.kind + '/new/', {values, preset: config.preset, edited: config.edited || []}, result => {
+                config.parameters = result.values; config.preset = result.preset; config.edited = result.edited;
+                config.engine = data.engines.find(row => row.name === result.values.dev_engine)?.id || '';
+                config.control = 'template'; delete config.games;
+            });
+            body.append(make('p', config.parameters ? [parameters.dev_engine, parameters.dev_branch, step.kind === 'test' ? parameters.test_mode : '', parameters.dev_time_control].filter(Boolean).join(' · ') : 'Choose an engine preset or configure this workload.', 'wf-inline-note'));
         }
         if (step.kind === 'upload') {
             field(body, 'Dataset repository', config.repo, value => { config.repo = value; }).placeholder = 'username/dataset';
@@ -290,24 +300,20 @@
                 if (selectedSchedule) { const link = make('a', 'Edit schedule source', 'wf-inline-note'); link.href = '/training/schedules/' + selectedSchedule.id + '/'; body.append(link); }
             } else {
                 const spec = config.spec ||= structuredClone(data.schedule_defaults[profileId]);
-                const training = section('Training configuration');
-                const limits = profile.builder.layers;
-                const layerError = () => spec.layers.length < limits.minimum || spec.layers.length > limits.maximum || Object.entries(limits.multiples).some(([index, multiple]) => spec.layers[index] % multiple) ? 'Use the hidden-layer count and dimensions supported by ' + profile.builder.label + '.' : '';
-                const layers = field(training, 'Hidden layers', spec.layers.join(', '), value => { spec.layers = value.split(',').map(Number); layers.setCustomValidity(layerError()); });
-                layers.setCustomValidity(layerError());
-                for (const [label, key] of [['Superbatches', 'superbatches'], ['Batch size', 'batch_size'], ['Batches per superbatch', 'batches_per_superbatch'], ['Save every', 'save_every']]) field(training, label, spec[key], value => { const old = spec.superbatches; spec[key] = value; if (key === 'superbatches') for (const stages of [spec.lr_stages, spec.wdl_stages]) stages[stages.length - 1].end = value; }, null, 'number');
-                field(training, 'Backend', spec.backend, value => { spec.backend = value; }, [{id: 'cuda', name: 'CUDA'}, {id: 'rocm', name: 'ROCm'}]);
-                field(training, 'Optimizer', spec.optimizer, value => { spec.optimizer = value; }, profile.optimizers.map(id => ({id, name: id === 'adamw' ? 'AdamW' : 'Ranger'})));
-                const features = section('Input features');
-                for (const feature of profile.input_features) field(features, feature.label, spec[feature.key], value => { spec[feature.key] = value; }, null, 'checkbox');
+                configure('Edit training schedule', '/training/schedules/builder/?profile=' + encodeURIComponent(profileId), {spec}, result => { config.spec = result.spec; config.profile = result.spec.training_profile; });
                 const schedule = section('Schedule');
                 field(schedule, 'Copy saved schedule', '', value => { const row = data.schedules.find(row => row.id === value); if (row?.spec) { config.spec = structuredClone(row.spec); renderInspector(); } }, choices(data.schedules.filter(row => row.profile === profileId && row.spec), 'Choose schedule'));
-                jsonField(schedule, 'Schedule configuration', spec, value => { config.spec = value; });
             }
-        }
-        if (step.kind === 'test') {
-            field(body, 'Time control', config.control || 'stc', value => { config.control = value; if (value === 'nodes') config.nodes ||= 25000; renderInspector(); }, [{id: 'nodes', name: 'Fixed nodes'}, {id: 'stc', name: 'STC'}, {id: 'ltc', name: 'LTC'}]);
-            if (config.control === 'nodes') field(body, 'Nodes per move', config.nodes || 25000, value => { config.nodes = value; }, null, 'number');
+            const stages = sourceMode === 'builder' ? scheduleStages(config.spec) : sourceMode === 'saved' ? selectedSchedule?.stages || [] : [];
+            const values = {name: 'wf-' + step.id, engine, training_profile: profileId, schedule: sourceMode === 'saved' ? config.schedule : '@workflow', dataset: '@workflow', stage_datasets: JSON.stringify((stages.length ? stages : [{}]).map((_, stage) => ({stage, datasets: ['@workflow']}))), checkpoint: step.inputs.checkpoint ? '@workflow' : '', ...config.training};
+            values.engine = engine;
+            values.schedule = sourceMode === 'saved' ? config.schedule : '@workflow';
+            values.training_profile = profileId;
+            const scheduleOption = sourceMode === 'saved' ? null : {id: '@workflow', name: 'Node schedule', scope: 'Workflow', engine, profile: profileId, stages, workloads: sourceMode === 'builder'};
+            configure('Configure training run', '/training/new/', {values, schedule: scheduleOption, checkpoint_input: true}, result => {
+                config.training = result.values; config.engine = result.values.engine;
+                if (result.values.schedule !== '@workflow') { config.schedule = result.values.schedule; config.schedule_mode = 'saved'; delete config.spec; delete config.files; config.profile = data.schedules.find(row => row.id === config.schedule)?.profile || profileId; }
+            });
         }
         if (step.kind === 'decision') {
             field(body, 'Metric', config.field || 'loss', value => { config.field = value; });
@@ -341,7 +347,6 @@
         field(advanced, 'Incoming routes', step.join || 'all', value => { step.join = value; }, [{id: 'all', name: 'Require all'}, {id: 'any', name: 'Allow any'}]);
         field(advanced, 'Retry errors', step.retries || 0, value => { step.retries = value; }, null, 'number');
         field(advanced, 'Deadline (hours)', step.timeout_hours || 168, value => { step.timeout_hours = value; }, null, 'number');
-        if (step.kind === 'train') field(advanced, 'Priority', step.config.priority || 0, value => { step.config.priority = value; }, null, 'number');
         if (step.kind === 'test') field(advanced, 'Game cap (0 = none)', step.config.max_games || 0, value => { step.config.max_games = value; }, null, 'number');
         field(advanced, 'Show outcome port', '', value => { if (value) extraPorts.set(step.id, [...(extraPorts.get(step.id) || []), value]); }, choices(Object.keys(outcomeNames).filter(id => !outcomes(step).includes(id) && (['test', 'decision', 'approval'].includes(step.kind) ? id !== 'completed' : !['pass', 'fail'].includes(id))).map(id => ({id, name: outcomeNames[id]})), 'Choose outcome'));
         const footer = make('div', undefined, 'wf-inspector-footer'), remove = make('button', 'Delete step', 'wf-danger'); remove.type = 'button'; remove.addEventListener('click', deleteSelection); footer.append(remove); body.append(footer);

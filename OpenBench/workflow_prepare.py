@@ -26,7 +26,7 @@ def prepare(node, definition, user):
         else:
             from OpenBench.workflow_workloads import prepare as workload
             config['workload'] = workload(node, engine, profile, user)
-        if kind == 'datagen':
+        if kind == 'datagen' and 'parameters' not in config:
             games = config.get('games', 10000000)
             if type(games) is not int or games < 2 or games > 10000000000 or games % 2:
                 raise ValidationError('Use an even datagen game target between 2 and 10 billion.')
@@ -48,6 +48,8 @@ def prepare(node, definition, user):
                        'bullet_repo': profile['bullet_repo'], 'bullet_ref': profile['bullet_ref'], 'dataset_format': profile['format']}
             options = validate_schedule(config['files'], options)
             config['schedule_snapshot'] = {'name': node['name'], 'version': 1, 'files': config['files'], 'settings': options, 'environment': {}}
+            from OpenBench.workflow_training import prepare as training
+            training(node, user)
             return
         if config.get('spec'):
             spec, name, version = config['spec'], node['name'], 1
@@ -68,12 +70,16 @@ def prepare(node, definition, user):
                         raise ValidationError('The source schedule must match the selected profile’s trainer and data format.')
                     options['training_profile'] = profile
                 config['schedule_snapshot'] = {'name': schedule.name, 'version': schedule.version, 'files': schedule.files, 'settings': options, 'environment': {}}
+                from OpenBench.workflow_training import prepare as training
+                training(node, user)
                 return
             name, version = schedule.name, schedule.version
         if spec.get('training_profile', 'standard') != profile['id']:
             raise ValidationError('The schedule and node profiles must match.')
         _, files, options = generate_schedule(spec, profile['bullet_ref'], profile)
         config['schedule_snapshot'] = {'name': name, 'version': version, 'files': files, 'settings': options, 'environment': {}}
+        from OpenBench.workflow_training import prepare as training
+        training(node, user)
     elif kind == 'upload':
         from OpenBench.training import hf_token, repo_id
         hf_token(user.pk)

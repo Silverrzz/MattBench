@@ -33,5 +33,9 @@
     </div>
     <noscript>This editor requires JavaScript.</noscript>
 </form>
+<dialog id="workflow-config-dialog" class="wf-config-dialog" aria-labelledby="workflow-config-title">
+    <div class="wf-config-heading"><strong id="workflow-config-title">Configure workload</strong><button type="button" id="workflow-config-close" class="wf-icon-button" aria-label="Close configuration">×</button></div>
+    <iframe id="workflow-config-frame" title="Workload configuration"></iframe>
+</dialog>
 {{ workflow_data|json_script:'workflow-data' }}
 {% endblock %}

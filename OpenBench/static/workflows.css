@@ -98,3 +98,9 @@ body:has(.wf-editor) { overflow: hidden; }
 @media (max-width: 800px) { .wf-toolbar { padding: 0 14px; gap: 6px; } .wf-save-status { max-width: 140px; } .wf-gesture-hint { display: none; } .wf-inspector { width: min(300px, calc(100% - 32px)); } }
 @media (max-width: 520px) { .wf-save-status { position: absolute; top: 67px; right: 14px; max-width: 220px; background: #232329; border-radius: 6px; padding: 4px 8px; } .wf-save-status:empty { display: none; } .wf-toolbar-actions { gap: 5px; } .wf-toolbar .wf-title-input { width: 130px; } .wf-canvas-tools { left: 14px; } .wf-bottom-bar { left: 14px; } }
 @media (prefers-reduced-motion: reduce) { .wf-editor * { scroll-behavior: auto; } }
+.wf-config-dialog { width: min(1320px, calc(100vw - 48px)); height: calc(100dvh - 48px); max-width: none; max-height: none; padding: 0; border: 1px solid #41414c; border-radius: 12px; background: #18181b; color: #eeeef3; box-shadow: 0 24px 100px #0008; }
+.wf-config-dialog::backdrop { background: #08080bbd; backdrop-filter: blur(4px); }
+.wf-config-heading { display: flex; height: 58px; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid #34343b; font: 14px system-ui, sans-serif; }
+.wf-config-dialog iframe { display: block; width: 100%; height: calc(100% - 59px); border: 0; background: #18181b; }
+.wf-configure { width: 100%; margin: 0 0 18px; }
+@media (max-width: 700px) { .wf-config-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); } }

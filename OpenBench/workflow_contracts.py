@@ -18,7 +18,7 @@ PORTS = {
     'split': ({'data': 'dataset'}, {'training': 'dataset', 'validation': 'dataset', 'metrics': 'metrics'}),
     'convert': ({'data': 'dataset'}, {'data': 'dataset', 'metrics': 'metrics'}),
     'upload': ({'dataset': 'dataset'}, {'data': 'dataset'}),
-    'train': ({'dataset': 'dataset', 'checkpoint': 'checkpoint?', 'parameters': 'parameters?'}, {'network': 'network', 'checkpoint': 'checkpoint', 'metrics': 'metrics'}),
+    'train': ({'dataset': 'dataset?', 'checkpoint': 'checkpoint?', 'parameters': 'parameters?'}, {'network': 'network', 'checkpoint': 'checkpoint', 'metrics': 'metrics'}),
     'test': ({'network': 'network?', 'parameters': 'parameters?', 'base_network': 'network?', 'base_parameters': 'parameters?'}, {'network': 'network', 'metrics': 'metrics'}),
     'tune': ({'network': 'network?', 'parameters': 'parameters?'}, {'parameters': 'parameters', 'metrics': 'metrics'}),
     'decision': ({'source': 'metrics'}, {'metrics': 'metrics'}),

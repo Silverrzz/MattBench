@@ -40,7 +40,7 @@ def schedule_builder(request, schedule_id=None):
             profile = resolve_profile(requested, saved_profile if saved_profile and saved_profile['id'] == requested else None)
             normalized, files, config = generate_schedule(data.get('spec'), profile['bullet_ref'], profile)
             if data['action'] == 'preview':
-                return JsonResponse({'source': files[SOURCE]})
+                return JsonResponse({'source': files[SOURCE], 'spec': normalized})
             if selected:
                 if not editable:
                     raise PermissionDenied
@@ -98,7 +98,7 @@ def schedule_builder(request, schedule_id=None):
     profile = resolve_profile(initial, saved_profile)
     spec, files, config = generate_schedule(spec or default_spec(profile), profile['bullet_ref'], profile)
     payload = {
-        'profiles': [profile_data(item) for item in available_profiles],
+        'profiles': [profile_data(item) for item in available_profiles], 'workflow': request.GET.get('workflow') == '1',
         'id': str(selected.pk) if selected and not copy else '', 'version': selected.version if selected and not copy else 0,
         'spec': spec, 'source': files[SOURCE], 'notice': notice,
         'wdl_model_defaults': {key: DEFAULT_SPEC[key] for key in ('wdl_model_params_a', 'wdl_model_params_b', 'material_min', 'material_max', 'mom_target', 'wdl_heuristic_scale')},
@@ -109,7 +109,7 @@ def schedule_builder(request, schedule_id=None):
     }
     from OpenBench.training_adapters import INPUT_FEATURES
     return render(request, 'schedule_builder.html', {
-        'page_title': 'Schedule builder', 'training_tab': 'schedules', 'builder_data': payload,
+        'page_title': 'Schedule builder', 'training_tab': 'schedules', 'builder_data': payload, 'workflow_mode': payload['workflow'],
         'engines': EngineConfig.objects.filter(enabled=True).order_by('name'), 'bullet_commit': profile['bullet_ref'], 'bullet_repo': profile['bullet_repo'],
         'input_features': [{'key': key, **value} for key, value in INPUT_FEATURES.items()],
     })

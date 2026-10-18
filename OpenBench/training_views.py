@@ -171,8 +171,11 @@ class TrainingForm(forms.Form):
     checkpoint_keep_last = forms.IntegerField(label='Checkpoints to keep', min_value=1, max_value=10000, initial=DEFAULT_SETTINGS['checkpoint_keep_last'], required=False)
     delete_uploaded_checkpoints = forms.BooleanField(label='Delete local copies after upload', initial=DEFAULT_SETTINGS['delete_uploaded_checkpoints'], required=False)
 
-    def __init__(self, user, *args, **kwargs):
+    def __init__(self, user, *args, workflow_schedule=None, workflow_data=False, workflow_checkpoint=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.workflow_schedule = workflow_schedule
+        self.workflow_data = workflow_data
+        self.workflow_checkpoint = workflow_checkpoint
         self.fields['checkpoint'].queryset = TrainingCheckpoint.objects.filter(run__owner=user, run__snapshot__settings__resume_supported=True).exclude(run__snapshot__has_key='demo').select_related('run', 'archive').order_by('-run_id', '-superbatch')
         self.fields['checkpoint'].label_from_instance = lambda row: '%s · Run #%d · SB %d → %d' % (row.run.name, row.run_id, row.superbatch, row.superbatch + 1)
         self.fields['schedule'].queryset = schedules_for(user).filter(Q(owner=user) | Q(engine__enabled=True) | Q(engine=None))
@@ -189,6 +192,23 @@ class TrainingForm(forms.Form):
         self.fields['dataset'].queryset = TrainingDataset.objects.filter(archived=False, checked__isnull=False)
         self.fields['name'].widget.attrs['placeholder'] = 'Network name'
         self.fields['workload_size'].widget.attrs['aria-describedby'] = 'training-workload-help'
+        if workflow_schedule is not None:
+            self.fields['schedule'] = forms.CharField(required=False)
+            self.checkpoint_field = self.fields['checkpoint']
+            self.fields['checkpoint'] = forms.CharField(required=False)
+
+    def clean_schedule(self):
+        return self.workflow_schedule if self.workflow_schedule is not None else self.cleaned_data['schedule']
+
+    def clean_checkpoint(self):
+        value = self.cleaned_data['checkpoint']
+        if self.workflow_schedule is None:
+            return value
+        if value == '@workflow':
+            if not self.workflow_checkpoint:
+                raise ValidationError('Connect a checkpoint to this node.')
+            return None
+        return self.checkpoint_field.clean(value)
 
     def clean_environment(self):
         environment = {}
@@ -219,6 +239,9 @@ class TrainingForm(forms.Form):
             self.add_error('stage_datasets', 'Invalid stage overrides.')
         else:
             available = {str(row.pk): row for row in self.fields['dataset'].queryset}
+            if self.workflow_data:
+                from types import SimpleNamespace
+                available['@workflow'] = SimpleNamespace(snapshot=lambda: {'workflow_input': True})
             for override in overrides:
                 if not isinstance(override, dict) or type(override.get('stage')) is not int or not 0 <= override['stage'] < stage_count or override['stage'] in selected:
                     self.add_error('stage_datasets', 'Choose each stage once.')
@@ -257,7 +280,8 @@ class TrainingForm(forms.Form):
         if schedule and schedule.scope == 'engine' and data.get('engine') and schedule.engine_id != data['engine'].pk:
             self.add_error('schedule', 'Choose a schedule for this engine.')
         checkpoint = data.get('checkpoint')
-        if data.get('wdl') is not None and not checkpoint:
+        connected_checkpoint = self.workflow_schedule is not None and self.data.get('checkpoint') == '@workflow' and self.workflow_checkpoint
+        if data.get('wdl') is not None and not (checkpoint or connected_checkpoint):
             self.add_error('wdl', 'Select a checkpoint to change WDL for the remaining training.')
         if schedule:
             from OpenBench.schedule_builder import builder_state, generate_schedule
@@ -293,6 +317,8 @@ class TrainingForm(forms.Form):
 def new_training(request):
     from OpenBench.views import redirect, render
     enabled(request.user)
+    if request.method == 'POST' and request.GET.get('workflow') == '1':
+        return JsonResponse({'error': 'Apply this configuration through the workflow editor.'}, status=400)
     initial = {'dataset': request.GET.get('dataset', ''), 'schedule': request.GET.get('schedule'), 'engine': request.GET.get('engine')}
     if request.method == 'GET' and request.GET.get('checkpoint'):
         if not request.GET['checkpoint'].isdigit() or len(request.GET['checkpoint']) > 18:
@@ -341,7 +367,7 @@ def new_training(request):
     dataset_options = [{'id': str(row.pk), 'name': row.name, 'repo': row.repo, 'revision': row.revision, 'owner': row.owner.username, 'is_owner': row.owner_id == request.user.pk} for row in form.fields['dataset'].queryset.select_related('owner')]
     dataset_options.sort(key=lambda row: (not row['is_owner'], row['name'].casefold(), row['owner'].casefold(), row['id']))
     checkpoint_options = [{'id': str(row.pk), 'engine': str(row.run.engine_id), 'schedule': str(row.run.schedule_id or ''), 'superbatch': row.superbatch, 'run': row.run_id, 'name': row.run.name, 'datasets': registry_selections(row.run.dataset)} for row in form.fields['checkpoint'].queryset]
-    return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'checkpoint_options': checkpoint_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists()})
+    return render(request, 'training_new.html', {'page_title': 'New train', 'training_tab': 'new', 'form': form, 'schedule_options': options, 'dataset_options': dataset_options, 'checkpoint_options': checkpoint_options, 'hf_connected': HuggingFaceCredential.objects.filter(user=request.user).exists(), 'workflow_mode': request.GET.get('workflow') == '1'})
 
 
 @require_http_methods(['GET', 'POST'])

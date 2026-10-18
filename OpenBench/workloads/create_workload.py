@@ -54,10 +54,14 @@ def create_workload(request, workload_type):
     if not Profile.objects.get(user=request.user).enabled:
         return OpenBench.views.redirect(request, '/login/', error='Only enabled users can create tests')
 
+    if request.method == 'POST' and request.GET.get('workflow') == '1':
+        from django.http import JsonResponse
+        return JsonResponse({'error': 'Apply this configuration through the workflow editor.'}, status=400)
+
     if request.method == 'GET':
 
         from OpenBench.presets import preset_data
-        data = {'networks': list(Network.objects.all().values()), 'preset_data': preset_data(request.user, workload_type)}
+        data = {'networks': list(Network.objects.all().values()), 'preset_data': preset_data(request.user, workload_type), 'workflow_mode': request.GET.get('workflow') == '1'}
 
         if workload_type == 'TEST':
             data['workload']        = workload_type

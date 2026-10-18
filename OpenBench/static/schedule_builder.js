@@ -1,9 +1,14 @@
-(() => {
+(async () => {
     const V = window.BuilderValues;
     const form = document.getElementById('schedule-builder');
     if (!form) return;
     form.noValidate = true;
     const data = JSON.parse(document.getElementById('schedule-builder-data').textContent);
+    if (data.workflow && window.WorkflowNodeEditor) {
+        const initial = await window.WorkflowNodeEditor.receive();
+        data.spec = {...data.spec, ...initial.spec};
+        data.name = 'Workflow schedule';
+    }
     const field = name => form.elements.namedItem(name);
     const activeProfile = () => data.profiles.find(item => item.id === field('training_profile').value);
     for (const profile of data.profiles || []) field('training_profile').add(new Option(profile.name, profile.id));
@@ -866,6 +871,14 @@
             return;
         }
         const spec = readSpec();
+        if (data.workflow && window.WorkflowNodeEditor) {
+            try {
+                const result = await request({action: 'preview', spec});
+                dirty = false;
+                window.WorkflowNodeEditor.send({spec: result.spec});
+            } catch (error) { message(feedback, error.message, true); }
+            return;
+        }
         const body = {action: 'save', spec, version, name: byId('name').value.trim(), engine: byId('engine').value, scope: byId('scope').value};
         saving = true;
         generation++;
@@ -913,7 +926,7 @@
         }
     });
     window.addEventListener('beforeunload', event => {
-        if (!dirty && !saving) return;
+        if (data.workflow || !dirty && !saving) return;
         event.preventDefault();
         event.returnValue = '';
     });

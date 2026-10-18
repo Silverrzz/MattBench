@@ -123,6 +123,8 @@ def render(request, template, content={}, always_allow=False, error=None, warnin
         request.session['status_message'] = status
 
     response = django.shortcuts.render(request, 'OpenBench/{0}'.format(template), data)
+    if data.get('workflow_mode'):
+        response['X-Frame-Options'] = 'SAMEORIGIN'
 
     if hasattr(request, 'live_regions'):
         request.live_payload = {'regions': request.live_regions}

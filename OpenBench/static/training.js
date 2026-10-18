@@ -1,4 +1,4 @@
-(() => {
+(async () => {
     const importDialog = document.getElementById('artifact-import-dialog');
     if (importDialog) {
         const importForm = document.getElementById('artifact-import-form');
@@ -25,6 +25,22 @@
     }
     const form = document.getElementById('training-new-form');
     if (form) {
+        if (window.WorkflowNodeEditor) {
+            const initial = await window.WorkflowNodeEditor.receive();
+            if (initial.schedule) {
+                const input = document.getElementById('training-schedule-options');
+                input.textContent = JSON.stringify([...JSON.parse(input.textContent), initial.schedule]);
+                document.getElementById('train-schedule').add(new Option(initial.schedule.name, initial.schedule.id));
+            }
+            const input = document.getElementById('training-dataset-options');
+            input.textContent = JSON.stringify([{id: '@workflow', name: 'Connected workflow data', repo: 'Workflow input', revision: '', owner: '', is_owner: true}, ...JSON.parse(input.textContent)]);
+            if (initial.checkpoint_input) {
+                const input = document.getElementById('training-checkpoint-options');
+                input.textContent = JSON.stringify([...JSON.parse(input.textContent), {id: '@workflow', graph: true}]);
+                document.getElementById('train-checkpoint').add(new Option('Connected workflow checkpoint', '@workflow'));
+            }
+            window.WorkflowNodeEditor.apply(form, initial.values);
+        }
         const environmentInput = document.getElementById('train-environment');
         const environmentRows = document.getElementById('training-environment-rows');
         const addEnvironment = document.getElementById('training-add-environment');
@@ -416,7 +432,7 @@
             overrides = drafts.get(schedule.value) || [];
             previousSchedule = schedule.value;
             overrides = overrides.filter(override => override.stage >= 0 && override.stage < stages().length);
-            scheduleLink.hidden = !schedule.value;
+            scheduleLink.hidden = !schedule.value || schedule.value === '@workflow';
             if (schedule.value) scheduleLink.href = '/training/schedules/' + schedule.value + '/';
             renderOverrides();
             updateCheckpointHelp();
@@ -426,6 +442,7 @@
             checkpoint.setCustomValidity('');
             wdlOverride.hidden = !selected;
             document.getElementById('train-wdl').disabled = !selected;
+            if (selected?.graph) { checkpointHelp.textContent = 'Continue from the checkpoint connected to this node when it starts.'; return; }
             if (!selected) {
                 checkpointHelp.textContent = 'Start fresh or choose a saved checkpoint. Starting training always creates a new task.';
                 return;
@@ -442,7 +459,7 @@
         }
         checkpoint.addEventListener('change', () => {
             const selected = checkpointOptions.find(option => option.id === checkpoint.value);
-            if (selected) {
+            if (selected && !selected.graph) {
                 engine.value = selected.engine;
                 trainingProfile.value = options.find(option => option.id === selected.schedule)?.profile || '';
                 updateSchedules();

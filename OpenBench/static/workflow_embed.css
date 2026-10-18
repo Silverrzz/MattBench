@@ -1,0 +1,10 @@
+body { min-width: 0; }
+#sidebar, #content-header, .sidebar-backdrop, .skip-link, nav[aria-label="Training"], .page-heading, footer { display: none !important; }
+#content-parent { margin-left: 0; }
+#main-content { padding: 0; }
+#content { max-width: none; padding: 28px 36px; }
+.form { max-width: none; }
+.form-columns { gap: 48px; }
+.builder-identity, #builder-open-source, #builder-use { display: none !important; }
+.builder-identity input, .builder-identity select { visibility: hidden; }
+@media (max-width: 700px) { #content { padding: 20px; } .form-columns { gap: 24px; } }

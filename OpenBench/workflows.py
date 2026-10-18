@@ -27,7 +27,7 @@ TEST_FIELDS = ('book_name', 'dev_repo', 'dev_engine', 'dev_options', 'dev_networ
                'base_repo', 'base_engine', 'base_options', 'base_network', 'base_netname', 'base_time_control',
                'workload_size', 'priority', 'throughput', 'scale_method', 'scale_nps', 'syzygy_wdl', 'syzygy_adj',
                'win_adj', 'draw_adj', 'test_mode', 'elolower', 'eloupper', 'alpha', 'beta', 'lowerllr', 'upperllr',
-               'max_games', 'genfens_args', 'play_reverses', 'use_tri', 'use_penta')
+               'max_games', 'genfens_args', 'play_reverses', 'use_tri', 'use_penta', 'info')
 
 
 def validate_definition(value, draft=False):
@@ -161,6 +161,8 @@ def start(workflow, user, identifier=None):
             WorkflowAssetPin.objects.get_or_create(run=run, checkpoint_id=node['config']['checkpoint'])
         elif node['kind'] == 'load_artifact' and node['config'].get('provider', 'training') == 'training':
             WorkflowAssetPin.objects.get_or_create(run=run, artifact_id=node['config']['artifact'])
+        elif node['kind'] == 'train' and node['config'].get('training_options', {}).get('checkpoint'):
+            WorkflowAssetPin.objects.get_or_create(run=run, checkpoint_id=node['config']['training_options']['checkpoint'])
     return run
 
 
@@ -210,7 +212,7 @@ def launch(step, node, outputs):
         values = copy.deepcopy(config['workload'])
         for side in ('dev', 'base'):
             values[side] = Engine.objects.create(**values[side])
-        values.update(author=run.owner.username, info='Workflow %s · %s' % (run.workflow.name, node['name']),
+        values.update(author=run.owner.username, info=values.get('info') or 'Workflow %s · %s' % (run.workflow.name, node['name']),
                       execution={**values['execution'], 'workflow': reference(step), 'worker_policy': node['worker']})
         approval = Profile.objects.get(user=run.owner)
         from OpenBench.config import OPENBENCH_CONFIG
@@ -232,11 +234,11 @@ def launch(step, node, outputs):
             if name in inputs:
                 for side in sides:
                     values[side + '_options'] = apply_parameters(values[side + '_options'], inputs[name])
-        if node['kind'] == 'datagen':
+        if node['kind'] == 'datagen' and 'parameters' not in config:
             values.update(max_games=config.get('games', 10000000), upload_pgns='COMPACT')
         elif node['kind'] == 'test':
             control = config.get('control', 'template')
-            if control != 'template':
+            if control != 'template' and 'parameters' not in config:
                 tc = 'N=%d' % config['nodes'] if control == 'nodes' else config.get('time_control') or ('10.0+0.1' if control == 'stc' else '60.0+0.6')
                 from OpenBench.utils import TimeControl
                 tc = TimeControl.parse(tc)
@@ -265,23 +267,12 @@ def launch(step, node, outputs):
         if values['approved']:
             test_event('approved', step.test, run.owner_id)
     elif node['kind'] == 'train':
-        from OpenBench.workflow_assets import dataset_for_training, resolve_data
-        dataset = dataset_for_training(resolve_data(inputs['dataset'], run.owner))
-        from OpenBench.schedule_builder import MANIFEST, dataset_stages
-        ranges = dataset_stages(json.loads(config['schedule_snapshot']['files'][MANIFEST])['spec'])
-        dataset = {**dataset, 'stages': [{**dataset, **bounds} for bounds in ranges]}
-        snapshot = {**config['schedule_snapshot'], 'workflow': reference(step), 'worker_policy': node['worker']}
-        resume = None
-        if inputs.get('checkpoint'):
-            from OpenBench.models import TrainingCheckpoint
-            from OpenBench.training_checkpoints import checkpoint_provenance, validate_checkpoint_schedule
-            resume = TrainingCheckpoint.objects.select_related('run', 'archive').get(pk=inputs['checkpoint']['checkpoint'])
-            if resume.run.owner_id != run.owner_id and not run.owner.is_superuser:
-                raise ValidationError('Checkpoint access denied.')
-            validate_checkpoint_schedule(resume, EngineConfig.objects.get(pk=config['engine']), snapshot['files'], snapshot['settings'])
-            snapshot['resume'] = checkpoint_provenance(resume)
-        step.training = TrainingRun.objects.create(owner=run.owner, engine_id=config.get('engine') or run.snapshot['engine'], name='wf-%s-%s' % (str(run.pk)[:8], step.key),
-            snapshot=snapshot, dataset=dataset, parameters=inputs.get('parameters', {}).get('values', {}), resume_from=resume, priority=config.get('priority', 0))
+        from OpenBench.workflow_training import launch as training
+        snapshot, dataset, resume, options = training(config, inputs, run.owner)
+        snapshot.update(workflow=reference(step), worker_policy=node['worker'])
+        step.training = TrainingRun.objects.create(owner=run.owner, engine_id=config.get('engine') or run.snapshot['engine'], name=options.get('name') or 'wf-%s-%s' % (str(run.pk)[:8], step.key),
+            snapshot=snapshot, dataset=dataset, parameters=inputs.get('parameters', {}).get('values', {}), resume_from=resume, priority=options.get('priority', config.get('priority', 0)),
+            workload_size=options.get('workload_size', 0), completed_superbatches=resume.superbatch if resume else 0)
     elif node['kind'] in ('convert', 'split', 'task', 'upload'):
         from OpenBench.workflow_tasks import enqueue
         enqueue(step, node, inputs)

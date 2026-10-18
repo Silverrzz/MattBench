@@ -3,7 +3,7 @@
 {% block scripts %}<link rel="stylesheet" href="{% static 'training.css' %}?{{ static_version }}"><script src="{% static 'training.js' %}?{{ static_version }}" defer></script>{% endblock %}
 {% block content %}
 {% include 'OpenBench/Blocks/training_nav.html' %}
-<form class="form training-create" method="post" id="training-new-form">
+<form class="form training-create" method="post" id="training-new-form" {% if workflow_mode %}action="?workflow=1"{% endif %}>
     {% csrf_token %}{{ form.non_field_errors }}
     <section class="training-form-section" aria-labelledby="training-setup-heading">
     <h3 id="training-setup-heading">Training setup</h3>
@@ -67,8 +67,8 @@
     <div class="training-create-actions">
         <div class="form-actions">
             {% if not hf_connected %}<a class="training-connect" href="/profile/">Connect Hugging Face</a>{% endif %}
-            <a class="button" href="/training/">Cancel</a>
-            <button class="button button-primary" type="submit" {% if not hf_connected %}disabled{% endif %}>Start training</button>
+            {% if not workflow_mode %}<a class="button" href="/training/">Cancel</a>{% endif %}
+            <button class="button button-primary" type="submit" {% if not hf_connected and not workflow_mode %}disabled{% endif %}>{% if workflow_mode %}Use configuration{% else %}Start training{% endif %}</button>
         </div>
     </div>
 </form>

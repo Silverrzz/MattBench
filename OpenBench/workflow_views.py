@@ -55,16 +55,14 @@ def editor(request, identifier=None, create=False):
             return JsonResponse({'error': error_text(error)}, status=400)
     if not row and not create:
         return render(request, 'workflows.html', {'page_title': 'Workflows', 'workflows': Workflow.objects.filter(owner=request.user, archived=False), 'runs': WorkflowRun.objects.filter(owner=request.user).select_related('workflow')[:50]})
-    from OpenBench.schedule_builder import builder_state
+    from OpenBench.schedule_builder import builder_state, schedule_dataset_stages
     schedules = []
     for schedule in schedules_for(request.user):
         spec = builder_state(schedule)[0]
         schedules.append({'id': str(schedule.pk), 'name': schedule.name, 'profile': (schedule.settings.get('training_profile') or {}).get('id', (spec or {}).get('training_profile', 'standard')),
-                          'engine': str(schedule.engine_id or ''), 'spec': spec})
+                          'engine': str(schedule.engine_id or ''), 'spec': spec, 'stages': schedule_dataset_stages(schedule)})
     from OpenBench.models import Network, OpeningBook, TrainingArtifact, TrainingCheckpoint, TrainingDataset, WorkflowArtifact
     engine_rows = list(EngineConfig.objects.filter(enabled=True))
-    from OpenBench.workflow_workloads import defaults
-    engine_defaults = {str(engine.pk): {kind: defaults(engine, kind, 'standard') for kind in ('datagen', 'test', 'tune')} for engine in engine_rows}
     workers = [{'id': 'cpu:%d' % worker.pk, 'name': worker.info.get('machine_name') or 'CPU worker %d' % worker.pk} for worker in Machine.objects.filter(user=request.user).order_by('-updated')[:500]]
     workers += [{'id': 'gpu:' + str(worker.pk), 'name': worker.name + (' · CPU' if worker.info.get('backend') == 'cpu' else ' · GPU')} for worker in TrainingWorker.objects.filter(owner=request.user, enabled=True, machine__isnull=True)]
     from OpenBench.workflow_contracts import PORTS
@@ -74,7 +72,7 @@ def editor(request, identifier=None, create=False):
     default_profile = next((profile['id'] for profile in profile_rows if profile['id'] == 'standard'), profile_rows[0]['id'])
     return render(request, 'workflow_editor.html', {'page_title': row.name if row else 'New workflow', 'workflow_data': {
         'id': str(row.pk) if row else '', 'version': row.version if row else 0, 'name': row.name if row else '', 'definition': row.definition if row else example(default_profile),
-        'profiles': [profile_data(profile) for profile in profile_rows], 'engines': [{'id': str(engine.pk), 'name': engine.name} for engine in engine_rows], 'schedules': schedules, 'workers': workers, 'engine_defaults': engine_defaults,
+        'profiles': [profile_data(profile) for profile in profile_rows], 'engines': [{'id': str(engine.pk), 'name': engine.name} for engine in engine_rows], 'schedules': schedules, 'workers': workers,
         'books': [{'id': book.name, 'name': book.name, 'variants': list(book.variants.values_list('name', flat=True))} for book in OpeningBook.objects.filter(enabled=True)],
         'networks': list(Network.objects.values('sha256', 'name', 'engine')),
         'ports': PORTS, 'schedule_defaults': {profile['id']: default_spec(profile) for profile in profile_rows},

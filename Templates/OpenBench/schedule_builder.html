@@ -238,7 +238,7 @@
         <p id="builder-feedback" role="status" aria-live="polite"></p>
         <a class="button" id="builder-open-source" href="/training/schedules/{{ builder_data.id }}/" {% if not builder_data.id %}hidden{% endif %}>Edit source</a>
         <a class="button" id="builder-use" href="/training/new/?schedule={{ builder_data.id }}&amp;engine={{ builder_data.engine }}" {% if not builder_data.id %}hidden{% endif %}>Use schedule</a>
-        <button type="submit" class="button button-primary" id="builder-save">Save schedule</button>
+        <button type="submit" class="button button-primary" id="builder-save">{% if workflow_mode %}Use configuration{% else %}Save schedule{% endif %}</button>
     </div>
 </form>
 {{ builder_data|json_script:'schedule-builder-data' }}
