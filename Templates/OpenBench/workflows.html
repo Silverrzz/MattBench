@@ -1,10 +1,53 @@
 {% extends 'OpenBench/base.html' %}
 {% load static %}
-{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}">{% endblock %}
-{% block page_actions %}<a class="button" href="/training/profiles/">Training profiles</a><a class="button button-primary" href="/workflows/new/">New workflow</a>{% endblock %}
+{% block scripts %}<link rel="stylesheet" href="{% static 'workspace.css' %}?{{ static_version }}"><link rel="stylesheet" href="{% static 'workflow_index.css' %}?{{ static_version }}"><script src="{% static 'workspace.js' %}?{{ static_version }}" defer></script>{% endblock %}
+{% block page_actions %}<a class="button" href="/training/profiles/">Training profiles</a><a class="button button-primary" href="/workflows/new/"><i class="fa-solid fa-plus" aria-hidden="true"></i> New workflow</a>{% endblock %}
 {% block content %}
-<h2>Your workflows</h2>
-<table class="stripes wrappable"><thead><tr><th>Name</th><th>Version</th><th>Updated</th></tr></thead><tbody>{% for row in workflows %}<tr><td><a href="/workflows/{{ row.pk }}/">{{ row.name }}</a></td><td>{{ row.version }}</td><td>{{ row.updated }}</td></tr>{% empty %}<tr><td colspan="3">Create a workflow to get started.</td></tr>{% endfor %}</tbody></table>
-<h2>Recent runs</h2>
-<table class="stripes wrappable"><thead><tr><th>Workflow</th><th>Version</th><th>State</th><th>Started</th></tr></thead><tbody>{% for row in runs %}<tr><td><a href="/workflows/runs/{{ row.pk }}/">{{ row.workflow.name }}</a></td><td>{{ row.version }}</td><td>{{ row.state }}</td><td>{{ row.created }}</td></tr>{% empty %}<tr><td colspan="4">No runs yet.</td></tr>{% endfor %}</tbody></table>
+<div class="tests-page workflow-index">
+    <section class="tests-section" aria-labelledby="workflow-library-heading" data-filter-scope>
+        <div class="workflow-section-heading">
+            <h2 id="workflow-library-heading">Your workflows <span class="section-count">{{ workflows|length }}</span></h2>
+            {% if workflows %}<div class="workspace-toolbar"><input type="search" data-search placeholder="Find a workflow" aria-label="Find a workflow"></div>{% endif %}
+        </div>
+        {% if workflows %}
+        <div class="workflow-library">
+            {% for row in workflows %}
+            <a class="workflow-tile" href="/workflows/{{ row.pk }}/" data-search-row="{{ row.name }}">
+                <div class="workflow-tile-heading"><span class="workflow-library-icon"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i></span><span class="workspace-tag">v{{ row.version }}</span><i class="fa-solid fa-arrow-right workflow-open-icon" aria-hidden="true"></i></div>
+                <h3>{{ row.name }}</h3>
+                <div class="workflow-tile-meta"><span>{{ row.definition.steps|length }} step{{ row.definition.steps|length|pluralize }}</span><span>Edited <time datetime="{{ row.updated|date:'c' }}" title="{{ row.updated|date:'j M Y, H:i' }}">{{ row.updated|date:'j M' }}</time></span></div>
+            </a>
+            {% endfor %}
+        </div>
+        <div class="workflow-library-empty" data-search-empty hidden><strong>No matching workflows</strong></div>
+        {% else %}
+        <div class="workflow-library-empty">
+            <span class="workflow-library-icon"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i></span>
+            <strong>No workflows yet</strong>
+            <a href="/workflows/new/">Open a blank canvas <span aria-hidden="true">&rarr;</span></a>
+        </div>
+        {% endif %}
+    </section>
+    <section class="tests-section" aria-labelledby="workflow-runs-heading">
+        <h2 id="workflow-runs-heading">Recent runs</h2>
+        {% if runs %}
+        <div class="table-scroll workflow-run-list" role="region" aria-label="Recent workflow runs" tabindex="0">
+            <table class="hoverable" aria-label="Recent workflow runs">
+                <thead><tr class="table-header"><th scope="col">Workflow</th><th scope="col">Version</th><th scope="col">Status</th><th scope="col">Started</th><th scope="col"><span class="sr-only">Open run</span></th></tr></thead>
+                <tbody>{% for row in runs %}
+                    <tr>
+                        <td><a class="table-title" href="/workflows/runs/{{ row.pk }}/">{{ row.workflow.name }}</a></td>
+                        <td><span class="workspace-tag">v{{ row.version }}</span></td>
+                        <td><span class="workflow-run-state" data-state="{{ row.state|lower }}">{{ row.state|title }}</span></td>
+                        <td><time datetime="{{ row.created|date:'c' }}" title="{{ row.created|date:'j M Y, H:i' }}">{{ row.created|date:'j M, H:i' }}</time></td>
+                        <td><a class="table-action" href="/workflows/runs/{{ row.pk }}/" aria-label="Open {{ row.workflow.name }} run"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a></td>
+                    </tr>
+                {% endfor %}</tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="workflow-runs-empty"><i class="fa-solid fa-clock" aria-hidden="true"></i><span>No runs yet</span></div>
+        {% endif %}
+    </section>
+</div>
 {% endblock %}
