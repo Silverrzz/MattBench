@@ -55,6 +55,9 @@ def validate_definition(value, draft=False):
             raise ValidationError('Give each step a name of at most 128 characters.')
         if not isinstance(step.get('config', {}), dict) or not isinstance(step.get('inputs', {}), dict):
             raise ValidationError('Invalid step configuration or inputs.')
+        shown = step.get('config', {}).get('outcome_ports', [])
+        if not isinstance(shown, list) or len(shown) > len(OUTCOMES) or any(not isinstance(outcome, str) or outcome not in OUTCOMES for outcome in shown):
+            raise ValidationError('Choose valid outcome ports.')
         retries, timeout = step.get('retries', 0), step.get('timeout_hours', 168)
         if type(retries) is not int or not 0 <= retries <= 10 or type(timeout) is not int or not 1 <= timeout <= 8760:
             raise ValidationError('Use 0–10 retries and a deadline of 1–8760 hours.')

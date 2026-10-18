@@ -30,11 +30,11 @@
     let definition = structuredClone(data.definition), identifier = data.id, version = data.version;
     let selection = null, gesture = null, armed = null, insertion = null, saving = false, space = false;
     let past = [], future = [], saved = '', wheelTimer;
-    const extraPorts = new Map(), nodeElements = new Map();
+    const nodeElements = new Map();
     const make = (tag, text, className) => { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; if (className) item.className = className; return item; };
     const icon = value => { const item = make('i', undefined, 'fa-solid fa-' + value); item.setAttribute('aria-hidden', 'true'); return item; };
     const snapshot = () => JSON.stringify({definition, name: name.value});
-    const remember = () => { past.push(snapshot()); if (past.length > 60) past.shift(); future = []; };
+    const remember = () => { const value = snapshot(); if (past[past.length - 1] !== value) past.push(value); if (past.length > 60) past.shift(); future = []; };
     const changed = () => {
         byId('undo').disabled = !past.length; byId('redo').disabled = !future.length;
         if (!saving) { feedback.textContent = snapshot() === saved ? (identifier ? 'Saved' : '') : 'Unsaved'; feedback.dataset.error = 'false'; }
@@ -91,7 +91,7 @@
     const assetColors = {dataset: '#8cbab5', parameters: '#c4ab84', network: '#d6b57e', checkpoint: '#b9a1d2', metrics: '#9db4df', artifact: '#adb2be'};
     function ports(step, direction) { return step.kind === 'task' ? step.config[direction === 0 ? 'inputs' : 'outputs'] || data.ports.task[direction] : data.ports[step.kind][direction]; }
     const baseType = kind => kind.replace('?', '').replace('[]', '');
-    function outcomes(step) { return [...new Set([...(['test', 'decision', 'approval'].includes(step.kind) ? ['pass', 'fail'] : ['completed']), ...definition.edges.filter(edge => edge.from === step.id && !edge.output).flatMap(edge => edge.on), ...(extraPorts.get(step.id) || [])])]; }
+    function outcomes(step) { return [...new Set([...(['test', 'decision', 'approval'].includes(step.kind) ? ['pass', 'fail'] : ['completed']), ...definition.edges.filter(edge => edge.from === step.id && !edge.output).flatMap(edge => edge.on), ...(step.config.outcome_ports || [])])]; }
     function summary(step) {
         if (step.kind === 'datagen') return `${Number(step.config.parameters?.datagen_max_games || step.config.games || 10000000).toLocaleString()} games`;
         if (step.kind === 'upload') return step.config.repo || 'Choose a destination';
@@ -123,11 +123,12 @@
         }));
         for (const edge of definition.edges) for (const output of edge.output ? [edge.output] : edge.on.map(value => '@' + value)) {
             if (!nodeElements.has(edge.from) || !nodeElements.has(edge.to)) continue;
-            const selected = selection?.from === edge.from && selection?.to === edge.to && selection?.output === output && selection?.input === (edge.input || '@control');
+            const edgeOutput = edge.output || '@' + edge.on[0];
+            const selected = selection?.from === edge.from && selection?.to === edge.to && selection?.output === edgeOutput && selection?.input === (edge.input || '@control');
             const group = svg('g', {class: 'wf-wire-group' + (selected ? ' is-selected' : '')}), path = route(portPoint(edge.from, output), portPoint(edge.to, edge.input || '@control', true), Boolean(edge.output), edge.from, edge.to).path;
             if (edge.output) group.style.setProperty('--wire-color', assetColors[ports(find(edge.from), 1)[edge.output]] || '#adb2be');
             group.append(svg('path', {d: path, class: 'wf-wire'}), svg('path', {d: path, class: 'wf-wire-hit'}));
-            group.addEventListener('pointerdown', event => { event.stopPropagation(); select({from: edge.from, to: edge.to, output, input: edge.input || '@control'}); }); wires.append(group);
+            group.addEventListener('pointerdown', event => { if (event.button !== 0 || space) return; event.stopPropagation(); select({from: edge.from, to: edge.to, output: edgeOutput, input: edge.input || '@control'}); }); wires.append(group);
         }
         if (armed && pointer) wires.append(svg('path', {d: curve(portPoint(armed.id, armed.output), pointer, !armed.output.startsWith('@')), class: 'wf-wire wf-wire-preview'}));
     }
@@ -170,6 +171,7 @@
     }
     function field(root, label, value, update, options, type = 'text') {
         const wrapper = make('label', label, 'wf-field' + (type === 'checkbox' ? ' wf-field-check' : '')), input = make(options ? 'select' : type === 'textarea' ? 'textarea' : 'input');
+        input.setAttribute('aria-label', label);
         if (options) input.append(...options.map(row => new Option(row.name, String(row.id)))); else if (type !== 'textarea') input.type = type;
         if (type === 'checkbox') input.checked = Boolean(value); else input.value = value ?? ''; if (type === 'number') input.step = 'any';
         input.addEventListener('change', () => { remember(); update(type === 'checkbox' ? input.checked : type === 'number' ? Number(input.value) : input.value); renderNodes(); }); wrapper.append(input); root.append(wrapper); return input;
@@ -177,10 +179,10 @@
     function section(label) { const details = make('details'); details.append(make('summary', label)); body.append(details); return details; }
     const choices = (items, label) => [{id: '', name: label}, ...items];
     function select(value) { selection = value; inspector.hidden = value === null; for (const [id, item] of nodeElements) item.classList.toggle('is-selected', id === value); if (value !== null) renderInspector(); drawWires(); }
-    function jsonField(root, label, value, update) {
-        const wrapper = make('label', label, 'wf-field'), input = make('textarea'); input.value = JSON.stringify(value, null, 2); input.spellcheck = false; input.rows = Math.min(14, input.value.split('\n').length + 1);
+    function jsonField(root, label, value, update, validate = () => {}) {
+        const wrapper = make('label', label, 'wf-field'), input = make('textarea'); input.setAttribute('aria-label', label); input.value = JSON.stringify(value, null, 2); input.spellcheck = false; input.rows = Math.min(14, input.value.split('\n').length + 1);
         input.addEventListener('input', () => input.setCustomValidity(''));
-        input.addEventListener('change', () => { try { const parsed = JSON.parse(input.value); remember(); update(parsed); input.setCustomValidity(''); renderNodes(); } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); } }); wrapper.append(input); root.append(wrapper); return input;
+        input.addEventListener('change', () => { try { const parsed = JSON.parse(input.value); validate(parsed); remember(); update(parsed); input.setCustomValidity(''); renderNodes(); } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); } }); wrapper.append(input); root.append(wrapper); return input;
     }
     const configDialog = byId('config-dialog'), configFrame = byId('config-frame');
     let nodeEditor = null;
@@ -219,7 +221,8 @@
             body.append(make('p', `${find(selected.from).name} → ${find(selected.to).name}`, 'wf-inline-note'));
             if (edge) {
                 if (edge.output) body.append(make('p', `${assetNames[edge.output] || edge.output} → ${assetNames[edge.input] || edge.input}`, 'wf-inline-note'));
-                field(body, 'When', edge.on.length > 1 ? 'any' : edge.on[0], value => { edge.on = value === 'any' ? Object.keys(outcomeNames) : [value]; if (!edge.output) selection.output = '@' + edge.on[0]; renderNodes(); }, [{id: 'any', name: 'Any outcome'}, ...Object.keys(outcomeNames).map(id => ({id, name: outcomeNames[id]}))]);
+                const multiple = edge.on.length > 1 && edge.on.length < Object.keys(outcomeNames).length;
+                field(body, 'When', multiple ? 'selected' : edge.on.length > 1 ? 'any' : edge.on[0], value => { if (value === 'selected') return; edge.on = value === 'any' ? Object.keys(outcomeNames) : [value]; if (!edge.output) selection.output = '@' + edge.on[0]; renderNodes(); }, [...(multiple ? [{id: 'selected', name: edge.on.map(id => outcomeNames[id]).join(' or ')}] : []), {id: 'any', name: 'Any outcome'}, ...Object.keys(outcomeNames).map(id => ({id, name: outcomeNames[id]}))]);
             }
             const remove = make('button', 'Remove connection', 'wf-danger'); remove.type = 'button'; remove.addEventListener('click', deleteSelection); body.append(remove); return;
         }
@@ -329,8 +332,8 @@
             field(recipe, 'Pinned commit', config.repository?.commit, value => { (config.repository ||= {}).commit = value; });
             field(recipe, 'Execution image', config.execution_image, value => { config.execution_image = value; });
             const io = section('Ports and outputs');
-            jsonField(io, 'Input ports', config.inputs || {data: 'artifact[]?'}, value => { config.inputs = value; inferInputs(); });
-            jsonField(io, 'Output ports', config.outputs || {artifact: 'artifact'}, value => { config.outputs = value; });
+            jsonField(io, 'Input ports', config.inputs || {data: 'artifact[]?'}, value => { changePorts(step, 0, value); }, value => validatePorts(0, value));
+            jsonField(io, 'Output ports', config.outputs || {artifact: 'artifact'}, value => { changePorts(step, 1, value); }, value => validatePorts(1, value));
             jsonField(io, 'Output patterns', config.files || {artifact: 'outputs/*'}, value => { config.files = value; });
         }
         if (['datagen', 'train', 'test', 'tune', 'convert', 'split', 'task', 'upload'].includes(step.kind)) {
@@ -348,11 +351,29 @@
         field(advanced, 'Retry errors', step.retries || 0, value => { step.retries = value; }, null, 'number');
         field(advanced, 'Deadline (hours)', step.timeout_hours || 168, value => { step.timeout_hours = value; }, null, 'number');
         if (step.kind === 'test') field(advanced, 'Game cap (0 = none)', step.config.max_games || 0, value => { step.config.max_games = value; }, null, 'number');
-        field(advanced, 'Show outcome port', '', value => { if (value) extraPorts.set(step.id, [...(extraPorts.get(step.id) || []), value]); }, choices(Object.keys(outcomeNames).filter(id => !outcomes(step).includes(id) && (['test', 'decision', 'approval'].includes(step.kind) ? id !== 'completed' : !['pass', 'fail'].includes(id))).map(id => ({id, name: outcomeNames[id]})), 'Choose outcome'));
+        field(advanced, 'Show outcome port', '', value => { if (value) (step.config.outcome_ports ||= []).push(value); }, choices(Object.keys(outcomeNames).filter(id => !outcomes(step).includes(id) && (['test', 'decision', 'approval'].includes(step.kind) ? id !== 'completed' : !['pass', 'fail'].includes(id))).map(id => ({id, name: outcomeNames[id]})), 'Choose outcome'));
         const footer = make('div', undefined, 'wf-inspector-footer'), remove = make('button', 'Delete step', 'wf-danger'); remove.type = 'button'; remove.addEventListener('click', deleteSelection); footer.append(remove); body.append(footer);
         for (const details of body.querySelectorAll('details')) details.open = expanded.includes(details.querySelector('summary').textContent);
     }
     function ancestors(id, seen = new Set()) { for (const edge of definition.edges.filter(edge => edge.to === id)) if (!seen.has(edge.from)) { seen.add(edge.from); ancestors(edge.from, seen); } return seen; }
+    function validatePorts(direction, value) {
+        const types = Object.keys(assetColors);
+        if (!value || Array.isArray(value) || typeof value !== 'object' || Object.keys(value).length > 32 || Object.entries(value).some(([key, kind]) => !/^[a-z][a-z0-9_]{0,63}$/.test(key) || typeof kind !== 'string' || !(direction ? types.includes(kind) : types.some(type => [type, type + '?', type + '[]', type + '[]?'].includes(kind))))) throw Error('Use up to 32 named ports with valid asset types.');
+    }
+    function changePorts(step, direction, value) {
+        step.config[direction ? 'outputs' : 'inputs'] = value;
+        const removed = definition.edges.length;
+        definition.edges = definition.edges.filter(edge => {
+            if (!edge.output || edge.from !== step.id && edge.to !== step.id) return true;
+            const source = ports(find(edge.from), 1)[edge.output], target = ports(find(edge.to), 0)[edge.input];
+            return source && target && (baseType(target) === source || baseType(target) === 'artifact');
+        });
+        if (direction) {
+            step.config.files = Object.fromEntries(Object.keys(value).map(key => [key, step.config.files?.[key] || 'outputs/' + key + '/*']));
+        }
+        resetInteraction(); inferInputs();
+        if (removed !== definition.edges.length) feedback.textContent = 'Removed incompatible connections for the updated ports.';
+    }
     function inferInputs() {
         for (const step of definition.steps) {
             step.inputs = {};
@@ -364,25 +385,30 @@
         }
     }
     function connect(from, to, output, input, record = true) {
+        const source = find(from), target = find(to), control = typeof output === 'string' && output.startsWith('@');
+        if (!source || !target || (control ? !outcomes(source).includes(output.slice(1)) : !ports(source, 1)[output])) { resetInteraction(); drawWires(); return; }
         if (from === to || ancestors(from).has(to)) { feedback.textContent = 'Connections cannot form a loop.'; feedback.dataset.error = 'true'; return; }
-        const source = find(from), target = find(to), control = output.startsWith('@');
         if (!input) {
             const compatible = Object.entries(ports(target, 0)).filter(([key, kind]) => baseType(kind) === ports(source, 1)[output] || baseType(kind) === 'artifact');
             input = control ? '@control' : compatible.length === 1 ? compatible[0][0] : null;
         }
-        if (!input || control !== input.startsWith('@') || !control && baseType(ports(target, 0)[input] || '') !== 'artifact' && ports(source, 1)[output] !== baseType(ports(target, 0)[input] || '')) { feedback.textContent = 'Connect to an input with a matching asset type.'; feedback.dataset.error = 'true'; return; }
-        if (definition.edges.some(edge => edge.from === from && edge.to === to && (edge.output || '@' + edge.on[0]) === output && (edge.input || '@control') === input)) return;
+        if (!input || control && input !== '@control' || !control && (!ports(target, 0)[input] || baseType(ports(target, 0)[input]) !== 'artifact' && ports(source, 1)[output] !== baseType(ports(target, 0)[input]))) { feedback.textContent = 'Connect to an input with a matching asset type.'; feedback.dataset.error = 'true'; return; }
+        const existing = definition.edges.find(edge => edge.from === from && edge.to === to && (control ? !edge.output : edge.output === output && edge.input === input));
+        if (existing && (!control || existing.on.includes(output.slice(1)))) { resetInteraction(); renderNodes(); select(to); return; }
         if (!control && !ports(target, 0)[input].includes('[]') && definition.edges.some(edge => edge.to === to && edge.input === input)) { feedback.textContent = 'This input already has a source. Use Merge datasets to combine data.'; return; }
         if (record) remember();
         const on = control ? [output.slice(1)] : ['test', 'decision', 'approval'].includes(source.kind) ? ['pass'] : ['completed'];
-        definition.edges.push({from, to, on, ...(!control ? {output, input} : {})});
-        inferInputs(); armed = null; canvas.classList.remove('is-connecting'); renderNodes(); select(to);
+        if (existing) existing.on.push(...on); else definition.edges.push({from, to, on, ...(!control ? {output, input} : {})});
+        inferInputs(); resetInteraction(); renderNodes(); select(to);
     }
     function removeEdge(target) { definition.edges = definition.edges.filter(edge => !(edge.from === target.from && edge.to === target.to && (edge.output || '@' + edge.on[0]) === target.output && (edge.input || '@control') === target.input)); inferInputs(); }
     function resetInteraction() {
+        const pointerId = gesture?.pointerId;
         armed = null; gesture = null;
         canvas.classList.remove('is-dragging', 'is-connecting');
         for (const item of nodeElements.values()) item.classList.remove('is-connect-target');
+        if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+        changed();
     }
     function deleteSelection() {
         if (!selection || selection === 'settings') return; remember();
@@ -411,23 +437,29 @@
     }
     function restore(direction) {
         const source = direction === 'undo' ? past : future, destination = direction === 'undo' ? future : past;
-        if (!source.length) return; destination.push(snapshot()); const value = JSON.parse(source.pop()); definition = value.definition; name.value = value.name; normalize(); resetInteraction(); renderNodes(); select(null);
+        if (!source.length) return;
+        const current = snapshot(); let value;
+        do { value = source.pop(); } while (value === current && source.length);
+        if (value === current) { changed(); return; }
+        destination.push(current); value = JSON.parse(value); definition = value.definition; name.value = value.name; normalize(); resetInteraction(); renderNodes(); select(null);
     }
     canvas.addEventListener('pointerdown', event => {
+        if (gesture) return;
         if (event.button !== 0 && event.button !== 1) return;
         const node = event.target.closest('[data-node]'), output = event.target.closest('[data-output]'), input = event.target.closest('[data-input]');
-        if (input && armed) { event.preventDefault(); connect(armed.id, node.dataset.node, armed.output, input.dataset.input); return; }
-        if (output && event.button === 0 && !space) { event.preventDefault(); armed = {id: node.dataset.node, output: output.dataset.output}; gesture = {kind: 'wire', startX: event.clientX, startY: event.clientY}; canvas.classList.add('is-connecting'); canvas.setPointerCapture(event.pointerId); return; }
+        if (input && armed && event.button === 0 && !space) { event.preventDefault(); connect(armed.id, node.dataset.node, armed.output, input.dataset.input); return; }
+        if (output && event.button === 0 && !space) { event.preventDefault(); armed = {id: node.dataset.node, output: output.dataset.output}; gesture = {kind: 'wire', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY}; canvas.classList.add('is-connecting'); canvas.setPointerCapture(event.pointerId); return; }
         if (event.button === 1 || space || !node) {
-            if (event.target.closest('.wf-wire-hit')) return;
+            if (event.target.closest('.wf-wire-hit') && event.button === 0 && !space) return;
             if (armed) { armed = null; drawWires(); canvas.classList.remove('is-connecting'); }
             if (!node) select(null);
             gesture = {kind: 'pan', x: camera().x, y: camera().y, startX: event.clientX, startY: event.clientY};
         } else { select(node.dataset.node); const position = definition.layout.nodes[node.dataset.node]; gesture = {kind: 'node', id: node.dataset.node, x: position.x, y: position.y, startX: event.clientX, startY: event.clientY, recorded: false}; }
-        closePalette(); canvas.setPointerCapture(event.pointerId); event.preventDefault();
+        gesture.pointerId = event.pointerId; closePalette(); canvas.setPointerCapture(event.pointerId); event.preventDefault();
     });
     canvas.addEventListener('pointermove', event => {
         if (!gesture) { if (armed) drawWires(point(event.clientX, event.clientY)); return; }
+        if (gesture.pointerId !== event.pointerId) return;
         const dx = event.clientX - gesture.startX, dy = event.clientY - gesture.startY;
         if (gesture.kind === 'wire') {
             drawWires(point(event.clientX, event.clientY)); const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-node]');
@@ -440,6 +472,7 @@
         }
     });
     function endGesture(event) {
+        if (gesture && gesture.pointerId !== event.pointerId) return;
         if (gesture?.kind === 'wire' && armed) {
             const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-node]');
             if (target && target.dataset.node !== armed.id) connect(armed.id, target.dataset.node, armed.output, document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-input]')?.dataset.input);
@@ -451,6 +484,7 @@
     }
     canvas.addEventListener('pointerup', endGesture);
     canvas.addEventListener('pointercancel', () => { resetInteraction(); drawWires(); });
+    canvas.addEventListener('lostpointercapture', event => { if (gesture?.pointerId === event.pointerId) { resetInteraction(); drawWires(); } });
     canvas.addEventListener('wheel', event => {
         event.preventDefault();
         if (event.ctrlKey || !event.deltaX && Math.abs(event.deltaY) >= 35) zoom(camera().zoom * Math.exp(-event.deltaY * .0025), event.clientX, event.clientY);
@@ -465,19 +499,20 @@
     byId('settings').addEventListener('click', () => select(selection === 'settings' ? null : 'settings')); byId('inspector-close').addEventListener('click', () => { select(null); canvas.focus(); });
     byId('undo').addEventListener('click', () => restore('undo')); byId('redo').addEventListener('click', () => restore('redo'));
     byId('zoom-in').addEventListener('click', () => zoom(camera().zoom * 1.2)); byId('zoom-out').addEventListener('click', () => zoom(camera().zoom / 1.2)); byId('zoom').addEventListener('click', () => zoom(1)); byId('fit').addEventListener('click', fit);
-    name.addEventListener('focus', remember); name.addEventListener('input', changed);
+    name.addEventListener('beforeinput', remember); name.addEventListener('input', changed);
     document.addEventListener('keydown', event => {
+        if (configDialog.open) return;
         const editing = event.target.matches('input, select, textarea, [contenteditable=true]');
-        if (event.key === 'Escape') { armed = null; gesture = null; closePalette(); select(null); canvas.classList.remove('is-connecting'); return; }
+        if (event.key === 'Escape') { resetInteraction(); closePalette(); select(null); return; }
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); save(false); return; }
         if (editing) return;
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); restore(event.shiftKey ? 'redo' : 'undo'); }
         else if (event.key.toLowerCase() === 'a') { event.preventDefault(); openPalette(); }
         else if (event.key.toLowerCase() === 'f') { event.preventDefault(); fit(); }
         else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteSelection(); }
-        else if (event.code === 'Space') { event.preventDefault(); space = true; }
+        else if (event.code === 'Space' && !event.target.closest('button, a, summary')) { event.preventDefault(); space = true; }
     });
-    document.addEventListener('keyup', event => { if (event.code === 'Space') space = false; }); window.addEventListener('blur', () => { space = false; });
+    document.addEventListener('keyup', event => { if (event.code === 'Space') space = false; }); window.addEventListener('blur', () => { space = false; resetInteraction(); drawWires(); });
     async function request(url, value) {
         const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': token}, body: JSON.stringify(value)}), result = await response.json().catch(() => ({}));
         if (!response.ok || result.error || response.redirected) throw new Error(result.error || 'Could not save. Check your connection and sign-in.'); return result;
@@ -490,7 +525,8 @@
         byId('save').disabled = true; byId('start').disabled = true;
         try {
             const result = await request(identifier ? `/workflows/${identifier}/` : '/workflows/new/', {name: name.value, version, definition: structuredClone(definition)});
-            identifier = result.id; version = result.version; saved = submitted; history.replaceState(null, '', result.url); feedback.textContent = 'Saved'; feedback.dataset.error = 'false';
+            identifier = result.id; version = result.version; saved = submitted; history.replaceState(null, '', result.url); feedback.textContent = snapshot() === saved ? 'Saved' : 'Unsaved'; feedback.dataset.error = 'false';
+            if (run && snapshot() !== saved) throw Error('The workflow changed while saving. Save it again before running.');
             if (run) { const result = await request(`/workflows/${identifier}/run/`, {version, request_id: requestId}); location.assign(result.url); }
         } catch (error) { feedback.textContent = error.message; feedback.dataset.error = 'true'; }
         finally { saving = false; byId('save').disabled = false; byId('start').disabled = !definition.steps.length; }
